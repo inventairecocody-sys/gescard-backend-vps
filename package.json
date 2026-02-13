@@ -1,12 +1,12 @@
 {
   "name": "gescard-backend",
   "version": "1.2.0",
-  "description": "API backend PostgreSQL pour GESCard Cocody avec fusion intelligente et optimisations Render gratuit",
+  "description": "API backend PostgreSQL pour GESCard Cocody - Optimisé pour VPS",
   "main": "server.js",
   "scripts": {
-    "start": "node --max-old-space-size=512 server.js",
-    "dev": "nodemon --max-old-space-size=512 server.js",
-    "dev:monitor": "nodemon --max-old-space-size=512 --inspect server.js",
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "dev:monitor": "nodemon --inspect server.js",
     "test": "jest --verbose",
     "test:api": "node tests/api-test.js",
     "test:memory": "node tests/memory-test.js",
@@ -15,7 +15,6 @@
     "lint:fix": "eslint . --fix",
     "migrate": "node scripts/migrate.js",
     "migrate:seed": "node scripts/seed.js",
-    "render-build": "npm install && echo '✅ Build Render.com terminé'",
     "diagnostic": "node scripts/diagnostic.js",
     "diagnostic:memory": "node scripts/memory-diagnostic.js",
     "clean": "rm -rf node_modules package-lock.json && npm install",
@@ -28,7 +27,7 @@
     "cartes",
     "synchronisation",
     "fusion-intelligente",
-    "render-free-tier",
+    "vps",
     "optimized",
     "streaming"
   ],
@@ -56,7 +55,7 @@
     "node-cron": "^4.2.1",
     "pg": "^8.17.2",
     "stream-json": "^1.8.0",
-    "uuid": "^13.0.0",
+    "uuid": "^8.3.2",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
@@ -72,16 +71,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/votre-repo/gescard-backend"
+    "url": "https://github.com/inventairecocody-sys/gescard-backend-vps"
   },
   "bugs": {
-    "url": "https://github.com/votre-repo/gescard-backend/issues"
+    "url": "https://github.com/inventairecocody-sys/gescard-backend-vps/issues"
   },
-  "homepage": "https://github.com/votre-repo/gescard-backend#readme",
-  "render": {
-    "env": {
-      "NODE_ENV": "production",
-      "NODE_OPTIONS": "--max-old-space-size=512"
-    }
-  }
+  "homepage": "https://github.com/inventairecocody-sys/gescard-backend-vps#readme"
 }
