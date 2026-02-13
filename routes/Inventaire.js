@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const inventaireController = require('../Controllers/inventaireController');
+const inventaireController = require('../Controllers/inventaire');
 const { verifyToken } = require('../middleware/auth');
 const rateLimit = require('express-rate-limit');
 
