@@ -13,13 +13,13 @@ const {
 const { verifyToken: verifyTokenMiddleware } = require("../middleware/auth");
 
 // ============================================
-// CONFIGURATION OPTIMISÉE POUR LWS
+// CONFIGURATION OPTIMISÉE POUR VPS
 // ============================================
 const AUTH_CONFIG = {
   // Rate limiting pour login
   loginLimiter: rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5, // 5 tentatives max
+    max: 10, // 10 tentatives max (augmenté pour VPS)
     skipSuccessfulRequests: true,
     message: {
       success: false,
@@ -38,7 +38,7 @@ const AUTH_CONFIG = {
   // Rate limiting pour forgot password
   forgotLimiter: rateLimit({
     windowMs: 60 * 60 * 1000, // 1 heure
-    max: 3, // 3 demandes max par heure
+    max: 5, // 5 demandes max par heure (augmenté)
     message: {
       success: false,
       error: 'Trop de demandes',
@@ -50,7 +50,7 @@ const AUTH_CONFIG = {
   // Rate limiting pour reset password
   resetLimiter: rateLimit({
     windowMs: 60 * 60 * 1000, // 1 heure
-    max: 5, // 5 tentatives max par heure
+    max: 10, // 10 tentatives max par heure (augmenté)
     message: {
       success: false,
       error: 'Trop de tentatives',
@@ -294,9 +294,9 @@ if (process.env.NODE_ENV !== 'production') {
       success: true,
       config: {
         rateLimiting: {
-          login: '5 per 15 minutes',
-          forgot: '3 per hour',
-          reset: '5 per hour'
+          login: '10 per 15 minutes',
+          forgot: '5 per hour',
+          reset: '10 per hour'
         },
         validation: {
           passwordMinLength: 8,
