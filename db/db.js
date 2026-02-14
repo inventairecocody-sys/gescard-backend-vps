@@ -296,30 +296,55 @@ setInterval(() => {
   }
 }, 120000); // Toutes les 2 minutes
 
-// Test de connexion initial
-const testConnection = async (retries = 3) => {
-  for (let i = 0; i < retries; i++) {
+// ========== NOUVELLE FONCTION D'ATTENTE ROBUSTE ==========
+
+/**
+ * Attend que PostgreSQL soit prêt avec plus de tentatives
+ * et sans marquer d'échec définitif
+ */
+const waitForPostgres = async (maxAttempts = 15, delay = 2000) => {
+  console.log('⏳ Attente de PostgreSQL...');
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const result = await query('SELECT NOW() as time, version() as version');
-      console.log(`✅ PostgreSQL connecté: ${result.rows[0].version.split(' ')[0]}`);
-      console.log(`⏰ Heure DB: ${result.rows[0].time}`);
+      // Requête simple pour tester la connexion
+      const result = await pool.query('SELECT 1 as connection_test');
+      console.log(`✅ PostgreSQL connecté (tentative ${attempt}/${maxAttempts})`);
+      
+      // Récupérer quelques infos utiles
+      try {
+        const versionResult = await pool.query('SELECT version()');
+        const countResult = await pool.query('SELECT COUNT(*) FROM cartes');
+        console.log(`📊 Version: ${versionResult.rows[0].version.split(' ')[0]}`);
+        console.log(`📊 Cartes dans la base: ${countResult.rows[0].count}`);
+      } catch (e) {
+        // Ignorer les erreurs de ces requêtes supplémentaires
+      }
+      
       return true;
     } catch (error) {
-      console.error(`❌ Tentative ${i + 1}/${retries} échouée:`, error.message);
-      
-      if (i < retries - 1) {
-        await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
+      if (attempt === maxAttempts) {
+        console.warn(`⚠️ PostgreSQL inaccessible après ${maxAttempts} tentatives, mais le serveur continue`);
+        console.warn('⚠️ Les routes qui nécessitent la BDD retourneront des erreurs 503');
+        return false;
       }
+      console.log(`⏳ Tentative ${attempt}/${maxAttempts} échouée (${error.message}), nouvelle tentative dans ${delay/1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-  
-  console.error('❌ Échec de connexion après toutes les tentatives');
   return false;
 };
 
-// Tester la connexion au démarrage
-setTimeout(() => {
-  testConnection();
+// ========== REMPLACEMENT DE L'ANCIEN TEST ==========
+
+// Remplacer l'ancien appel par celui-ci
+setTimeout(async () => {
+  const connected = await waitForPostgres(15, 2000);
+  if (connected) {
+    console.log('✅ Base de données prête - Toutes les routes fonctionneront normalement');
+  } else {
+    console.log('⚠️ Le serveur a démarré sans PostgreSQL - Mode dégradé');
+  }
 }, 1000);
 
 module.exports = {
