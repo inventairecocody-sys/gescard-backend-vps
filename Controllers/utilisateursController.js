@@ -1735,3 +1735,29 @@ exports.diagnostic = async (req, res) => {
     });
   }
 };
+
+// ============================================
+// EXPORT DE TOUTES LES FONCTIONS
+// ============================================
+
+module.exports = {
+  loginUser,
+  logoutUser,
+  verifyToken,
+  getAllUsers,
+  getUserById,
+  createUser,
+  updateUser,
+  deleteUser,
+  resetPassword,
+  activateUser,
+  getUserStats,
+  searchUsers,
+  getUserHistory,
+  exportUsers,
+  checkUsernameAvailability,
+  getRoles,
+  getCoordinations,
+  clearStatsCache,
+  diagnostic
+};
