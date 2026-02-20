@@ -6,7 +6,7 @@ const {
   loginUser,
   logoutUser,
   verifyToken
-} = require("../controllers/authController");
+} = require("../Controllers/utilisateursController");
 const { verifierToken } = require("../middleware/auth");
 const journalRequetes = require("../middleware/journalRequetes");
 
