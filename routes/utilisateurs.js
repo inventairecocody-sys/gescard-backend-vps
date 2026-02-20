@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const utilisateursController = require('../Controllers/utilisateursController');
-const { verifyToken, verifyRole } = require('../middleware/auth');
+const utilisateursController = require('../controllers/authController'); // Note: import depuis authController
+const { verifierToken } = require('../middleware/auth');
+const role = require('../middleware/verificationRole');
+const permission = require('../middleware/permission');
 const rateLimit = require('express-rate-limit');
 
 // ============================================
@@ -66,7 +68,7 @@ router.use((req, res, next) => {
 
 // Middleware de logging spécifique
 router.use((req, res, next) => {
-  console.log(`👥 [Utilisateurs] ${req.method} ${req.url} - User: ${req.user?.NomUtilisateur || 'non authentifié'}`);
+  console.log(`👥 [Utilisateurs] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur || 'non authentifié'} (${req.user?.role || 'aucun'})`);
   next();
 });
 
@@ -82,12 +84,12 @@ router.post('/login', UTILISATEURS_CONFIG.rateLimits.login, utilisateursControll
 /**
  * POST /api/utilisateurs/logout - Déconnexion
  */
-router.post('/logout', verifyToken, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.logoutUser);
+router.post('/logout', verifierToken, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.logoutUser);
 
 /**
  * GET /api/utilisateurs/verify - Vérifier le token
  */
-router.get('/verify', verifyToken, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.verifyToken);
+router.get('/verify', verifierToken, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.verifyToken);
 
 // ============================================
 // ROUTES PUBLIQUES (information)
@@ -102,11 +104,19 @@ router.get('/health', (req, res) => {
     status: 'healthy',
     service: 'utilisateurs',
     timestamp: new Date().toISOString(),
+    version: '3.0.0-lws',
+    roles_autorises: {
+      administrateur: '✅ Accès complet à toutes les fonctionnalités',
+      gestionnaire: '❌ Pas d\'accès à la gestion des utilisateurs',
+      chef_equipe: '❌ Pas d\'accès à la gestion des utilisateurs',
+      operateur: '❌ Pas d\'accès à la gestion des utilisateurs'
+    },
     endpoints: [
       'POST /api/utilisateurs/login',
       'POST /api/utilisateurs/logout',
       'GET /api/utilisateurs/verify',
       'GET /api/utilisateurs/roles',
+      'GET /api/utilisateurs/coordinations',
       'GET /api/utilisateurs/check-username',
       'GET /api/utilisateurs',
       'GET /api/utilisateurs/:id',
@@ -131,100 +141,106 @@ router.get('/health', (req, res) => {
 router.get('/roles', UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getRoles);
 
 /**
+ * GET /api/utilisateurs/coordinations - Liste des coordinations disponibles (Admin uniquement)
+ */
+router.get('/coordinations', verifierToken, role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getCoordinations);
+
+/**
  * GET /api/utilisateurs/check-username - Vérifier disponibilité nom d'utilisateur
  */
-router.get('/check-username', UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.checkUsernameAvailability);
+router.get('/check-username', verifierToken, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.checkUsernameAvailability);
 
 // ============================================
 // ROUTES PROTÉGÉES (authentification requise)
 // ============================================
-router.use(verifyToken);
+router.use(verifierToken);
+router.use(permission.peutVoirInfosSensibles);
 
 // ============================================
-// ROUTES DE CONSULTATION
+// ROUTES DE CONSULTATION (Admin uniquement)
 // ============================================
 
 /**
  * GET /api/utilisateurs - Liste tous les utilisateurs (admin requis)
  */
-router.get('/', verifyRole(['Administrateur', 'Superviseur']), UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getAllUsers);
+router.get('/', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getAllUsers);
 
 /**
  * GET /api/utilisateurs/list - Alias pour la liste
  */
-router.get('/list', verifyRole(['Administrateur', 'Superviseur']), UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getAllUsers);
+router.get('/list', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getAllUsers);
 
 /**
- * GET /api/utilisateurs/:id - Détails d'un utilisateur
+ * GET /api/utilisateurs/:id - Détails d'un utilisateur (admin requis)
  */
-router.get('/:id', UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getUserById);
+router.get('/:id', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getUserById);
 
 /**
- * GET /api/utilisateurs/:id/history - Historique d'un utilisateur
+ * GET /api/utilisateurs/:id/history - Historique d'un utilisateur (admin requis)
  */
-router.get('/:id/history', verifyRole(['Administrateur', 'Superviseur']), UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getUserHistory);
+router.get('/:id/history', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getUserHistory);
 
 // ============================================
-// ROUTES DE RECHERCHE ET STATISTIQUES
+// ROUTES DE RECHERCHE ET STATISTIQUES (Admin uniquement)
 // ============================================
 
 /**
  * GET /api/utilisateurs/search - Recherche avancée
  */
-router.get('/search', verifyRole(['Administrateur', 'Superviseur']), UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.searchUsers);
+router.get('/search', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.searchUsers);
 
 /**
  * GET /api/utilisateurs/stats - Statistiques utilisateurs
  */
-router.get('/stats', verifyRole(['Administrateur', 'Superviseur']), UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getUserStats);
+router.get('/stats', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.getUserStats);
 
 /**
- * GET /api/utilisateurs/export - Export des utilisateurs
+ * GET /api/utilisateurs/export - Export des utilisateurs (admin uniquement)
  */
-router.get('/export', verifyRole(['Administrateur']), UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.exportUsers);
+router.get('/export', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.exportUsers);
 
 // ============================================
-// ROUTES DE CRÉATION ET MODIFICATION
+// ROUTES DE CRÉATION ET MODIFICATION (Admin uniquement)
 // ============================================
 
 /**
  * POST /api/utilisateurs - Créer un utilisateur (admin requis)
  */
-router.post('/', verifyRole(['Administrateur']), UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.createUser);
+router.post('/', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.createUser);
 
 /**
- * PUT /api/utilisateurs/:id - Modifier un utilisateur
+ * PUT /api/utilisateurs/:id - Modifier un utilisateur (admin requis)
  */
-router.put('/:id', verifyRole(['Administrateur', 'Superviseur']), UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.updateUser);
+router.put('/:id', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.updateUser);
 
 /**
- * POST /api/utilisateurs/:id/reset-password - Réinitialiser mot de passe
+ * POST /api/utilisateurs/:id/reset-password - Réinitialiser mot de passe (admin requis)
  */
-router.post('/:id/reset-password', verifyRole(['Administrateur']), UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.resetPassword);
+router.post('/:id/reset-password', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.resetPassword);
 
 /**
- * POST /api/utilisateurs/:id/activate - Activer un utilisateur
+ * POST /api/utilisateurs/:id/activate - Activer un utilisateur (admin requis)
  */
-router.post('/:id/activate', verifyRole(['Administrateur']), UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.activateUser);
+router.post('/:id/activate', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.activateUser);
 
 /**
- * DELETE /api/utilisateurs/:id - Désactiver un utilisateur
+ * DELETE /api/utilisateurs/:id - Désactiver un utilisateur (admin requis)
  */
-router.delete('/:id', verifyRole(['Administrateur']), UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.deleteUser);
+router.delete('/:id', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.sensitive, utilisateursController.deleteUser);
 
 // ============================================
-// ROUTES D'ADMINISTRATION
+// ROUTES D'ADMINISTRATION (Admin uniquement)
 // ============================================
 
 /**
- * POST /api/utilisateurs/cache/clear - Nettoyer le cache des stats
+ * POST /api/utilisateurs/cache/clear - Nettoyer le cache des stats (admin requis)
  */
-router.post('/cache/clear', verifyRole(['Administrateur']), UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.clearStatsCache);
+router.post('/cache/clear', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.clearStatsCache);
 
 /**
- * GET /api/utilisateurs/diagnostic - Diagnostic du module
+ * GET /api/utilisateurs/diagnostic - Diagnostic du module (admin requis)
  */
-router.get('/diagnostic', verifyRole(['Administrateur']), UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.diagnostic);
+router.get('/diagnostic', role.peutGererComptes, UTILISATEURS_CONFIG.rateLimits.standard, utilisateursController.diagnostic);
 
 // ============================================
 // ROUTE DE TEST
@@ -234,17 +250,28 @@ router.get('/diagnostic', verifyRole(['Administrateur']), UTILISATEURS_CONFIG.ra
  * GET /api/utilisateurs/test - Test du service
  */
 router.get('/test', (req, res) => {
+  const roleInfo = req.user ? 
+    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - ${req.user.role === 'Administrateur' ? '✅ Accès autorisé' : '❌ Accès restreint'}` : 
+    'Non authentifié';
+  
   res.json({
     success: true,
     message: 'Service utilisateurs fonctionnel',
-    version: '2.0.0-lws',
+    version: '3.0.0-lws',
     timestamp: new Date().toISOString(),
     authentifie: !!req.user,
     user: req.user ? {
       id: req.user.id,
-      username: req.user.NomUtilisateur,
-      role: req.user.Role
-    } : null
+      username: req.user.nomUtilisateur,
+      role: req.user.role,
+      coordination: req.user.coordination
+    } : null,
+    roles_autorises: {
+      consultation: 'Administrateur uniquement',
+      creation: 'Administrateur uniquement',
+      modification: 'Administrateur uniquement',
+      suppression: 'Administrateur uniquement'
+    }
   });
 });
 
@@ -253,11 +280,22 @@ router.get('/test', (req, res) => {
 // ============================================
 
 router.get('/', (req, res) => {
+  const roleInfo = req.user ? 
+    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - ${req.user.role === 'Administrateur' ? '✅ Accès autorisé' : '❌ Accès restreint'}` : 
+    'Non authentifié';
+  
   res.json({
     name: "API Utilisateurs GESCARD",
     description: "Module de gestion des utilisateurs",
-    version: "2.0.0-lws",
+    version: "3.0.0-lws",
     timestamp: new Date().toISOString(),
+    authentification: roleInfo,
+    roles_autorises: {
+      administrateur: "✅ Accès complet à toutes les fonctionnalités",
+      gestionnaire: "❌ Non autorisé (pas d'accès à la gestion des utilisateurs)",
+      chef_equipe: "❌ Non autorisé (pas d'accès à la gestion des utilisateurs)",
+      operateur: "❌ Non autorisé (pas d'accès à la gestion des utilisateurs)"
+    },
     documentation: '/api/utilisateurs/docs',
     authentification: {
       login: 'POST /api/utilisateurs/login',
@@ -266,34 +304,35 @@ router.get('/', (req, res) => {
     },
     endpoints: {
       consultation: {
-        'GET /': 'Liste des utilisateurs (admin)',
-        'GET /list': 'Liste (alias)',
-        'GET /:id': 'Détails utilisateur',
-        'GET /:id/history': 'Historique utilisateur'
+        'GET /': '📋 Liste des utilisateurs (Admin)',
+        'GET /list': '📋 Liste (alias - Admin)',
+        'GET /:id': '👤 Détails utilisateur (Admin)',
+        'GET /:id/history': '📜 Historique utilisateur (Admin)'
       },
       recherche: {
-        'GET /search': 'Recherche avancée',
-        'GET /stats': 'Statistiques',
-        'GET /export': 'Export des données',
-        'GET /roles': 'Liste des rôles'
+        'GET /search': '🔍 Recherche avancée (Admin)',
+        'GET /stats': '📊 Statistiques (Admin)',
+        'GET /export': '📤 Export des données (Admin)',
+        'GET /roles': '🔧 Liste des rôles (public)',
+        'GET /coordinations': '🏢 Liste des coordinations (Admin)'
       },
       creation: {
-        'POST /': 'Créer utilisateur (admin)'
+        'POST /': '➕ Créer utilisateur (Admin)'
       },
       modification: {
-        'PUT /:id': 'Modifier utilisateur',
-        'POST /:id/reset-password': 'Réinitialiser mot de passe',
-        'POST /:id/activate': 'Activer utilisateur',
-        'DELETE /:id': 'Désactiver utilisateur'
+        'PUT /:id': '✏️ Modifier utilisateur (Admin)',
+        'POST /:id/reset-password': '🔄 Réinitialiser mot de passe (Admin)',
+        'POST /:id/activate': '✅ Activer utilisateur (Admin)',
+        'DELETE /:id': '❌ Désactiver utilisateur (Admin)'
       },
       administration: {
-        'GET /diagnostic': 'Diagnostic module',
-        'POST /cache/clear': 'Nettoyer cache',
-        'GET /health': 'Santé service',
-        'GET /test': 'Test service'
+        'GET /diagnostic': '🔧 Diagnostic module (Admin)',
+        'POST /cache/clear': '🧹 Nettoyer cache (Admin)',
+        'GET /health': '🩺 Santé service (public)',
+        'GET /test': '🧪 Test service (public)'
       },
       utilitaires: {
-        'GET /check-username': 'Vérifier disponibilité nom'
+        'GET /check-username': '✅ Vérifier disponibilité nom (authentifié)'
       }
     },
     rate_limits: {
@@ -308,17 +347,22 @@ router.get('/', (req, res) => {
       stats: '5 minutes'
     },
     roles: {
-      Administrateur: 'Accès complet',
-      Superviseur: 'Accès gestion utilisateurs',
-      'Chef d\'équipe': 'Consultation limitée',
-      Opérateur: 'Actions basiques',
-      Consultant: 'Lecture seule'
+      Administrateur: '✅ Accès complet',
+      Gestionnaire: '❌ Pas d\'accès',
+      'Chef d\'équipe': '❌ Pas d\'accès',
+      Opérateur: '❌ Pas d\'accès'
+    },
+    nouvelles_fonctionnalites: {
+      coordination: 'Gestion de la coordination des utilisateurs',
+      filtres: 'Recherche et filtrage par coordination',
+      export: 'Export CSV/JSON des utilisateurs'
     },
     exemples: {
       curl_login: 'curl -X POST -H "Content-Type: application/json" -d "{\"NomUtilisateur\":\"admin\",\"MotDePasse\":\"password\"}" http://localhost:3000/api/utilisateurs/login',
       curl_list: 'curl -H "Authorization: Bearer <token>" http://localhost:3000/api/utilisateurs?page=1&limit=20',
-      curl_search: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/utilisateurs/search?q=jean&role=Operateur"',
-      curl_create: 'curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d "{\"NomUtilisateur\":\"nouveau\",\"NomComplet\":\"Nouveau User\",\"Role\":\"Operateur\",\"MotDePasse\":\"password123\"}" http://localhost:3000/api/utilisateurs'
+      curl_search: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/utilisateurs/search?q=jean&role=Gestionnaire"',
+      curl_create: 'curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d "{\"NomUtilisateur\":\"nouveau\",\"NomComplet\":\"Nouveau User\",\"Role\":\"Gestionnaire\",\"Coordination\":\"Abidjan\",\"MotDePasse\":\"password123\"}" http://localhost:3000/api/utilisateurs',
+      curl_coordinations: 'curl -H "Authorization: Bearer <token>" http://localhost:3000/api/utilisateurs/coordinations'
     }
   });
 });
@@ -337,6 +381,7 @@ router.use((req, res) => {
       'POST /api/utilisateurs/logout',
       'GET /api/utilisateurs/verify',
       'GET /api/utilisateurs/roles',
+      'GET /api/utilisateurs/coordinations',
       'GET /api/utilisateurs/check-username',
       'GET /api/utilisateurs/health',
       'GET /api/utilisateurs/test',

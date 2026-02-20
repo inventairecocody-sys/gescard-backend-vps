@@ -4,8 +4,10 @@ const importExportController = require('../Controllers/importExportController');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const { verifyToken } = require('../middleware/auth');
-const { importExportAccess, importExportRateLimit, validateFileUpload } = require('../middleware/importExportAccess');
+const { verifierToken } = require('../middleware/auth');
+const role = require('../middleware/verificationRole');
+const permission = require('../middleware/permission');
+const journalRequetes = require('../middleware/journalRequetes');
 
 // ============================================
 // CONFIGURATION OPTIMISÉE POUR LWS
@@ -45,9 +47,10 @@ const storage = multer.diskStorage({
       .replace(/[^a-zA-Z0-9.\-_]/g, '_')
       .replace(/\s+/g, '_');
     
-    // Ajouter l'ID utilisateur pour traçabilité
+    // Ajouter l'ID utilisateur et sa coordination pour traçabilité
     const userId = req.user?.id || 'anonymous';
-    cb(null, `import-${userId}-${timestamp}-${random}-${safeFileName}`);
+    const coordination = req.user?.coordination || 'no-coordination';
+    cb(null, `import-${userId}-${coordination}-${timestamp}-${random}-${safeFileName}`);
   }
 });
 
@@ -73,16 +76,42 @@ const upload = multer({
 });
 
 // ============================================
+// MIDDLEWARE DE VALIDATION D'UPLOAD
+// ============================================
+
+const validateFileUpload = (req, res, next) => {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      error: 'Aucun fichier uploadé',
+      code: 'NO_FILE'
+    });
+  }
+  
+  // Vérifier la taille
+  if (req.file.size > UPLOAD_CONFIG.maxFileSize) {
+    // Supprimer le fichier
+    fs.unlinkSync(req.file.path);
+    return res.status(400).json({
+      success: false,
+      error: `Fichier trop volumineux. Maximum: ${UPLOAD_CONFIG.maxFileSize / (1024 * 1024)}MB`,
+      code: 'FILE_TOO_LARGE'
+    });
+  }
+  
+  next();
+};
+
+// ============================================
 // MIDDLEWARE
 // ============================================
 
 // Authentification sur toutes les routes
-router.use(verifyToken);
-router.use(importExportAccess);
+router.use(verifierToken);
 
 // Middleware de logging spécifique
 router.use((req, res, next) => {
-  console.log(`📦 [ImportExport] ${req.method} ${req.url} - User: ${req.user?.NomUtilisateur}`);
+  console.log(`📦 [ImportExport] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur} (${req.user?.role})`);
   next();
 });
 
@@ -96,7 +125,7 @@ router.use((req, res, next) => {
  */
 router.post(
   '/import/csv',
-  importExportRateLimit,
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
   upload.single('file'),
   validateFileUpload,
   importExportController.importCSV
@@ -106,37 +135,61 @@ router.post(
  * 📤 EXPORT EXCEL LIMITÉ
  * GET /api/import-export/export
  */
-router.get('/export', importExportRateLimit, importExportController.exportExcel);
+router.get(
+  '/export', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.exportExcel
+);
 
 /**
  * 📤 EXPORT CSV LIMITÉ
  * GET /api/import-export/export/csv
  */
-router.get('/export/csv', importExportRateLimit, importExportController.exportCSV);
+router.get(
+  '/export/csv', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.exportCSV
+);
 
 /**
  * 🔍 EXPORT CSV PAR SITE
  * GET /api/import-export/export/site
  */
-router.get('/export/site', importExportRateLimit, importExportController.exportCSVBySite);
+router.get(
+  '/export/site', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.exportCSVBySite
+);
 
 /**
  * 📋 TÉLÉCHARGER TEMPLATE
  * GET /api/import-export/template
  */
-router.get('/template', importExportController.downloadTemplate);
+router.get(
+  '/template', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.downloadTemplate
+);
 
 /**
  * 🏢 LISTE DES SITES
  * GET /api/import-export/sites
  */
-router.get('/sites', importExportController.getSitesList);
+router.get(
+  '/sites', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.getSitesList
+);
 
 /**
  * 🩺 DIAGNOSTIC COMPLET
  * GET /api/import-export/diagnostic
  */
-router.get('/diagnostic', importExportController.diagnostic);
+router.get(
+  '/diagnostic', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.diagnostic
+);
 
 // ============================================
 // ROUTES D'EXPORT COMPLET
@@ -146,19 +199,31 @@ router.get('/diagnostic', importExportController.diagnostic);
  * 🚀 EXPORT EXCEL COMPLET (toutes les données)
  * GET /api/import-export/export/complete
  */
-router.get('/export/complete', importExportRateLimit, importExportController.exportCompleteExcel);
+router.get(
+  '/export/complete', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.exportCompleteExcel
+);
 
 /**
  * 🚀 EXPORT CSV COMPLET (toutes les données)
  * GET /api/import-export/export/complete/csv
  */
-router.get('/export/complete/csv', importExportRateLimit, importExportController.exportCompleteCSV);
+router.get(
+  '/export/complete/csv', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.exportCompleteCSV
+);
 
 /**
  * 🚀 EXPORT "TOUT EN UN" (choix automatique du format)
  * GET /api/import-export/export/all
  */
-router.get('/export/all', importExportRateLimit, importExportController.exportAllData);
+router.get(
+  '/export/all', 
+  role.peutImporterExporter, // Admin et Gestionnaire uniquement
+  importExportController.exportAllData
+);
 
 // ============================================
 // ROUTES DE COMPATIBILITÉ (avec redirection)
@@ -168,37 +233,65 @@ router.get('/export/all', importExportRateLimit, importExportController.exportAl
  * 📥 IMPORT EXCEL (alias)
  * POST /api/import-export/import
  */
-router.post('/import', importExportRateLimit, upload.single('file'), importExportController.importCSV);
+router.post(
+  '/import', 
+  role.peutImporterExporter,
+  upload.single('file'),
+  validateFileUpload,
+  importExportController.importCSV
+);
 
 /**
  * 🔄 IMPORT SMART SYNC
  * POST /api/import-export/import/smart-sync
  */
-router.post('/import/smart-sync', importExportRateLimit, upload.single('file'), importExportController.importSmartSync);
+router.post(
+  '/import/smart-sync', 
+  role.peutImporterExporter,
+  upload.single('file'),
+  validateFileUpload,
+  importExportController.importSmartSync
+);
 
 /**
  * 📤 EXPORT STREAMING (redirige vers complet)
  * GET /api/import-export/export/stream
  */
-router.get('/export/stream', importExportRateLimit, importExportController.exportCompleteCSV);
+router.get(
+  '/export/stream', 
+  role.peutImporterExporter,
+  importExportController.exportCompleteCSV
+);
 
 /**
  * 🎛️ EXPORT FILTRÉ (par site)
  * GET /api/import-export/export/filtered
  */
-router.get('/export/filtered', importExportRateLimit, importExportController.exportCSVBySite);
+router.get(
+  '/export/filtered', 
+  role.peutImporterExporter,
+  importExportController.exportCSVBySite
+);
 
 /**
  * 🔍 EXPORT RÉSULTATS (alias)
  * GET /api/import-export/export-resultats
  */
-router.get('/export-resultats', importExportRateLimit, importExportController.exportCSVBySite);
+router.get(
+  '/export-resultats', 
+  role.peutImporterExporter,
+  importExportController.exportCSVBySite
+);
 
 /**
  * 📤 EXPORT OPTIMISÉ (redirige vers complet)
  * GET /api/import-export/export/optimized
  */
-router.get('/export/optimized', importExportRateLimit, importExportController.exportCompleteCSV);
+router.get(
+  '/export/optimized', 
+  role.peutImporterExporter,
+  importExportController.exportCompleteCSV
+);
 
 // ============================================
 // ROUTES DE STATISTIQUES ET MONITORING
@@ -208,255 +301,193 @@ router.get('/export/optimized', importExportRateLimit, importExportController.ex
  * 📊 STATISTIQUES D'EXPORT
  * GET /api/import-export/stats
  */
-router.get('/stats', importExportRateLimit, async (req, res) => {
-  try {
-    const db = require('../db/db');
-    
-    const totalResult = await db.query('SELECT COUNT(*) as total FROM cartes');
-    const totalRows = parseInt(totalResult.rows[0].total);
-    
-    const sitesResult = await db.query(`
-      SELECT 
-        "SITE DE RETRAIT" as site, 
-        COUNT(*) as count,
-        COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as retirees
-      FROM cartes 
-      WHERE "SITE DE RETRAIT" IS NOT NULL 
-      GROUP BY "SITE DE RETRAIT" 
-      ORDER BY count DESC
-      LIMIT 10
-    `);
-    
-    const lastImportResult = await db.query(`
-      SELECT 
-        MAX(dateimport) as last_import,
-        COUNT(DISTINCT importbatchid) as import_count,
-        COUNT(CASE WHEN dateimport > NOW() - INTERVAL '7 days' THEN 1 END) as imports_7j
-      FROM cartes 
-    `);
-
-    // Statistiques des exports
-    const exportStats = importExportController._controller?.activeExports?.size || 0;
-    const importStats = importExportController._controller?.activeImports?.size || 0;
-
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      stats: {
-        total_cartes: totalRows,
-        top_sites: sitesResult.rows,
-        imports: {
-          dernier: lastImportResult.rows[0].last_import,
-          total_batches: parseInt(lastImportResult.rows[0].import_count || 0),
-          imports_7j: parseInt(lastImportResult.rows[0].imports_7j || 0)
-        },
-        en_cours: {
-          exports_actifs: exportStats,
-          imports_actifs: importStats
-        }
-      },
-      export_capacite: {
-        limite_standard: '5000 lignes',
-        complet_max: '1,000,000 lignes',
-        recommandation: totalRows > 50000 
-          ? 'Utilisez /export/all pour le format optimal'
-          : 'Toutes les routes fonctionnent'
-      }
-    });
-  } catch (error) {
-    console.error('❌ Erreur stats:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
+router.get(
+  '/stats', 
+  role.peutImporterExporter,
+  importExportController.getExportStatus
+);
 
 /**
  * 📊 STATUT DES EXPORTS EN COURS
  * GET /api/import-export/status
  */
-router.get('/status', importExportRateLimit, (req, res) => {
-  const controller = importExportController._controller;
-  
-  res.json({
-    success: true,
-    timestamp: new Date().toISOString(),
-    exports_actifs: Array.from(controller?.activeExports?.entries() || []).map(([id, data]) => ({
-      id,
-      type: data.type,
-      started_at: new Date(data.startTime).toISOString(),
-      elapsed_ms: Date.now() - data.startTime
-    })),
-    imports_actifs: Array.from(controller?.activeImports?.entries() || []).map(([id, data]) => ({
-      id,
-      file: data.file,
-      started_at: new Date(data.startTime).toISOString(),
-      elapsed_ms: Date.now() - data.startTime
-    })),
-    file_attente: controller?.exportQueue?.length || 0
+router.get(
+  '/status', 
+  role.peutImporterExporter,
+  importExportController.getExportStatus
+);
+
+// ============================================
+// ROUTES DE TEST (sans authentification en dev)
+// ============================================
+
+if (process.env.NODE_ENV !== 'production') {
+  /**
+   * 🧪 TEST EXPORT
+   * GET /api/import-export/test/export
+   */
+  router.get('/test/export', async (req, res) => {
+    try {
+      const db = require('../db/db');
+      const result = await db.query('SELECT COUNT(*) as total FROM cartes');
+      const totalRows = parseInt(result.rows[0].total);
+      
+      res.json({
+        success: true,
+        message: 'Service d\'export opérationnel',
+        timestamp: new Date().toISOString(),
+        data: {
+          total_cartes: totalRows,
+          environnement: process.env.NODE_ENV || 'development',
+          roles_autorises: ['Administrateur', 'Gestionnaire'],
+          endpoints_disponibles: {
+            export_limite: [
+              { method: 'GET', path: '/api/import-export/export', description: 'Excel limité (5000 lignes)' },
+              { method: 'GET', path: '/api/import-export/export/csv', description: 'CSV limité (5000 lignes)' },
+              { method: 'GET', path: '/api/import-export/export/site', description: 'CSV par site' }
+            ],
+            export_complet: [
+              { method: 'GET', path: '/api/import-export/export/complete', description: 'Excel complet (toutes les données)' },
+              { method: 'GET', path: '/api/import-export/export/complete/csv', description: 'CSV complet (toutes les données)' },
+              { method: 'GET', path: '/api/import-export/export/all', description: 'Choix automatique du format' }
+            ],
+            import: [
+              { method: 'POST', path: '/api/import-export/import/csv', description: 'Import CSV' },
+              { method: 'POST', path: '/api/import-export/import/smart-sync', description: 'Import avec fusion intelligente' }
+            ]
+          },
+          recommandations: [
+            totalRows > 50000 ? 
+              `📊 ${totalRows.toLocaleString()} cartes: utilisez /export/all` :
+              `✅ ${totalRows.toLocaleString()} cartes: toutes les routes fonctionnent`,
+            totalRows > 20000 ? 
+              '⚡ CSV recommandé pour les gros volumes' :
+              '📈 Excel parfait pour les volumes modérés'
+          ]
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
   });
-});
 
-// ============================================
-// ROUTES DE TEST
-// ============================================
-
-/**
- * 🧪 TEST EXPORT
- * GET /api/import-export/test/export
- */
-router.get('/test/export', importExportRateLimit, async (req, res) => {
-  try {
-    const db = require('../db/db');
-    const result = await db.query('SELECT COUNT(*) as total FROM cartes');
-    const totalRows = parseInt(result.rows[0].total);
-    
+  /**
+   * 🧪 TEST COMPLET
+   * GET /api/import-export/test
+   */
+  router.get('/test', (req, res) => {
     res.json({
       success: true,
-      message: 'Service d\'export opérationnel',
+      message: 'API Import/Export COMPLETE fonctionnelle',
       timestamp: new Date().toISOString(),
-      data: {
-        total_cartes: totalRows,
-        environnement: process.env.NODE_ENV || 'development',
-        endpoints_disponibles: {
-          export_limite: [
-            { method: 'GET', path: '/api/import-export/export', description: 'Excel limité (5000 lignes)' },
-            { method: 'GET', path: '/api/import-export/export/csv', description: 'CSV limité (5000 lignes)' },
-            { method: 'GET', path: '/api/import-export/export/site', description: 'CSV par site' }
-          ],
-          export_complet: [
-            { method: 'GET', path: '/api/import-export/export/complete', description: 'Excel complet (toutes les données)' },
-            { method: 'GET', path: '/api/import-export/export/complete/csv', description: 'CSV complet (toutes les données)' },
-            { method: 'GET', path: '/api/import-export/export/all', description: 'Choix automatique du format' }
-          ],
-          import: [
-            { method: 'POST', path: '/api/import-export/import/csv', description: 'Import CSV' },
-            { method: 'POST', path: '/api/import-export/import/smart-sync', description: 'Import avec fusion intelligente' }
-          ]
+      version: '4.0.0-lws',
+      environnement: process.env.NODE_ENV || 'development',
+      roles_autorises: ['Administrateur', 'Gestionnaire'],
+      features: [
+        '✅ Export CSV optimisé (streaming par lots)',
+        '✅ Export Excel avec style professionnel',
+        '✅ Export COMPLET (toutes les données)',
+        '✅ Import CSV avec validation',
+        '✅ Import Smart Sync (fusion intelligente)',
+        '✅ Export par site',
+        '✅ Template d\'import Excel',
+        '✅ File d\'attente et gestion mémoire',
+        '✅ Monitoring des exports en cours',
+        '✅ Filtrage par coordination pour les gestionnaires'
+      ],
+      config: {
+        max_file_size: '100MB',
+        max_export_rows: '1,000,000',
+        max_batch_size: 10000,
+        concurrent_exports: 3,
+        formats_supportes: ['.csv', '.xlsx', '.xls']
+      },
+      quick_start: [
+        '1️⃣ Pour exporter TOUT: GET /api/import-export/export/all',
+        '2️⃣ Pour exporter en Excel: GET /api/import-export/export/complete',
+        '3️⃣ Pour exporter en CSV: GET /api/import-export/export/complete/csv',
+        '4️⃣ Pour importer: POST /api/import-export/import/csv (multipart/form-data)',
+        '5️⃣ Pour le template: GET /api/import-export/template',
+        '6️⃣ Pour le diagnostic: GET /api/import-export/diagnostic',
+        '7️⃣ Pour les stats: GET /api/import-export/stats'
+      ]
+    });
+  });
+
+  /**
+   * 🩺 SANTÉ DU SERVICE (publique en dev)
+   * GET /api/import-export/health
+   */
+  router.get('/health', (req, res) => {
+    const controller = importExportController._controller;
+    
+    res.json({
+      status: 'healthy',
+      service: 'import-export-complet',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      version: '4.0.0-lws',
+      roles_autorises: ['Administrateur', 'Gestionnaire'],
+      stats: {
+        exports_actifs: controller?.activeExports?.size || 0,
+        imports_actifs: controller?.activeImports?.size || 0,
+        file_attente: controller?.exportQueue?.length || 0
+      },
+      endpoints: {
+        import: {
+          csv: 'POST /import/csv',
+          smart: 'POST /import/smart-sync'
         },
-        recommandations: [
-          totalRows > 50000 ? 
-            `📊 ${totalRows.toLocaleString()} cartes: utilisez /export/all` :
-            `✅ ${totalRows.toLocaleString()} cartes: toutes les routes fonctionnent`,
-          totalRows > 20000 ? 
-            '⚡ CSV recommandé pour les gros volumes' :
-            '📈 Excel parfait pour les volumes modérés'
-        ]
-      }
+        export_limite: {
+          excel: 'GET /export (max 5000)',
+          csv: 'GET /export/csv (max 5000)',
+          site: 'GET /export/site'
+        },
+        export_complet: {
+          excel: 'GET /export/complete',
+          csv: 'GET /export/complete/csv',
+          auto: 'GET /export/all'
+        },
+        utilitaires: {
+          template: 'GET /template',
+          sites: 'GET /sites',
+          diagnostic: 'GET /diagnostic',
+          stats: 'GET /stats',
+          status: 'GET /status',
+          test: 'GET /test'
+        }
+      },
+      recommandations: [
+        '🚀 Utilisez /export/all pour exporter TOUTES vos données',
+        '📊 /export/complete pour Excel, /export/complete/csv pour CSV',
+        '⚡ CSV recommandé pour plus de 20,000 lignes',
+        '💡 /export et /export/csv sont limités à 5000 lignes',
+        '📈 Vérifiez /diagnostic pour voir le volume total'
+      ]
     });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * 🧪 TEST COMPLET
- * GET /api/import-export/test
- */
-router.get('/test', (req, res) => {
-  res.json({
-    success: true,
-    message: 'API Import/Export COMPLETE fonctionnelle',
-    timestamp: new Date().toISOString(),
-    version: '4.0.0-lws',
-    environnement: process.env.NODE_ENV || 'development',
-    features: [
-      '✅ Export CSV optimisé (streaming par lots)',
-      '✅ Export Excel avec style professionnel',
-      '✅ Export COMPLET (toutes les données)',
-      '✅ Import CSV avec validation',
-      '✅ Import Smart Sync (fusion intelligente)',
-      '✅ Export par site',
-      '✅ Template d\'import Excel',
-      '✅ File d\'attente et gestion mémoire',
-      '✅ Monitoring des exports en cours'
-    ],
-    config: {
-      max_file_size: '100MB',
-      max_export_rows: '1,000,000',
-      max_batch_size: 10000,
-      concurrent_exports: 3,
-      formats_supportes: ['.csv', '.xlsx', '.xls']
-    },
-    quick_start: [
-      '1️⃣ Pour exporter TOUT: GET /api/import-export/export/all',
-      '2️⃣ Pour exporter en Excel: GET /api/import-export/export/complete',
-      '3️⃣ Pour exporter en CSV: GET /api/import-export/export/complete/csv',
-      '4️⃣ Pour importer: POST /api/import-export/import/csv (multipart/form-data)',
-      '5️⃣ Pour le template: GET /api/import-export/template',
-      '6️⃣ Pour le diagnostic: GET /api/import-export/diagnostic',
-      '7️⃣ Pour les stats: GET /api/import-export/stats'
-    ]
   });
-});
-
-/**
- * 🩺 SANTÉ DU SERVICE
- * GET /api/import-export/health
- */
-router.get('/health', (req, res) => {
-  const controller = importExportController._controller;
-  
-  res.json({
-    status: 'healthy',
-    service: 'import-export-complet',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    version: '4.0.0-lws',
-    stats: {
-      exports_actifs: controller?.activeExports?.size || 0,
-      imports_actifs: controller?.activeImports?.size || 0,
-      file_attente: controller?.exportQueue?.length || 0
-    },
-    endpoints: {
-      import: {
-        csv: 'POST /import/csv',
-        smart: 'POST /import/smart-sync'
-      },
-      export_limite: {
-        excel: 'GET /export (max 5000)',
-        csv: 'GET /export/csv (max 5000)',
-        site: 'GET /export/site'
-      },
-      export_complet: {
-        excel: 'GET /export/complete',
-        csv: 'GET /export/complete/csv',
-        auto: 'GET /export/all'
-      },
-      utilitaires: {
-        template: 'GET /template',
-        sites: 'GET /sites',
-        diagnostic: 'GET /diagnostic',
-        stats: 'GET /stats',
-        status: 'GET /status',
-        test: 'GET /test'
-      }
-    },
-    recommandations: [
-      '🚀 Utilisez /export/all pour exporter TOUTES vos données',
-      '📊 /export/complete pour Excel, /export/complete/csv pour CSV',
-      '⚡ CSV recommandé pour plus de 20,000 lignes',
-      '💡 /export et /export/csv sont limités à 5000 lignes',
-      '📈 Vérifiez /diagnostic pour voir le volume total'
-    ]
-  });
-});
+}
 
 // ============================================
-// ROUTE D'ACCUEIL
+// ROUTE D'ACCUEIL (publique)
 // ============================================
 
 router.get('/', (req, res) => {
+  const roleInfo = req.user ? 
+    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role})` : 
+    'Non authentifié';
+  
   res.json({
     title: 'API Import/Export COMPLETE pour LWS',
     description: 'Exportez toutes vos données avec des performances optimisées',
     version: '4.0.0-lws',
     documentation: 'https://github.com/votre-projet/docs',
     timestamp: new Date().toISOString(),
+    authentification: roleInfo,
+    roles_autorises: ['Administrateur', 'Gestionnaire'],
     endpoints: {
       export_complet: {
         description: '🔵 Exporter TOUTES les données (recommandé)',

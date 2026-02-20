@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const journalController = require('../Controllers/journalController');
-const { verifyToken } = require('../middleware/auth');
-const journalAccess = require('../middleware/journalAccess');
+const { verifierToken } = require('../middleware/auth');
+const role = require('../middleware/verificationRole');
+const permission = require('../middleware/permission');
 const rateLimit = require('express-rate-limit');
 
 // ============================================
@@ -70,7 +71,7 @@ router.use((req, res, next) => {
 
 // Middleware de logging spécifique au journal
 router.use((req, res, next) => {
-  console.log(`📋 [Journal] ${req.method} ${req.url} - User: ${req.user?.NomUtilisateur || 'non authentifié'}`);
+  console.log(`📋 [Journal] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur || 'non authentifié'} (${req.user?.role || 'aucun'})`);
   next();
 });
 
@@ -88,13 +89,20 @@ router.get('/health', JOURNAL_CONFIG.rateLimits.standard, (req, res) => {
     status: 'healthy',
     service: 'journal',
     timestamp: new Date().toISOString(),
+    version: '3.0.0-lws',
+    roles_autorises: {
+      consultation: 'Administrateur uniquement',
+      actions: 'Administrateur uniquement',
+      export: 'Administrateur uniquement'
+    },
     endpoints: [
       'GET /api/journal',
       'GET /api/journal/imports',
       'GET /api/journal/imports/:batchId',
       'GET /api/journal/stats',
+      'GET /api/journal/actions/annulables',
+      'POST /api/journal/:id/annuler',
       'POST /api/journal/annuler-import',
-      'POST /api/journal/undo/:id',
       'POST /api/journal/nettoyer',
       'GET /api/journal/export',
       'GET /api/journal/diagnostic'
@@ -110,95 +118,154 @@ router.get('/test', (req, res) => {
   res.json({
     success: true,
     message: 'Service journal fonctionnel',
-    version: '2.0.0-lws',
-    timestamp: new Date().toISOString()
+    version: '3.0.0-lws',
+    timestamp: new Date().toISOString(),
+    roles_autorises: {
+      consultation: 'Administrateur uniquement',
+      actions: 'Administrateur uniquement'
+    }
   });
 });
 
 // ============================================
 // MIDDLEWARE D'AUTHENTIFICATION (pour toutes les routes suivantes)
 // ============================================
-router.use(verifyToken);
-router.use(journalAccess);
+router.use(verifierToken);
+router.use(permission.peutVoirInfosSensibles); // Pour masquer IP et anciennes valeurs
 
 // ============================================
-// ROUTES PRINCIPALES
+// ROUTES PRINCIPALES (Admin uniquement)
 // ============================================
 
 /**
  * 📋 Récupérer le journal avec filtres et pagination
  * GET /api/journal
+ * Admin uniquement
  */
-router.get('/', JOURNAL_CONFIG.rateLimits.standard, (req, res) => 
-  journalController.getJournal(req, res)
+router.get(
+  '/', 
+  role.peutVoirJournal,
+  JOURNAL_CONFIG.rateLimits.standard, 
+  journalController.getJournal
 );
 
 /**
  * 📋 Version alternative (pour compatibilité)
  * GET /api/journal/list
+ * Admin uniquement
  */
-router.get('/list', JOURNAL_CONFIG.rateLimits.standard, (req, res) => 
-  journalController.getJournal(req, res)
+router.get(
+  '/list', 
+  role.peutVoirJournal,
+  JOURNAL_CONFIG.rateLimits.standard, 
+  journalController.getJournal
 );
 
 /**
  * 📋 Récupérer la liste des imports groupés
  * GET /api/journal/imports
+ * Admin uniquement
  */
-router.get('/imports', JOURNAL_CONFIG.rateLimits.standard, (req, res) => 
-  journalController.getImports(req, res)
+router.get(
+  '/imports', 
+  role.peutVoirJournal,
+  JOURNAL_CONFIG.rateLimits.standard, 
+  journalController.getImports
 );
 
 /**
  * 📋 Détails d'un import spécifique
  * GET /api/journal/imports/:batchId
+ * Admin uniquement
  */
-router.get('/imports/:batchId', JOURNAL_CONFIG.rateLimits.standard, (req, res) => 
-  journalController.getImportDetails(req, res)
+router.get(
+  '/imports/:batchId', 
+  role.peutVoirJournal,
+  JOURNAL_CONFIG.rateLimits.standard, 
+  journalController.getImportDetails
 );
 
 /**
  * 📊 Statistiques d'activité
  * GET /api/journal/stats
+ * Admin uniquement
  */
-router.get('/stats', JOURNAL_CONFIG.rateLimits.standard, (req, res) => 
-  journalController.getStats(req, res)
+router.get(
+  '/stats', 
+  role.peutVoirJournal,
+  JOURNAL_CONFIG.rateLimits.standard, 
+  journalController.getStats
+);
+
+/**
+ * 📋 Lister les actions annulables (Admin uniquement)
+ * GET /api/journal/actions/annulables
+ * Admin uniquement
+ */
+router.get(
+  '/actions/annulables', 
+  role.peutAnnulerAction,
+  JOURNAL_CONFIG.rateLimits.standard,
+  journalController.listerActionsAnnulables
 );
 
 // ============================================
-// ROUTES D'ACTION (rate limiting plus strict)
+// ROUTES D'ACTION (Admin uniquement - rate limiting plus strict)
 // ============================================
 
 /**
- * 🔄 Annuler une importation
+ * ↩️ Annuler une action (Admin uniquement)
+ * POST /api/journal/:id/annuler
+ */
+router.post(
+  '/:id/annuler', 
+  role.peutAnnulerAction,
+  JOURNAL_CONFIG.rateLimits.sensitive, 
+  journalController.annulerAction
+);
+
+/**
+ * 🔄 Annuler une importation (Admin uniquement)
  * POST /api/journal/annuler-import
  */
-router.post('/annuler-import', JOURNAL_CONFIG.rateLimits.sensitive, (req, res) => 
-  journalController.annulerImportation(req, res)
+router.post(
+  '/annuler-import', 
+  role.peutAnnulerAction,
+  JOURNAL_CONFIG.rateLimits.sensitive, 
+  journalController.annulerImportation
 );
 
 /**
- * ↩️ Annuler une action (modification/création/suppression)
+ * ↩️ Annuler une action (version legacy - Admin uniquement)
  * POST /api/journal/undo/:id
  */
-router.post('/undo/:id', JOURNAL_CONFIG.rateLimits.sensitive, (req, res) => 
-  journalController.undoAction(req, res)
+router.post(
+  '/undo/:id', 
+  role.peutAnnulerAction,
+  JOURNAL_CONFIG.rateLimits.sensitive, 
+  journalController.undoAction
 );
 
 /**
- * 🧹 Nettoyer le journal (supprimer les vieilles entrées)
+ * 🧹 Nettoyer le journal (supprimer les vieilles entrées - Admin uniquement)
  * POST /api/journal/nettoyer
  */
-router.post('/nettoyer', JOURNAL_CONFIG.rateLimits.sensitive, (req, res) => 
-  journalController.nettoyerJournal(req, res)
+router.post(
+  '/nettoyer', 
+  role.peutAnnulerAction,
+  JOURNAL_CONFIG.rateLimits.sensitive, 
+  journalController.nettoyerJournal
 );
 
 /**
  * 🧹 Version alternative
  * DELETE /api/journal/cleanup
  */
-router.delete('/cleanup', JOURNAL_CONFIG.rateLimits.sensitive, (req, res) => 
-  journalController.nettoyerJournal(req, res)
+router.delete(
+  '/cleanup', 
+  role.peutAnnulerAction,
+  JOURNAL_CONFIG.rateLimits.sensitive, 
+  journalController.nettoyerJournal
 );
 
 // ============================================
@@ -206,95 +273,128 @@ router.delete('/cleanup', JOURNAL_CONFIG.rateLimits.sensitive, (req, res) =>
 // ============================================
 
 /**
- * 📤 Exporter le journal
+ * 📤 Exporter le journal (Admin uniquement)
  * GET /api/journal/export
  */
-router.get('/export', JOURNAL_CONFIG.rateLimits.export, async (req, res) => {
-  try {
-    // Forcer le mode export
-    req.query.export_all = 'true';
-    await journalController.getJournal(req, res);
-  } catch (error) {
-    console.error('❌ Erreur export journal:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Erreur lors de l\'export',
-      details: error.message
-    });
+router.get(
+  '/export', 
+  role.peutVoirJournal,
+  JOURNAL_CONFIG.rateLimits.export, 
+  async (req, res) => {
+    try {
+      // Forcer le mode export
+      req.query.export_all = 'true';
+      await journalController.getJournal(req, res);
+    } catch (error) {
+      console.error('❌ Erreur export journal:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Erreur lors de l\'export',
+        details: error.message
+      });
+    }
   }
-});
+);
 
 /**
- * 🔧 Diagnostic du journal
+ * 🔧 Diagnostic du journal (Admin uniquement)
  * GET /api/journal/diagnostic
  */
-router.get('/diagnostic', JOURNAL_CONFIG.rateLimits.standard, async (req, res) => {
-  try {
-    await journalController.diagnostic(req, res);
-  } catch (error) {
-    console.error('❌ Erreur diagnostic:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
+router.get(
+  '/diagnostic', 
+  role.peutVoirJournal,
+  JOURNAL_CONFIG.rateLimits.standard, 
+  journalController.diagnostic
+);
 
 // ============================================
 // ROUTE UTILITAIRE DE JOURNALISATION
 // ============================================
 
 /**
- * 📝 Journaliser une action (utilitaire pour autres contrôleurs)
+ * 📝 Journaliser une action (utilitaire pour autres contrôleurs - protégé)
  * POST /api/journal/log
  */
-router.post('/log', JOURNAL_CONFIG.rateLimits.standard, (req, res) => {
-  journalController.logAction(req.body)
-    .then(() => res.json({ 
-      success: true, 
-      message: 'Action journalisée',
-      timestamp: new Date().toISOString()
-    }))
-    .catch(error => res.status(500).json({ 
-      success: false,
-      error: 'Erreur journalisation',
-      details: error.message 
-    }));
-});
+router.post(
+  '/log', 
+  role.peutVoirJournal, // Même condition que consultation
+  JOURNAL_CONFIG.rateLimits.standard, 
+  (req, res) => {
+    journalController.logAction(req.body)
+      .then(() => res.json({ 
+        success: true, 
+        message: 'Action journalisée',
+        timestamp: new Date().toISOString()
+      }))
+      .catch(error => res.status(500).json({ 
+        success: false,
+        error: 'Erreur journalisation',
+        details: error.message 
+      }));
+  }
+);
 
 // ============================================
 // ROUTE D'ACCUEIL
 // ============================================
 
 router.get('/', (req, res) => {
+  const roleInfo = req.user ? 
+    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - ${req.user.role === 'Administrateur' ? '✅ Accès autorisé' : '❌ Accès restreint'}` : 
+    'Non authentifié';
+  
   res.json({
     name: 'API Journal GESCARD',
     description: 'Module de journalisation et d\'audit',
-    version: '2.0.0-lws',
+    version: '3.0.0-lws',
     timestamp: new Date().toISOString(),
-    documentation: '/api/journal/docs',
+    authentification: roleInfo,
+    roles_autorises: {
+      administrateur: '✅ Accès complet à toutes les fonctionnalités',
+      gestionnaire: '❌ Non autorisé (pas d\'accès au journal)',
+      chef_equipe: '❌ Non autorisé (pas d\'accès au journal)',
+      operateur: '❌ Non autorisé (pas d\'accès au journal)'
+    },
     endpoints: {
       consultation: {
-        'GET /': 'Liste paginée du journal',
-        'GET /list': 'Liste paginée (alias)',
-        'GET /imports': 'Liste des imports groupés',
-        'GET /imports/:batchId': 'Détails d\'un import',
-        'GET /stats': 'Statistiques d\'activité'
+        'GET /': '📋 Liste paginée du journal (Admin)',
+        'GET /list': '📋 Liste paginée (alias - Admin)',
+        'GET /imports': '📦 Liste des imports groupés (Admin)',
+        'GET /imports/:batchId': '📦 Détails d\'un import (Admin)',
+        'GET /stats': '📊 Statistiques d\'activité (Admin)',
+        'GET /actions/annulables': '🔄 Actions pouvant être annulées (Admin)'
       },
       actions: {
-        'POST /annuler-import': 'Annuler une importation',
-        'POST /undo/:id': 'Annuler une action spécifique',
-        'POST /nettoyer': 'Nettoyer les vieilles entrées',
-        'DELETE /cleanup': 'Nettoyer (alias)'
+        'POST /:id/annuler': '↩️ Annuler une action spécifique (Admin)',
+        'POST /annuler-import': '🔄 Annuler une importation (Admin)',
+        'POST /nettoyer': '🧹 Nettoyer les vieilles entrées (Admin)',
+        'DELETE /cleanup': '🧹 Nettoyer (alias - Admin)'
       },
       utilitaires: {
-        'GET /export': 'Exporter le journal',
-        'GET /diagnostic': 'Diagnostic du module',
-        'POST /log': 'Journaliser une action (interne)'
+        'GET /export': '📤 Exporter le journal (Admin)',
+        'GET /diagnostic': '🔧 Diagnostic du module (Admin)',
+        'POST /log': '📝 Journaliser une action (interne)'
       },
       publiques: {
-        'GET /health': 'Santé du service',
-        'GET /test': 'Test du service'
+        'GET /health': '🩺 Santé du service (public)',
+        'GET /test': '🧪 Test du service (public)'
+      }
+    },
+    nouvelles_fonctionnalites: {
+      annulation: {
+        description: 'Annulation d\'actions avec restauration',
+        routes: [
+          'GET /actions/annulables - Voir les actions annulables',
+          'POST /:id/annuler - Annuler une action spécifique'
+        ],
+        colonnes_ajoutees: [
+          'anciennes_valeurs (JSON)',
+          'nouvelles_valeurs (JSON)',
+          'annulee (BOOLEAN)',
+          'annulee_par (INT)',
+          'date_annulation (TIMESTAMP)',
+          'coordination (VARCHAR)'
+        ]
       }
     },
     filtres_disponibles: {
@@ -305,7 +405,9 @@ router.get('/', (req, res) => {
       utilisateur: 'Nom d\'utilisateur',
       actionType: 'Type d\'action',
       tableName: 'Table concernée',
-      importBatchID: 'ID du batch d\'import'
+      importBatchID: 'ID du batch d\'import',
+      coordination: 'Filtrer par coordination',
+      annulee: 'Filtrer les actions annulées (true/false)'
     },
     rate_limits: {
       standard: '30 requêtes par minute',
@@ -316,7 +418,8 @@ router.get('/', (req, res) => {
       curl_liste: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/journal?page=1&pageSize=50"',
       curl_imports: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/journal/imports"',
       curl_stats: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/journal/stats"',
-      curl_undo: 'curl -X POST -H "Authorization: Bearer <token>" "http://localhost:3000/api/journal/undo/123"'
+      curl_annulables: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/journal/actions/annulables"',
+      curl_annuler: 'curl -X POST -H "Authorization: Bearer <token>" "http://localhost:3000/api/journal/123/annuler"'
     }
   });
 });
@@ -336,6 +439,8 @@ router.use((req, res) => {
       'GET /api/journal/imports',
       'GET /api/journal/imports/:batchId',
       'GET /api/journal/stats',
+      'GET /api/journal/actions/annulables',
+      'POST /api/journal/:id/annuler',
       'POST /api/journal/annuler-import',
       'POST /api/journal/undo/:id',
       'POST /api/journal/nettoyer',

@@ -13,17 +13,21 @@ dotenv.config();
 
 const { query } = require("./db/db");
 
+// Import des middlewares
+const journalRequetes = require("./middleware/journalRequetes");
+const { securityHeaders } = require("./middleware/apiAuth");
+
 // Import des routes
 const authRoutes = require("./routes/authRoutes");
-const cartesRoutes = require("./routes/Cartes");
-const importExportRoutes = require("./routes/ImportExport");
-const journalRoutes = require("./routes/journal");
-const logRoutes = require("./routes/log");
-const utilisateursRoutes = require("./routes/utilisateurs");
-const profilRoutes = require("./routes/profils");
-const inventaireRoutes = require("./routes/Inventaire");
-const statistiquesRoutes = require("./routes/statistiques");
-const externalApiRoutes = require("./routes/externalApi");
+const cartesRoutes = require("./routes/cartesRoutes");
+const importExportRoutes = require("./routes/importExportRoutes");
+const journalRoutes = require("./routes/journalRoutes");
+const logRoutes = require("./routes/logRoutes");
+const utilisateursRoutes = require("./routes/utilisateursRoutes");
+const profilRoutes = require("./routes/profilRoutes");
+const inventaireRoutes = require("./routes/inventaireRoutes");
+const statistiquesRoutes = require("./routes/statistiquesRoutes");
+const externalApiRoutes = require("./routes/externalApiRoutes");
 const backupRoutes = require("./routes/backupRoutes");
 
 const app = express();
@@ -37,6 +41,9 @@ dirs.forEach(dir => {
     console.log(`📁 Dossier ${dir} créé`);
   }
 });
+
+// ========== MIDDLEWARE DE JOURNALISATION DES REQUÊTES (PREMIER) ==========
+app.use(journalRequetes);
 
 // ========== CONFIGURATION BACKUP AUTOMATIQUE ==========
 async function setupBackupSystem() {
@@ -92,6 +99,9 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
 }));
+
+// Headers de sécurité supplémentaires
+app.use(securityHeaders);
 
 // Compression GZIP
 app.use(compression({
@@ -171,6 +181,8 @@ const corsOptions = {
   exposedHeaders: [
     'Content-Disposition',
     'X-Request-ID',
+    'X-User-Role',
+    'X-User-Coordination',
     'Content-Type',
     'Content-Length',
     'Filename'
@@ -198,18 +210,14 @@ app.use(morgan(morganFormat, {
   skip: (req, res) => req.method === 'OPTIONS' || req.url.includes('/health')
 }));
 
-// Middleware de logging personnalisé
+// Middleware de logging personnalisé (déjà remplacé par journalRequetes)
 app.use((req, res, next) => {
   const start = Date.now();
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
-  req.requestId = requestId;
-  res.setHeader('X-Request-ID', requestId);
   
   res.on('finish', () => {
     const duration = Date.now() - start;
     if (duration > 1000 || res.statusCode >= 400) {
-      console.log(`📊 ${req.method} ${req.url} - ${duration}ms - ${res.statusCode} - ID: ${requestId}`);
+      console.log(`📊 ${req.method} ${req.url} - ${duration}ms - ${res.statusCode} - ID: ${req.idRequete}`);
     }
   });
   
@@ -229,6 +237,7 @@ app.get("/api/health", async (req, res) => {
     res.json({
       status: "healthy",
       timestamp: new Date().toISOString(),
+      requestId: req.idRequete,
       database: {
         connected: true,
         name: dbResult.rows[0].db,
@@ -243,13 +252,20 @@ app.get("/api/health", async (req, res) => {
         heapTotal: Math.round(memory.heapTotal / 1024 / 1024) + 'MB'
       },
       environment: process.env.NODE_ENV || 'development',
-      uptime: Math.round(process.uptime()) + 's'
+      uptime: Math.round(process.uptime()) + 's',
+      roles: {
+        administrateur: "Accès complet",
+        gestionnaire: "Accès limité à sa coordination",
+        chef_equipe: "Accès inventaire uniquement (3 colonnes)",
+        operateur: "Lecture seule"
+      }
     });
   } catch (error) {
     res.status(503).json({
       status: "unhealthy",
       error: "Database connection failed",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      requestId: req.idRequete
     });
   }
 });
@@ -263,13 +279,13 @@ app.get("/api/test-db", async (req, res) => {
       database: "PostgreSQL",
       version: result.rows[0].pg_version.split(',')[0],
       server_time: result.rows[0].server_time,
-      request_id: req.requestId
+      request_id: req.idRequete
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       error: error.message,
-      request_id: req.requestId
+      request_id: req.idRequete
     });
   }
 });
@@ -280,7 +296,8 @@ app.get("/api/cors-test", (req, res) => {
     message: "CORS test successful",
     your_origin: req.headers.origin || 'not specified',
     allowed_origins: allowedOrigins,
-    cors_enabled: true
+    cors_enabled: true,
+    requestId: req.idRequete
   });
 });
 
@@ -305,11 +322,21 @@ app.get("/", (req, res) => {
     environment: process.env.NODE_ENV || 'development',
     documentation: `${req.protocol}://${req.get('host')}/api`,
     health_check: `${req.protocol}://${req.get('host')}/api/health`,
+    requestId: req.idRequete,
+    roles_support: {
+      administrateur: "✅ Accès complet",
+      gestionnaire: "✅ Stats filtrées, import/export",
+      chef_equipe: "✅ Inventaire uniquement (3 colonnes)",
+      operateur: "✅ Lecture seule"
+    },
     features: {
       bulk_import: true,
       export: true,
       import_smart_sync: true,
-      backup_system: !!process.env.GOOGLE_CLIENT_ID
+      backup_system: !!process.env.GOOGLE_CLIENT_ID,
+      annulation_actions: true,
+      filtrage_coordination: true,
+      journal_amelioré: true
     }
   });
 });
@@ -322,7 +349,7 @@ app.use((req, res) => {
     success: false,
     message: "Route not found",
     requested: `${req.method} ${req.url}`,
-    request_id: req.requestId
+    request_id: req.idRequete
   });
 });
 
@@ -332,7 +359,7 @@ app.use((err, req, res, next) => {
     message: err.message,
     url: req.url,
     method: req.method,
-    request_id: req.requestId,
+    request_id: req.idRequete,
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
   
@@ -342,7 +369,7 @@ app.use((err, req, res, next) => {
       success: false,
       message: "CORS error",
       error: "Origin not allowed",
-      request_id: req.requestId
+      request_id: req.idRequete
     });
   }
   
@@ -351,7 +378,7 @@ app.use((err, req, res, next) => {
     return res.status(429).json({
       success: false,
       message: "Rate limit exceeded",
-      request_id: req.requestId
+      request_id: req.idRequete
     });
   }
   
@@ -361,7 +388,26 @@ app.use((err, req, res, next) => {
       success: false,
       message: "File too large",
       max_size: "200MB",
-      request_id: req.requestId
+      request_id: req.idRequete
+    });
+  }
+  
+  // Erreur de validation JWT
+  if (err.name === 'JsonWebTokenError') {
+    return res.status(401).json({
+      success: false,
+      message: "Token invalide",
+      error: "JWT_INVALID",
+      request_id: req.idRequete
+    });
+  }
+  
+  if (err.name === 'TokenExpiredError') {
+    return res.status(401).json({
+      success: false,
+      message: "Token expiré",
+      error: "JWT_EXPIRED",
+      request_id: req.idRequete
     });
   }
   
@@ -369,7 +415,7 @@ app.use((err, req, res, next) => {
   const errorResponse = {
     success: false,
     message: "Internal server error",
-    request_id: req.requestId,
+    request_id: req.idRequete,
     timestamp: new Date().toISOString()
   };
   
@@ -382,11 +428,13 @@ app.use((err, req, res, next) => {
 
 // ========== LANCEMENT DU SERVEUR ==========
 const server = app.listen(PORT, async () => {
+  console.log('\n🚀 =====================================');
   console.log(`🚀 Server started on port ${PORT}`);
   console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`⚡ PID: ${process.pid}`);
   console.log(`⏰ Started at: ${new Date().toLocaleString()}`);
   console.log(`🧠 RAM disponible: 8 Go`);
+  console.log('🚀 =====================================\n');
   
   // Démarrer le système de backup
   setupBackupSystem();
@@ -394,9 +442,12 @@ const server = app.listen(PORT, async () => {
   console.log('\n📋 Configuration VPS LWS:');
   console.log('• Upload limit: 200MB');
   console.log('• Rate limit: 5000 req/15min');
+  console.log('• Journalisation: middleware/journalRequetes.js');
   console.log('• Logs: /logs/access.log');
   console.log('• Backups: /backups/ (local) + Google Drive');
   console.log('• Connexions DB max: 50');
+  console.log('• Rôles supportés: Administrateur, Gestionnaire, Chef d\'équipe, Opérateur');
+  console.log('• Nouveautés: Annulation d\'actions, Filtrage par coordination\n');
 });
 
 // Configuration des timeouts (augmentés pour VPS)

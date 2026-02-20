@@ -16,8 +16,13 @@ const CONFIG = {
   statsCache: null,
   statsCacheTime: null,
   
-  // Rôles valides
-  validRoles: ['admin', 'superviseur', 'operateur', 'consultant']
+  // Nouveaux rôles selon les spécifications
+  validRoles: [
+    'Administrateur',
+    'Gestionnaire', 
+    'Chef d\'équipe',
+    'Opérateur'
+  ]
 };
 
 // Cache des tentatives de connexion (IP -> {attempts, lockUntil})
@@ -121,20 +126,22 @@ exports.loginUser = async (req, res) => {
       [utilisateur.id]
     );
 
-    // Génération du token JWT avec plus d'informations
+    // ✅ AJOUT DE LA COORDINATION DANS LE TOKEN JWT
     const token = jwt.sign(
       {
         id: utilisateur.id,
-        NomUtilisateur: utilisateur.nomutilisateur,
-        NomComplet: utilisateur.nomcomplet,
-        Role: utilisateur.role,
-        Agence: utilisateur.agence
+        nomUtilisateur: utilisateur.nomutilisateur,
+        nomComplet: utilisateur.nomcomplet,
+        role: utilisateur.role,
+        agence: utilisateur.agence,
+        coordination: utilisateur.coordination // ← NOUVEAU
       },
       process.env.JWT_SECRET,
       { expiresIn: CONFIG.jwtExpiration }
     );
 
     console.log('✅ [LOGIN] Connexion réussie pour:', utilisateur.nomutilisateur);
+    console.log(`   Rôle: ${utilisateur.role}, Coordination: ${utilisateur.coordination || 'Aucune'}`);
 
     // Journaliser la connexion
     await journalController.logAction({
@@ -143,6 +150,7 @@ exports.loginUser = async (req, res) => {
       nomComplet: utilisateur.nomcomplet,
       role: utilisateur.role,
       agence: utilisateur.agence,
+      coordination: utilisateur.coordination,
       action: "Connexion au système",
       actionType: "LOGIN",
       tableName: "Utilisateurs",
@@ -160,11 +168,12 @@ exports.loginUser = async (req, res) => {
       token,
       utilisateur: {
         id: utilisateur.id,
-        NomComplet: utilisateur.nomcomplet,
-        NomUtilisateur: utilisateur.nomutilisateur,
-        Email: utilisateur.email,
-        Agence: utilisateur.agence,
-        Role: utilisateur.role,
+        nomComplet: utilisateur.nomcomplet,
+        nomUtilisateur: utilisateur.nomutilisateur,
+        email: utilisateur.email,
+        agence: utilisateur.agence,
+        role: utilisateur.role,
+        coordination: utilisateur.coordination // ← NOUVEAU
       },
       performance: {
         duration
@@ -191,10 +200,11 @@ exports.logoutUser = async (req, res) => {
     // Journaliser la déconnexion
     await journalController.logAction({
       utilisateurId: req.user.id,
-      nomUtilisateur: req.user.NomUtilisateur,
-      nomComplet: req.user.NomComplet,
-      role: req.user.Role,
-      agence: req.user.Agence,
+      nomUtilisateur: req.user.nomUtilisateur,
+      nomComplet: req.user.nomComplet,
+      role: req.user.role,
+      agence: req.user.agence,
+      coordination: req.user.coordination,
       action: "Déconnexion du système",
       actionType: "LOGOUT",
       tableName: "Utilisateurs",
@@ -229,10 +239,11 @@ exports.verifyToken = async (req, res) => {
       valid: true,
       user: {
         id: req.user.id,
-        NomUtilisateur: req.user.NomUtilisateur,
-        NomComplet: req.user.NomComplet,
-        Role: req.user.Role,
-        Agence: req.user.Agence
+        nomUtilisateur: req.user.nomUtilisateur,
+        nomComplet: req.user.nomComplet,
+        role: req.user.role,
+        agence: req.user.agence,
+        coordination: req.user.coordination
       },
       timestamp: new Date().toISOString()
     });
@@ -256,11 +267,20 @@ exports.verifyToken = async (req, res) => {
  */
 exports.getAllUsers = async (req, res) => {
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent gérer les utilisateurs"
+      });
+    }
+
     const { 
       page = 1, 
       limit = 20, 
       role, 
       actif,
+      coordination, // ← NOUVEAU filtre
       search,
       sort = 'nomcomplet',
       order = 'asc'
@@ -277,7 +297,8 @@ exports.getAllUsers = async (req, res) => {
         nomcomplet, 
         email, 
         agence, 
-        role, 
+        role,
+        coordination, 
         TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation,
         TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion,
         actif 
@@ -301,6 +322,12 @@ exports.getAllUsers = async (req, res) => {
       params.push(role);
     }
 
+    if (coordination) {
+      paramCount++;
+      query += ` AND coordination = $${paramCount}`;
+      params.push(coordination);
+    }
+
     if (actif !== undefined) {
       paramCount++;
       query += ` AND actif = $${paramCount}`;
@@ -308,7 +335,7 @@ exports.getAllUsers = async (req, res) => {
     }
 
     // Tri
-    const allowedSortFields = ['nomcomplet', 'nomutilisateur', 'role', 'datecreation', 'derniereconnexion'];
+    const allowedSortFields = ['nomcomplet', 'nomutilisateur', 'role', 'coordination', 'datecreation', 'derniereconnexion'];
     const sortField = allowedSortFields.includes(sort) ? sort : 'nomcomplet';
     const sortOrder = order.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
     query += ` ORDER BY ${sortField} ${sortOrder}`;
@@ -332,6 +359,12 @@ exports.getAllUsers = async (req, res) => {
       countParamCount++;
       countQuery += ` AND role = $${countParamCount}`;
       countParams.push(role);
+    }
+
+    if (coordination) {
+      countParamCount++;
+      countQuery += ` AND coordination = $${countParamCount}`;
+      countParams.push(coordination);
     }
 
     if (actif !== undefined) {
@@ -364,6 +397,7 @@ exports.getAllUsers = async (req, res) => {
       filtres: {
         search: search || null,
         role: role || null,
+        coordination: coordination || null,
         actif: actif || null,
         sort: sortField,
         order: sortOrder
@@ -390,6 +424,14 @@ exports.getAllUsers = async (req, res) => {
  */
 exports.getUserById = async (req, res) => {
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent consulter les autres utilisateurs"
+      });
+    }
+
     const { id } = req.params;
 
     const startTime = Date.now();
@@ -401,7 +443,8 @@ exports.getUserById = async (req, res) => {
         nomcomplet, 
         email, 
         agence, 
-        role, 
+        role,
+        coordination,
         TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation,
         TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion,
         actif 
@@ -447,9 +490,27 @@ exports.createUser = async (req, res) => {
   const startTime = Date.now();
   
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent créer des utilisateurs"
+      });
+    }
+
     await client.query('BEGIN');
     
-    const { NomUtilisateur, NomComplet, Email, Agence, Role, MotDePasse } = req.body;
+    const { 
+      NomUtilisateur, 
+      NomComplet, 
+      Email, 
+      Agence, 
+      Role, 
+      Coordination, // ← NOUVEAU
+      MotDePasse 
+    } = req.body;
 
     // Validation
     if (!NomUtilisateur || !NomComplet || !MotDePasse || !Role) {
@@ -460,8 +521,8 @@ exports.createUser = async (req, res) => {
       });
     }
 
-    // Validation du rôle
-    if (!CONFIG.validRoles.includes(Role.toLowerCase())) {
+    // Validation du rôle (nouveaux rôles)
+    if (!CONFIG.validRoles.includes(Role)) {
       await client.query('ROLLBACK');
       return res.status(400).json({ 
         success: false,
@@ -511,18 +572,19 @@ exports.createUser = async (req, res) => {
     // Hasher le mot de passe
     const hashedPassword = await bcrypt.hash(MotDePasse, CONFIG.saltRounds);
 
-    // Créer l'utilisateur
+    // Créer l'utilisateur avec coordination
     const result = await client.query(`
       INSERT INTO utilisateurs 
-      (nomutilisateur, nomcomplet, email, agence, role, motdepasse, datecreation, actif)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      (nomutilisateur, nomcomplet, email, agence, role, coordination, motdepasse, datecreation, actif)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING id
     `, [
       NomUtilisateur, 
       NomComplet, 
       Email || null, 
       Agence || null, 
-      Role.toLowerCase(), 
+      Role, 
+      Coordination || null, 
       hashedPassword, 
       new Date(), 
       true
@@ -533,14 +595,24 @@ exports.createUser = async (req, res) => {
     // Journaliser la création
     await journalController.logAction({
       utilisateurId: req.user.id,
-      nomUtilisateur: req.user.NomUtilisateur,
-      nomComplet: req.user.NomComplet,
-      role: req.user.Role,
-      agence: req.user.Agence,
+      nomUtilisateur: req.user.nomUtilisateur,
+      nomComplet: req.user.nomComplet,
+      role: req.user.role,
+      agence: req.user.agence,
+      coordination: req.user.coordination,
       action: `Création utilisateur: ${NomUtilisateur}`,
       actionType: "CREATE_USER",
       tableName: "Utilisateurs",
       recordId: newUserId.toString(),
+      oldValue: null,
+      newValue: JSON.stringify({
+        nomUtilisateur: NomUtilisateur,
+        nomComplet: NomComplet,
+        email: Email,
+        agence: Agence,
+        role: Role,
+        coordination: Coordination
+      }),
       details: `Nouvel utilisateur créé: ${NomComplet} (${Role})`,
       ip: req.ip
     });
@@ -581,13 +653,23 @@ exports.updateUser = async (req, res) => {
   const startTime = Date.now();
   
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent modifier les utilisateurs"
+      });
+    }
+
     await client.query('BEGIN');
     
     const { id } = req.params;
-    const { NomComplet, Email, Agence, Role, Actif } = req.body;
+    const { NomComplet, Email, Agence, Role, Coordination, Actif } = req.body;
 
     // Validation du rôle si fourni
-    if (Role && !CONFIG.validRoles.includes(Role.toLowerCase())) {
+    if (Role && !CONFIG.validRoles.includes(Role)) {
       await client.query('ROLLBACK');
       return res.status(400).json({ 
         success: false,
@@ -638,13 +720,14 @@ exports.updateUser = async (req, res) => {
 
     await client.query(`
       UPDATE utilisateurs 
-      SET nomcomplet = $1, email = $2, agence = $3, role = $4, actif = $5
-      WHERE id = $6
+      SET nomcomplet = $1, email = $2, agence = $3, role = $4, coordination = $5, actif = $6
+      WHERE id = $7
     `, [
       NomComplet || oldUser.nomcomplet, 
       Email || oldUser.email, 
       Agence || oldUser.agence, 
-      Role ? Role.toLowerCase() : oldUser.role, 
+      Role || oldUser.role, 
+      Coordination !== undefined ? Coordination : oldUser.coordination,
       Actif !== undefined ? Actif : oldUser.actif, 
       id
     ]);
@@ -660,10 +743,11 @@ exports.updateUser = async (req, res) => {
     // Journaliser la modification
     await journalController.logAction({
       utilisateurId: req.user.id,
-      nomUtilisateur: req.user.NomUtilisateur,
-      nomComplet: req.user.NomComplet,
-      role: req.user.Role,
-      agence: req.user.Agence,
+      nomUtilisateur: req.user.nomUtilisateur,
+      nomComplet: req.user.nomComplet,
+      role: req.user.role,
+      agence: req.user.agence,
+      coordination: req.user.coordination,
       action: `Modification utilisateur: ${oldUser.nomutilisateur}`,
       actionType: "UPDATE_USER",
       tableName: "Utilisateurs",
@@ -673,6 +757,7 @@ exports.updateUser = async (req, res) => {
         email: oldUser.email,
         agence: oldUser.agence,
         role: oldUser.role,
+        coordination: oldUser.coordination,
         actif: oldUser.actif
       }),
       newValue: JSON.stringify({
@@ -680,6 +765,7 @@ exports.updateUser = async (req, res) => {
         email: newUser.email,
         agence: newUser.agence,
         role: newUser.role,
+        coordination: newUser.coordination,
         actif: newUser.actif
       }),
       details: `Utilisateur modifié: ${NomComplet || oldUser.nomcomplet}`,
@@ -721,6 +807,16 @@ exports.resetPassword = async (req, res) => {
   const startTime = Date.now();
   
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent réinitialiser les mots de passe"
+      });
+    }
+
     await client.query('BEGIN');
     
     const { id } = req.params;
@@ -761,10 +857,11 @@ exports.resetPassword = async (req, res) => {
     // Journaliser la réinitialisation
     await journalController.logAction({
       utilisateurId: req.user.id,
-      nomUtilisateur: req.user.NomUtilisateur,
-      nomComplet: req.user.NomComplet,
-      role: req.user.Role,
-      agence: req.user.Agence,
+      nomUtilisateur: req.user.nomUtilisateur,
+      nomComplet: req.user.nomComplet,
+      role: req.user.role,
+      agence: req.user.agence,
+      coordination: req.user.coordination,
       action: `Réinitialisation mot de passe utilisateur: ${user.nomutilisateur}`,
       actionType: "RESET_PASSWORD",
       tableName: "Utilisateurs",
@@ -808,6 +905,16 @@ exports.deleteUser = async (req, res) => {
   const startTime = Date.now();
   
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent désactiver des utilisateurs"
+      });
+    }
+
     await client.query('BEGIN');
     
     const { id } = req.params;
@@ -846,14 +953,17 @@ exports.deleteUser = async (req, res) => {
     // Journaliser la désactivation
     await journalController.logAction({
       utilisateurId: req.user.id,
-      nomUtilisateur: req.user.NomUtilisateur,
-      nomComplet: req.user.NomComplet,
-      role: req.user.Role,
-      agence: req.user.Agence,
+      nomUtilisateur: req.user.nomUtilisateur,
+      nomComplet: req.user.nomComplet,
+      role: req.user.role,
+      agence: req.user.agence,
+      coordination: req.user.coordination,
       action: `Désactivation utilisateur: ${user.nomutilisateur}`,
       actionType: "DELETE_USER",
       tableName: "Utilisateurs",
       recordId: id,
+      oldValue: JSON.stringify({ actif: user.actif }),
+      newValue: JSON.stringify({ actif: false }),
       details: `Utilisateur désactivé: ${user.nomcomplet} (${user.role})`,
       ip: req.ip
     });
@@ -893,6 +1003,16 @@ exports.activateUser = async (req, res) => {
   const startTime = Date.now();
   
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent réactiver des utilisateurs"
+      });
+    }
+
     await client.query('BEGIN');
     
     const { id } = req.params;
@@ -921,14 +1041,17 @@ exports.activateUser = async (req, res) => {
     // Journaliser la réactivation
     await journalController.logAction({
       utilisateurId: req.user.id,
-      nomUtilisateur: req.user.NomUtilisateur,
-      nomComplet: req.user.NomComplet,
-      role: req.user.Role,
-      agence: req.user.Agence,
+      nomUtilisateur: req.user.nomUtilisateur,
+      nomComplet: req.user.nomComplet,
+      role: req.user.role,
+      agence: req.user.agence,
+      coordination: req.user.coordination,
       action: `Réactivation utilisateur: ${user.nomutilisateur}`,
       actionType: "ACTIVATE_USER",
       tableName: "Utilisateurs",
       recordId: id,
+      oldValue: JSON.stringify({ actif: user.actif }),
+      newValue: JSON.stringify({ actif: true }),
       details: "Utilisateur réactivé",
       ip: req.ip
     });
@@ -969,6 +1092,14 @@ exports.activateUser = async (req, res) => {
  */
 exports.getUserStats = async (req, res) => {
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent consulter les statistiques"
+      });
+    }
+
     const { forceRefresh } = req.query;
     
     // Vérifier le cache
@@ -993,6 +1124,7 @@ exports.getUserStats = async (req, res) => {
         COUNT(CASE WHEN actif = false THEN 1 END) as utilisateurs_inactifs,
         COUNT(DISTINCT role) as roles_distincts,
         COUNT(DISTINCT agence) as agences_distinctes,
+        COUNT(DISTINCT coordination) as coordinations_distinctes,
         MIN(datecreation) as premier_utilisateur,
         MAX(datecreation) as dernier_utilisateur,
         COUNT(CASE WHEN datecreation > NOW() - INTERVAL '30 days' THEN 1 END) as nouveaux_30j
@@ -1010,19 +1142,31 @@ exports.getUserStats = async (req, res) => {
       ORDER BY count DESC
     `);
 
+    const coordinationStats = await db.query(`
+      SELECT 
+        coordination,
+        COUNT(*) as count,
+        COUNT(CASE WHEN actif = true THEN 1 END) as actifs
+      FROM utilisateurs 
+      WHERE coordination IS NOT NULL
+      GROUP BY coordination 
+      ORDER BY count DESC
+    `);
+
     // Activité récente des utilisateurs
     const recentActivity = await db.query(`
       SELECT 
         u.nomutilisateur,
         u.nomcomplet,
         u.role,
+        u.coordination,
         COUNT(j.journalid) as total_actions,
         MAX(j.dateaction) as derniere_action,
         COUNT(CASE WHEN j.dateaction > NOW() - INTERVAL '24 hours' THEN 1 END) as actions_24h
       FROM utilisateurs u
       LEFT JOIN journalactivite j ON u.id = j.utilisateurid
       WHERE j.dateaction >= CURRENT_DATE - INTERVAL '7 days'
-      GROUP BY u.id, u.nomutilisateur, u.nomcomplet, u.role
+      GROUP BY u.id, u.nomutilisateur, u.nomcomplet, u.role, u.coordination
       ORDER BY total_actions DESC
       LIMIT 10
     `);
@@ -1037,6 +1181,7 @@ exports.getUserStats = async (req, res) => {
           : 0,
         roles_distincts: parseInt(stats.rows[0].roles_distincts),
         agences_distinctes: parseInt(stats.rows[0].agences_distinctes),
+        coordinations_distinctes: parseInt(stats.rows[0].coordinations_distinctes),
         nouveaux_30j: parseInt(stats.rows[0].nouveaux_30j),
         premier_utilisateur: stats.rows[0].premier_utilisateur,
         dernier_utilisateur: stats.rows[0].dernier_utilisateur
@@ -1046,6 +1191,11 @@ exports.getUserStats = async (req, res) => {
         count: parseInt(row.count),
         actifs: parseInt(row.actifs),
         pourcentage: parseFloat(row.pourcentage)
+      })),
+      parCoordination: coordinationStats.rows.map(row => ({
+        ...row,
+        count: parseInt(row.count),
+        actifs: parseInt(row.actifs)
       })),
       activiteRecente: recentActivity.rows.map(row => ({
         ...row,
@@ -1084,7 +1234,15 @@ exports.getUserStats = async (req, res) => {
  */
 exports.searchUsers = async (req, res) => {
   try {
-    const { q, role, actif, page = 1, limit = 20 } = req.query;
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent rechercher des utilisateurs"
+      });
+    }
+
+    const { q, role, coordination, actif, page = 1, limit = 20 } = req.query;
 
     const actualPage = Math.max(1, parseInt(page));
     const actualLimit = Math.min(parseInt(limit), 100);
@@ -1097,7 +1255,8 @@ exports.searchUsers = async (req, res) => {
         nomcomplet, 
         email, 
         agence, 
-        role, 
+        role,
+        coordination, 
         actif 
       FROM utilisateurs 
       WHERE 1=1
@@ -1116,6 +1275,12 @@ exports.searchUsers = async (req, res) => {
       paramCount++;
       query += ` AND role = $${paramCount}`;
       params.push(role);
+    }
+
+    if (coordination) {
+      paramCount++;
+      query += ` AND coordination = $${paramCount}`;
+      params.push(coordination);
     }
 
     if (actif !== undefined) {
@@ -1142,6 +1307,12 @@ exports.searchUsers = async (req, res) => {
       countParamCount++;
       countQuery += ` AND role = $${countParamCount}`;
       countParams.push(role);
+    }
+
+    if (coordination) {
+      countParamCount++;
+      countQuery += ` AND coordination = $${countParamCount}`;
+      countParams.push(coordination);
     }
 
     if (actif !== undefined) {
@@ -1193,6 +1364,14 @@ exports.searchUsers = async (req, res) => {
  */
 exports.getUserHistory = async (req, res) => {
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent consulter l'historique des utilisateurs"
+      });
+    }
+
     const { id } = req.params;
     const { limit = 50, page = 1 } = req.query;
 
@@ -1224,7 +1403,8 @@ exports.getUserHistory = async (req, res) => {
         tablename,
         recordid,
         detailsaction,
-        iputilisateur
+        iputilisateur,
+        annulee
       FROM journalactivite 
       WHERE utilisateurid = $1 
       ORDER BY dateaction DESC 
@@ -1273,6 +1453,14 @@ exports.getUserHistory = async (req, res) => {
  */
 exports.exportUsers = async (req, res) => {
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent exporter les utilisateurs"
+      });
+    }
+
     const { format = 'json' } = req.query;
 
     const users = await db.query(`
@@ -1282,6 +1470,7 @@ exports.exportUsers = async (req, res) => {
         email,
         agence,
         role,
+        coordination,
         TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation,
         TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion,
         CASE WHEN actif = true THEN 'Actif' ELSE 'Inactif' END as statut
@@ -1293,9 +1482,9 @@ exports.exportUsers = async (req, res) => {
 
     if (format === 'csv') {
       // Export CSV
-      const csvHeaders = 'NomUtilisateur,NomComplet,Email,Agence,Role,DateCreation,DerniereConnexion,Statut\n';
+      const csvHeaders = 'NomUtilisateur,NomComplet,Email,Agence,Role,Coordination,DateCreation,DerniereConnexion,Statut\n';
       const csvData = users.rows.map(row => 
-        `"${row.nomutilisateur}","${row.nomcomplet}","${row.email || ''}","${row.agence || ''}","${row.role}","${row.datecreation}","${row.derniereconnexion || ''}","${row.statut}"`
+        `"${row.nomutilisateur}","${row.nomcomplet}","${row.email || ''}","${row.agence || ''}","${row.role}","${row.coordination || ''}","${row.datecreation}","${row.derniereconnexion || ''}","${row.statut}"`
       ).join('\n');
       
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -1392,6 +1581,43 @@ exports.getRoles = async (req, res) => {
 };
 
 /**
+ * Récupérer la liste des coordinations disponibles
+ * GET /api/utilisateurs/coordinations
+ */
+exports.getCoordinations = async (req, res) => {
+  try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent lister les coordinations"
+      });
+    }
+
+    const result = await db.query(`
+      SELECT DISTINCT coordination 
+      FROM utilisateurs 
+      WHERE coordination IS NOT NULL AND coordination != ''
+      ORDER BY coordination
+    `);
+
+    res.json({
+      success: true,
+      coordinations: result.rows.map(r => r.coordination),
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("❌ Erreur récupération coordinations:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Erreur serveur", 
+      error: error.message 
+    });
+  }
+};
+
+/**
  * Nettoyer le cache des statistiques
  * POST /api/utilisateurs/cache/clear
  */
@@ -1421,6 +1647,14 @@ exports.clearStatsCache = async (req, res) => {
  */
 exports.diagnostic = async (req, res) => {
   try {
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent accéder au diagnostic"
+      });
+    }
+
     const startTime = Date.now();
 
     const result = await db.query(`
@@ -1428,6 +1662,7 @@ exports.diagnostic = async (req, res) => {
         COUNT(*) as total_utilisateurs,
         COUNT(CASE WHEN actif THEN 1 END) as utilisateurs_actifs,
         COUNT(DISTINCT role) as roles_distincts,
+        COUNT(DISTINCT coordination) as coordinations_distinctes,
         MIN(datecreation) as premier_utilisateur,
         MAX(datecreation) as dernier_utilisateur,
         pg_total_relation_size('utilisateurs') as table_size,
@@ -1441,6 +1676,10 @@ exports.diagnostic = async (req, res) => {
       success: true,
       timestamp: new Date().toISOString(),
       service: 'utilisateurs',
+      utilisateur: {
+        role: req.user.role,
+        coordination: req.user.coordination
+      },
       statistiques: {
         total_utilisateurs: parseInt(stats.total_utilisateurs),
         utilisateurs_actifs: parseInt(stats.utilisateurs_actifs),
@@ -1448,6 +1687,7 @@ exports.diagnostic = async (req, res) => {
           ? Math.round((stats.utilisateurs_actifs / stats.total_utilisateurs) * 100) 
           : 0,
         roles_distincts: parseInt(stats.roles_distincts),
+        coordinations_distinctes: parseInt(stats.coordinations_distinctes),
         premier_utilisateur: stats.premier_utilisateur,
         dernier_utilisateur: stats.dernier_utilisateur
       },
@@ -1481,6 +1721,7 @@ exports.diagnostic = async (req, res) => {
         '/api/utilisateurs/export',
         '/api/utilisateurs/check-username',
         '/api/utilisateurs/roles',
+        '/api/utilisateurs/coordinations',
         '/api/utilisateurs/cache/clear',
         '/api/utilisateurs/diagnostic'
       ]

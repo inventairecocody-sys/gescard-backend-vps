@@ -1,4 +1,5 @@
 const db = require('../db/db');
+const journalController = require('./journalController');
 
 // ============================================
 // CONFIGURATION OPTIMISÉE POUR LWS
@@ -25,8 +26,46 @@ const CONFIG = {
     'RECHERCHE',
     'CONSULTATION',
     'BACKUP',
-    'RESTAURATION'
+    'RESTAURATION',
+    'ANNULATION'
   ]
+};
+
+// ============================================
+// FONCTIONS UTILITAIRES DE FILTRAGE
+// ============================================
+
+/**
+ * Vérifie si l'utilisateur peut accéder aux logs
+ */
+const peutAccederLogs = (req) => {
+  const role = req.user?.role;
+  
+  // Admin peut tout voir
+  if (role === 'Administrateur') {
+    return { autorise: true };
+  }
+  
+  // Gestionnaire, Chef d'équipe, Opérateur n'ont pas accès
+  return { 
+    autorise: false, 
+    message: "Seuls les administrateurs peuvent consulter les logs"
+  };
+};
+
+/**
+ * Ajoute le filtre de coordination à une requête SQL
+ */
+const ajouterFiltreCoordination = (req, query, params, colonne = 'coordination') => {
+  const role = req.user?.role;
+  const coordination = req.user?.coordination;
+  
+  // Admin voit tout
+  if (role === 'Administrateur') {
+    return { query, params };
+  }
+  
+  return { query, params };
 };
 
 // ============================================
@@ -34,64 +73,27 @@ const CONFIG = {
 // ============================================
 
 /**
- * Récupérer tous les logs avec pagination
+ * Récupérer tous les logs avec pagination - REDIRIGÉ VERS JOURNAL
  * GET /api/logs
  */
 exports.getAllLogs = async (req, res) => {
   try {
-    const { page = 1, limit = CONFIG.defaultLimit, export_all = 'false' } = req.query;
-    
-    const actualPage = Math.max(1, parseInt(page));
-    const actualLimit = export_all === 'true' 
-      ? CONFIG.maxLimit 
-      : Math.min(parseInt(limit), CONFIG.maxLimit);
-    const offset = (actualPage - 1) * actualLimit;
-
-    const startTime = Date.now();
-
-    // Requête principale avec pagination
-    const result = await db.query(`
-      SELECT 
-        logid,
-        utilisateur,
-        action,
-        TO_CHAR(dateheure, 'YYYY-MM-DD HH24:MI:SS') as dateheure,
-        EXTRACT(EPOCH FROM dateheure) as timestamp
-      FROM log 
-      ORDER BY dateheure DESC
-      LIMIT $1 OFFSET $2
-    `, [actualLimit, offset]);
-
-    // Compter le total
-    const countResult = await db.query('SELECT COUNT(*) as total FROM log');
-    const total = parseInt(countResult.rows[0].total);
-    const totalPages = Math.ceil(total / actualLimit);
-
-    const duration = Date.now() - startTime;
-
-    // Headers pour export
-    if (export_all === 'true') {
-      res.setHeader('X-Total-Rows', total);
-      res.setHeader('X-Query-Time', `${duration}ms`);
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
     }
 
-    res.json({
-      success: true,
-      logs: result.rows,
-      pagination: {
-        page: actualPage,
-        limit: actualLimit,
-        total,
-        totalPages,
-        hasNext: actualPage < totalPages,
-        hasPrev: actualPage > 1
-      },
-      performance: {
-        queryTime: duration,
-        returnedRows: result.rows.length
-      },
-      timestamp: new Date().toISOString()
-    });
+    console.log(`📋 Redirection getAllLogs vers journalController.getJournal pour ${req.user.nomUtilisateur}`);
+
+    // Rediriger vers le journal principal avec les mêmes paramètres
+    req.query.export_all = req.query.export_all || 'false';
+    
+    // Appeler le journalController
+    return await journalController.getJournal(req, res);
 
   } catch (err) {
     console.error('❌ Erreur getAllLogs:', err);
@@ -104,11 +106,20 @@ exports.getAllLogs = async (req, res) => {
 };
 
 /**
- * Créer un nouveau log
+ * Créer un nouveau log - UTILISE JOURNALCONTROLLER
  * POST /api/logs
  */
 exports.createLog = async (req, res) => {
   try {
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
+    }
+
     const { Utilisateur, Action } = req.body;
 
     if (!Utilisateur || !Action) {
@@ -118,15 +129,23 @@ exports.createLog = async (req, res) => {
       });
     }
 
-    const result = await db.query(
-      'INSERT INTO log (utilisateur, action, dateheure) VALUES ($1, $2, NOW()) RETURNING *',
-      [Utilisateur.trim(), Action.trim()]
-    );
+    // Utiliser journalController.logAction
+    await journalController.logAction({
+      utilisateurId: req.user?.id || null,
+      nomUtilisateur: Utilisateur,
+      nomComplet: Utilisateur,
+      role: req.user?.role || 'System',
+      agence: req.user?.agence || null,
+      actionType: Action.toUpperCase(),
+      tableName: 'log',
+      details: `Action manuelle: ${Action}`,
+      ip: req.ip,
+      coordination: req.user?.coordination || null
+    });
 
     res.json({
       success: true,
       message: 'Log ajouté avec succès',
-      log: result.rows[0],
       timestamp: new Date().toISOString()
     });
 
@@ -140,13 +159,21 @@ exports.createLog = async (req, res) => {
 };
 
 /**
- * Récupérer les logs par utilisateur
+ * Récupérer les logs par utilisateur - REDIRIGÉ VERS JOURNAL
  * GET /api/logs/user/:utilisateur
  */
 exports.getLogsByUser = async (req, res) => {
   try {
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
+    }
+
     const { utilisateur } = req.params;
-    const { page = 1, limit = CONFIG.defaultLimit } = req.query;
 
     if (!utilisateur) {
       return res.status(400).json({
@@ -155,49 +182,13 @@ exports.getLogsByUser = async (req, res) => {
       });
     }
 
-    const actualPage = Math.max(1, parseInt(page));
-    const actualLimit = Math.min(parseInt(limit), CONFIG.maxLimit);
-    const offset = (actualPage - 1) * actualLimit;
+    console.log(`📋 Redirection getLogsByUser vers journalController.getJournal pour utilisateur: ${utilisateur}`);
 
-    const startTime = Date.now();
-
-    const result = await db.query(`
-      SELECT 
-        logid,
-        utilisateur,
-        action,
-        TO_CHAR(dateheure, 'YYYY-MM-DD HH24:MI:SS') as dateheure
-      FROM log 
-      WHERE utilisateur = $1
-      ORDER BY dateheure DESC
-      LIMIT $2 OFFSET $3
-    `, [utilisateur, actualLimit, offset]);
-
-    const countResult = await db.query(
-      'SELECT COUNT(*) as total FROM log WHERE utilisateur = $1',
-      [utilisateur]
-    );
-
-    const total = parseInt(countResult.rows[0].total);
-    const totalPages = Math.ceil(total / actualLimit);
-
-    res.json({
-      success: true,
-      utilisateur,
-      logs: result.rows,
-      pagination: {
-        page: actualPage,
-        limit: actualLimit,
-        total,
-        totalPages,
-        hasNext: actualPage < totalPages,
-        hasPrev: actualPage > 1
-      },
-      performance: {
-        queryTime: Date.now() - startTime
-      },
-      timestamp: new Date().toISOString()
-    });
+    // Rediriger vers le journal avec filtre utilisateur
+    req.query.utilisateur = utilisateur;
+    req.query.export_all = req.query.export_all || 'false';
+    
+    return await journalController.getJournal(req, res);
 
   } catch (err) {
     console.error('❌ Erreur getLogsByUser:', err);
@@ -209,12 +200,21 @@ exports.getLogsByUser = async (req, res) => {
 };
 
 /**
- * Récupérer les logs par plage de dates
+ * Récupérer les logs par plage de dates - REDIRIGÉ VERS JOURNAL
  * GET /api/logs/date-range
  */
 exports.getLogsByDateRange = async (req, res) => {
   try {
-    const { dateDebut, dateFin, page = 1, limit = CONFIG.defaultLimit } = req.query;
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
+    }
+
+    const { dateDebut, dateFin } = req.query;
 
     if (!dateDebut || !dateFin) {
       return res.status(400).json({
@@ -223,55 +223,14 @@ exports.getLogsByDateRange = async (req, res) => {
       });
     }
 
-    const actualPage = Math.max(1, parseInt(page));
-    const actualLimit = Math.min(parseInt(limit), CONFIG.maxLimit);
-    const offset = (actualPage - 1) * actualLimit;
+    console.log(`📋 Redirection getLogsByDateRange vers journalController.getJournal`);
 
-    const startTime = Date.now();
-
-    const result = await db.query(`
-      SELECT 
-        logid,
-        utilisateur,
-        action,
-        TO_CHAR(dateheure, 'YYYY-MM-DD HH24:MI:SS') as dateheure
-      FROM log 
-      WHERE dateheure BETWEEN $1 AND $2
-      ORDER BY dateheure DESC
-      LIMIT $3 OFFSET $4
-    `, [
-      new Date(dateDebut), 
-      new Date(dateFin + ' 23:59:59'),
-      actualLimit, 
-      offset
-    ]);
-
-    const countResult = await db.query(`
-      SELECT COUNT(*) as total FROM log 
-      WHERE dateheure BETWEEN $1 AND $2
-    `, [new Date(dateDebut), new Date(dateFin + ' 23:59:59')]);
-
-    const total = parseInt(countResult.rows[0].total);
-    const totalPages = Math.ceil(total / actualLimit);
-
-    res.json({
-      success: true,
-      dateDebut,
-      dateFin,
-      logs: result.rows,
-      pagination: {
-        page: actualPage,
-        limit: actualLimit,
-        total,
-        totalPages,
-        hasNext: actualPage < totalPages,
-        hasPrev: actualPage > 1
-      },
-      performance: {
-        queryTime: Date.now() - startTime
-      },
-      timestamp: new Date().toISOString()
-    });
+    // Rediriger vers le journal avec filtres de dates
+    req.query.dateDebut = dateDebut;
+    req.query.dateFin = dateFin;
+    req.query.export_all = req.query.export_all || 'false';
+    
+    return await journalController.getJournal(req, res);
 
   } catch (err) {
     console.error('❌ Erreur getLogsByDateRange:', err);
@@ -283,36 +242,27 @@ exports.getLogsByDateRange = async (req, res) => {
 };
 
 /**
- * Récupérer les logs récents
+ * Récupérer les logs récents - REDIRIGÉ VERS JOURNAL
  * GET /api/logs/recent
  */
 exports.getRecentLogs = async (req, res) => {
   try {
-    const { limit = CONFIG.defaultLimit } = req.query;
-    const actualLimit = Math.min(parseInt(limit), CONFIG.maxLimit);
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
+    }
 
-    const startTime = Date.now();
+    console.log(`📋 Redirection getRecentLogs vers journalController.getJournal`);
 
-    const result = await db.query(`
-      SELECT 
-        logid,
-        utilisateur,
-        action,
-        TO_CHAR(dateheure, 'YYYY-MM-DD HH24:MI:SS') as dateheure
-      FROM log 
-      ORDER BY dateheure DESC 
-      LIMIT $1
-    `, [actualLimit]);
-
-    res.json({
-      success: true,
-      logs: result.rows,
-      count: result.rows.length,
-      performance: {
-        queryTime: Date.now() - startTime
-      },
-      timestamp: new Date().toISOString()
-    });
+    // Rediriger vers le journal avec limite réduite
+    req.query.limit = req.query.limit || '50';
+    req.query.export_all = 'false';
+    
+    return await journalController.getJournal(req, res);
 
   } catch (err) {
     console.error('❌ Erreur getRecentLogs:', err);
@@ -324,201 +274,55 @@ exports.getRecentLogs = async (req, res) => {
 };
 
 /**
- * Supprimer les vieux logs
+ * Supprimer les vieux logs - REDIRIGÉ VERS JOURNAL
  * DELETE /api/logs/old
  */
 exports.deleteOldLogs = async (req, res) => {
-  const client = await db.getClient();
-  
   try {
-    await client.query('BEGIN');
-    
-    const { days = CONFIG.defaultRetentionDays } = req.query;
-    const retentionDays = Math.min(parseInt(days), CONFIG.maxRetentionDays);
-
-    if (retentionDays < 30) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
         success: false,
-        error: 'La période minimum est de 30 jours'
+        error: droits.message
       });
     }
 
-    // Compter les logs à supprimer
-    const countResult = await client.query(`
-      SELECT COUNT(*) as count 
-      FROM log 
-      WHERE dateheure < CURRENT_DATE - INTERVAL '${retentionDays} days'
-    `);
+    console.log(`📋 Redirection deleteOldLogs vers journalController.nettoyerJournal`);
 
-    const count = parseInt(countResult.rows[0].count);
-
-    if (count === 0) {
-      await client.query('ROLLBACK');
-      return res.json({
-        success: true,
-        message: 'Aucun log à supprimer',
-        deletedCount: 0
-      });
-    }
-
-    // Journaliser la suppression si un utilisateur est connecté
-    if (req.user) {
-      await client.query(
-        'INSERT INTO log (utilisateur, action, dateheure) VALUES ($1, $2, NOW())',
-        [req.user.NomUtilisateur || 'System', `SUPPRESSION_LOGS_ANCIENS: ${count} logs >${retentionDays}j`]
-      );
-    }
-
-    // Supprimer les vieux logs
-    const result = await client.query(`
-      DELETE FROM log 
-      WHERE dateheure < CURRENT_DATE - INTERVAL '${retentionDays} days'
-      RETURNING logid
-    `);
-
-    await client.query('COMMIT');
-
-    res.json({
-      success: true,
-      message: `Logs supprimés avec succès`,
-      deletedCount: result.rows.length,
-      retentionDays,
-      dateLimite: new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString(),
-      timestamp: new Date().toISOString()
-    });
+    // Rediriger vers nettoyerJournal
+    req.body = { jours: req.query.days || CONFIG.defaultRetentionDays };
+    
+    return await journalController.nettoyerJournal(req, res);
 
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('❌ Erreur deleteOldLogs:', err);
     res.status(500).json({ 
       success: false,
       error: err.message 
     });
-  } finally {
-    client.release();
   }
 };
 
 /**
- * Statistiques des logs avec cache
+ * Statistiques des logs avec cache - REDIRIGÉ VERS JOURNAL
  * GET /api/logs/stats
  */
 exports.getLogStats = async (req, res) => {
   try {
-    const { forceRefresh, periode = 30 } = req.query;
-    
-    // Vérifier le cache
-    if (!forceRefresh && 
-        CONFIG.statsCache && 
-        CONFIG.statsCacheTime && 
-        (Date.now() - CONFIG.statsCacheTime) < CONFIG.cacheTimeout * 1000) {
-      return res.json({
-        success: true,
-        ...CONFIG.statsCache,
-        cached: true,
-        cacheAge: Math.round((Date.now() - CONFIG.statsCacheTime) / 1000) + 's'
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
       });
     }
 
-    const jours = Math.min(parseInt(periode), 365);
-    const startTime = Date.now();
+    console.log(`📋 Redirection getLogStats vers journalController.getStats`);
 
-    // Statistiques par utilisateur
-    const userStats = await db.query(`
-      SELECT 
-        utilisateur,
-        COUNT(*) as total_actions,
-        MAX(dateheure) as derniere_action,
-        MIN(dateheure) as premiere_action,
-        COUNT(CASE WHEN dateheure > NOW() - INTERVAL '7 days' THEN 1 END) as actions_7j
-      FROM log 
-      GROUP BY utilisateur 
-      ORDER BY total_actions DESC
-      LIMIT 20
-    `);
-
-    // Statistiques par jour (30 derniers jours)
-    const dailyStats = await db.query(`
-      SELECT 
-        CAST(dateheure AS DATE) as date,
-        COUNT(*) as total_actions,
-        COUNT(DISTINCT utilisateur) as utilisateurs_actifs
-      FROM log 
-      WHERE dateheure >= CURRENT_DATE - INTERVAL '30 days'
-      GROUP BY CAST(dateheure AS DATE)
-      ORDER BY date DESC
-    `);
-
-    // Actions les plus fréquentes
-    const actionStats = await db.query(`
-      SELECT 
-        action,
-        COUNT(*) as count,
-        COUNT(DISTINCT utilisateur) as utilisateurs_distincts,
-        MAX(dateheure) as derniere_utilisation
-      FROM log 
-      GROUP BY action 
-      ORDER BY count DESC 
-      LIMIT 20
-    `);
-
-    // Statistiques temporelles
-    const timeStats = await db.query(`
-      SELECT 
-        COUNT(*) as total,
-        COUNT(CASE WHEN dateheure > NOW() - INTERVAL '24 hours' THEN 1 END) as dernieres_24h,
-        COUNT(CASE WHEN dateheure > NOW() - INTERVAL '7 days' THEN 1 END) as dernieres_7j,
-        COUNT(CASE WHEN dateheure > NOW() - INTERVAL '30 days' THEN 1 END) as dernieres_30j,
-        MIN(dateheure) as premier_log,
-        MAX(dateheure) as dernier_log,
-        COUNT(DISTINCT utilisateur) as utilisateurs_total
-      FROM log
-    `);
-
-    const total = parseInt(timeStats.rows[0].total);
-
-    const statsData = {
-      resume: {
-        total_logs: total,
-        total_utilisateurs: parseInt(timeStats.rows[0].utilisateurs_total),
-        dernier_log: timeStats.rows[0].dernier_log,
-        premier_log: timeStats.rows[0].premier_log,
-        dernieres_24h: parseInt(timeStats.rows[0].dernieres_24h),
-        dernieres_7j: parseInt(timeStats.rows[0].dernieres_7j),
-        dernieres_30j: parseInt(timeStats.rows[0].dernieres_30j)
-      },
-      parUtilisateur: userStats.rows.map(row => ({
-        ...row,
-        total_actions: parseInt(row.total_actions),
-        pourcentage: total > 0 ? Math.round((row.total_actions / total) * 100) : 0
-      })),
-      parJour: dailyStats.rows.map(row => ({
-        ...row,
-        total_actions: parseInt(row.total_actions),
-        utilisateurs_actifs: parseInt(row.utilisateurs_actifs)
-      })),
-      actionsFrequentes: actionStats.rows.map(row => ({
-        ...row,
-        count: parseInt(row.count),
-        pourcentage: total > 0 ? Math.round((row.count / total) * 100) : 0
-      })),
-      periode_jours: jours,
-      performance: {
-        queryTime: Date.now() - startTime
-      }
-    };
-
-    // Mettre en cache
-    CONFIG.statsCache = statsData;
-    CONFIG.statsCacheTime = Date.now();
-
-    res.json({
-      success: true,
-      ...statsData,
-      cached: false,
-      timestamp: new Date().toISOString()
-    });
+    // Rediriger vers les stats du journal
+    return await journalController.getStats(req, res);
 
   } catch (err) {
     console.error('❌ Erreur getLogStats:', err);
@@ -530,19 +334,21 @@ exports.getLogStats = async (req, res) => {
 };
 
 /**
- * Recherche avancée dans les logs
+ * Recherche avancée dans les logs - REDIRIGÉ VERS JOURNAL
  * GET /api/logs/search
  */
 exports.searchLogs = async (req, res) => {
   try {
-    const { 
-      q, 
-      page = 1, 
-      limit = CONFIG.defaultLimit,
-      dateDebut,
-      dateFin,
-      exact = 'false'
-    } = req.query;
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
+    }
+
+    const { q } = req.query;
 
     if (!q || q.trim() === '') {
       return res.status(400).json({ 
@@ -560,91 +366,14 @@ exports.searchLogs = async (req, res) => {
       });
     }
 
-    const actualPage = Math.max(1, parseInt(page));
-    const actualLimit = Math.min(parseInt(limit), CONFIG.maxLimit);
-    const offset = (actualPage - 1) * actualLimit;
+    console.log(`📋 Redirection searchLogs vers journalController.getJournal avec recherche: ${q}`);
 
-    let searchTerm;
-    let query = `
-      SELECT 
-        logid,
-        utilisateur,
-        action,
-        TO_CHAR(dateheure, 'YYYY-MM-DD HH24:MI:SS') as dateheure
-      FROM log 
-      WHERE 1=1
-    `;
-    const params = [];
-    let paramCount = 0;
-
-    // Mode recherche (exact ou partiel)
-    if (exact === 'true') {
-      paramCount++;
-      query += ` AND (utilisateur = $${paramCount} OR action = $${paramCount})`;
-      params.push(q.trim());
-    } else {
-      paramCount++;
-      searchTerm = `%${q.trim()}%`;
-      query += ` AND (utilisateur ILIKE $${paramCount} OR action ILIKE $${paramCount})`;
-      params.push(searchTerm);
-    }
-
-    // Filtres de date
-    if (dateDebut) {
-      paramCount++;
-      query += ` AND dateheure >= $${paramCount}`;
-      params.push(new Date(dateDebut));
-    }
-
-    if (dateFin) {
-      paramCount++;
-      query += ` AND dateheure <= $${paramCount}`;
-      params.push(new Date(dateFin + ' 23:59:59'));
-    }
-
-    // Requête COUNT
-    let countQuery = query.replace(
-      /SELECT[\s\S]*?FROM/,
-      'SELECT COUNT(*) as total FROM'
-    );
-    countQuery = countQuery.split('ORDER BY')[0];
-
-    // Ajout du tri et pagination
-    query += ` ORDER BY dateheure DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-    params.push(actualLimit, offset);
-
-    const startTime = Date.now();
-
-    const [result, countResult] = await Promise.all([
-      db.query(query, params),
-      db.query(countQuery, params.slice(0, paramCount))
-    ]);
-
-    const total = parseInt(countResult.rows[0].total);
-    const totalPages = Math.ceil(total / actualLimit);
-
-    res.json({
-      success: true,
-      logs: result.rows,
-      pagination: {
-        page: actualPage,
-        limit: actualLimit,
-        total,
-        totalPages,
-        hasNext: actualPage < totalPages,
-        hasPrev: actualPage > 1
-      },
-      recherche: {
-        terme: q,
-        mode: exact === 'true' ? 'exact' : 'partiel',
-        dateDebut: dateDebut || null,
-        dateFin: dateFin || null
-      },
-      performance: {
-        queryTime: Date.now() - startTime
-      },
-      timestamp: new Date().toISOString()
-    });
+    // Rediriger vers le journal avec recherche
+    req.query.utilisateur = q;
+    req.query.actionType = q;
+    req.query.export_all = req.query.export_all || 'false';
+    
+    return await journalController.getJournal(req, res);
 
   } catch (err) {
     console.error('❌ Erreur searchLogs:', err);
@@ -656,147 +385,68 @@ exports.searchLogs = async (req, res) => {
 };
 
 /**
- * Supprimer tous les logs (admin seulement)
+ * Supprimer tous les logs (admin seulement) - REDIRIGÉ VERS JOURNAL
  * DELETE /api/logs/all
  */
 exports.clearAllLogs = async (req, res) => {
-  const client = await db.getClient();
-  
   try {
-    await client.query('BEGIN');
-    
-    // Vérifier les permissions
-    if (!req.user || !req.user.role || !req.user.role.toLowerCase().includes('admin')) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ 
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
         success: false,
-        error: 'Permission refusée - Réservé aux administrateurs' 
+        error: droits.message
       });
     }
 
-    // Compter avant suppression
-    const countResult = await client.query('SELECT COUNT(*) as total FROM log');
-    const total = parseInt(countResult.rows[0].total);
+    console.log(`📋 Redirection clearAllLogs vers journalController.nettoyerJournal (tout)`);
 
-    if (total === 0) {
-      await client.query('ROLLBACK');
-      return res.json({
-        success: true,
-        message: 'Aucun log à supprimer',
-        deletedCount: 0
-      });
-    }
-
-    // Journaliser l'action avant suppression
-    await client.query(
-      'INSERT INTO log (utilisateur, action, dateheure) VALUES ($1, $2, NOW())',
-      [req.user.NomUtilisateur || 'Admin', `SUPPRESSION_TOTALE_LOGS: ${total} logs`]
-    );
-
-    // Supprimer tous les logs
-    const result = await client.query('DELETE FROM log RETURNING logid');
+    // Rediriger vers nettoyerJournal avec une période très longue
+    req.body = { jours: 0 }; // Supprimer tout
     
-    await client.query('COMMIT');
-    
-    res.json({ 
-      success: true,
-      message: 'Tous les logs ont été supprimés avec succès',
-      deletedCount: result.rows.length,
-      timestamp: new Date().toISOString()
-    });
+    return await journalController.nettoyerJournal(req, res);
 
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('❌ Erreur clearAllLogs:', err);
     res.status(500).json({ 
       success: false,
       error: err.message 
     });
-  } finally {
-    client.release();
   }
 };
 
 /**
- * Exporter les logs
+ * Exporter les logs - REDIRIGÉ VERS JOURNAL
  * GET /api/logs/export
  */
 exports.exportLogs = async (req, res) => {
   try {
-    const { format = 'json', dateDebut, dateFin, utilisateur } = req.query;
-
-    let query = `
-      SELECT 
-        logid,
-        utilisateur,
-        action,
-        TO_CHAR(dateheure, 'YYYY-MM-DD HH24:MI:SS') as dateheure,
-        EXTRACT(EPOCH FROM dateheure) as timestamp
-      FROM log 
-      WHERE 1=1
-    `;
-    const params = [];
-    let paramCount = 0;
-
-    // Appliquer les filtres
-    if (dateDebut) {
-      paramCount++;
-      query += ` AND dateheure >= $${paramCount}`;
-      params.push(new Date(dateDebut));
-    }
-
-    if (dateFin) {
-      paramCount++;
-      query += ` AND dateheure <= $${paramCount}`;
-      params.push(new Date(dateFin + ' 23:59:59'));
-    }
-
-    if (utilisateur) {
-      paramCount++;
-      query += ` AND utilisateur = $${paramCount}`;
-      params.push(utilisateur);
-    }
-
-    query += ` ORDER BY dateheure DESC`;
-
-    const startTime = Date.now();
-    const result = await db.query(query, params);
-
-    const filename = `logs-export-${new Date().toISOString().split('T')[0]}`;
-
-    if (format === 'csv') {
-      // Export CSV
-      const csvHeaders = 'ID,Utilisateur,Action,DateHeure,Timestamp\n';
-      const csvData = result.rows.map(row => 
-        `${row.logid},"${row.utilisateur.replace(/"/g, '""')}","${row.action.replace(/"/g, '""')}","${row.dateheure}",${row.timestamp}`
-      ).join('\n');
-      
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.write('\uFEFF'); // BOM UTF-8
-      res.send(csvHeaders + csvData);
-
-    } else if (format === 'json') {
-      // Export JSON
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}.json"`);
-      res.json({
-        success: true,
-        exportDate: new Date().toISOString(),
-        total: result.rows.length,
-        filters: { dateDebut, dateFin, utilisateur },
-        logs: result.rows,
-        performance: {
-          queryTime: Date.now() - startTime
-        }
-      });
-
-    } else {
-      res.status(400).json({
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
         success: false,
-        error: 'Format non supporté. Utilisez json ou csv'
+        error: droits.message
       });
+    }
+
+    const { format = 'json' } = req.query;
+
+    console.log(`📋 Redirection exportLogs vers journalController.getJournal (export)`);
+
+    // Rediriger vers le journal avec export_all
+    req.query.export_all = 'true';
+    
+    // Pour le format CSV, on pourrait avoir besoin d'une logique spécifique
+    // mais on utilise d'abord getJournal
+    const result = await journalController.getJournal(req, res);
+    
+    // Si format CSV, on pourrait convertir ici, mais pour l'instant on garde JSON
+    if (format === 'csv' && !res.headersSent) {
+      // Logique de conversion CSV à implémenter si nécessaire
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="logs-export-${new Date().toISOString().split('T')[0]}.csv"`);
+      // ... conversion
     }
 
   } catch (err) {
@@ -809,128 +459,62 @@ exports.exportLogs = async (req, res) => {
 };
 
 /**
- * Méthode utilitaire pour logger les actions
+ * Méthode utilitaire pour logger les actions - UTILISE JOURNALCONTROLLER
  */
-exports.logAction = async (utilisateur, action) => {
+exports.logAction = async (utilisateur, action, req = null) => {
   try {
     if (!utilisateur || !action) {
       console.warn('⚠️ Tentative de log avec paramètres manquants');
       return;
     }
 
-    await db.query(
-      'INSERT INTO log (utilisateur, action, dateheure) VALUES ($1, $2, NOW())',
-      [utilisateur.trim(), action.trim()]
-    );
+    // Utiliser journalController.logAction
+    await journalController.logAction({
+      utilisateurId: req?.user?.id || null,
+      nomUtilisateur: utilisateur,
+      nomComplet: utilisateur,
+      role: req?.user?.role || 'System',
+      agence: req?.user?.agence || null,
+      actionType: action.toUpperCase(),
+      tableName: 'log',
+      details: action,
+      ip: req?.ip || null,
+      coordination: req?.user?.coordination || null
+    });
+
   } catch (err) {
     console.error('❌ Erreur lors de la journalisation:', err.message);
   }
 };
 
 /**
- * Récupérer les logs avec filtres avancés
+ * Récupérer les logs avec filtres avancés - REDIRIGÉ VERS JOURNAL
  * GET /api/logs/filtered
  */
 exports.getFilteredLogs = async (req, res) => {
   try {
-    const {
-      utilisateur,
-      action,
-      dateDebut,
-      dateFin,
-      page = 1,
-      limit = CONFIG.defaultLimit,
-      sort = 'desc'
-    } = req.query;
-
-    const actualPage = Math.max(1, parseInt(page));
-    const actualLimit = Math.min(parseInt(limit), CONFIG.maxLimit);
-    const offset = (actualPage - 1) * actualLimit;
-
-    let query = 'SELECT logid, utilisateur, action, TO_CHAR(dateheure, \'YYYY-MM-DD HH24:MI:SS\') as dateheure FROM log WHERE 1=1';
-    const params = [];
-    let paramCount = 0;
-
-    // Filtres
-    if (utilisateur && utilisateur.trim() !== '') {
-      paramCount++;
-      query += ` AND utilisateur ILIKE $${paramCount}`;
-      params.push(`%${utilisateur.trim()}%`);
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
     }
 
-    if (action && action.trim() !== '') {
-      paramCount++;
-      query += ` AND action ILIKE $${paramCount}`;
-      params.push(`%${action.trim()}%`);
-    }
+    console.log(`📋 Redirection getFilteredLogs vers journalController.getJournal`);
 
-    if (dateDebut) {
-      paramCount++;
-      query += ` AND dateheure >= $${paramCount}`;
-      params.push(new Date(dateDebut));
-    }
-
-    if (dateFin) {
-      paramCount++;
-      query += ` AND dateheure <= $${paramCount}`;
-      params.push(new Date(dateFin + ' 23:59:59'));
-    }
-
-    // Requête COUNT
-    let countQuery = query.replace(
-      /SELECT[\s\S]*?FROM/,
-      'SELECT COUNT(*) as total FROM'
-    );
-
-    // Tri
-    query += ` ORDER BY dateheure ${sort === 'asc' ? 'ASC' : 'DESC'}`;
+    // Transférer tous les filtres
+    const { utilisateur, action, dateDebut, dateFin, sort } = req.query;
     
-    // Pagination
-    query += ` LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-    params.push(actualLimit, offset);
-
-    const startTime = Date.now();
-
-    const [result, countResult] = await Promise.all([
-      db.query(query, params),
-      db.query(countQuery, params.slice(0, paramCount))
-    ]);
-
-    const total = parseInt(countResult.rows[0].total);
-    const totalPages = Math.ceil(total / actualLimit);
-
-    // Suggestions pour auto-complétion
-    let suggestions = [];
-    if (!action && result.rows.length > 0) {
-      suggestions = CONFIG.commonActions.filter(a => 
-        !result.rows.some(r => r.action === a)
-      ).slice(0, 5);
-    }
-
-    res.json({
-      success: true,
-      logs: result.rows,
-      pagination: {
-        page: actualPage,
-        limit: actualLimit,
-        total,
-        totalPages,
-        hasNext: actualPage < totalPages,
-        hasPrev: actualPage > 1
-      },
-      filtres: {
-        utilisateur: utilisateur || null,
-        action: action || null,
-        dateDebut: dateDebut || null,
-        dateFin: dateFin || null,
-        sort
-      },
-      suggestions,
-      performance: {
-        queryTime: Date.now() - startTime
-      },
-      timestamp: new Date().toISOString()
-    });
+    req.query.utilisateur = utilisateur;
+    req.query.actionType = action;
+    req.query.dateDebut = dateDebut;
+    req.query.dateFin = dateFin;
+    req.query.sort = sort;
+    req.query.export_all = req.query.export_all || 'false';
+    
+    return await journalController.getJournal(req, res);
 
   } catch (err) {
     console.error('❌ Erreur getFilteredLogs:', err);
@@ -947,6 +531,15 @@ exports.getFilteredLogs = async (req, res) => {
  */
 exports.getCommonActions = async (req, res) => {
   try {
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
+    }
+
     const { search } = req.query;
 
     let actions = CONFIG.commonActions;
@@ -958,11 +551,11 @@ exports.getCommonActions = async (req, res) => {
       );
     }
 
-    // Récupérer aussi les actions réelles de la base
+    // Récupérer aussi les actions réelles de la base (journalactivite)
     const dbActions = await db.query(`
-      SELECT DISTINCT action, COUNT(*) as frequency
-      FROM log
-      GROUP BY action
+      SELECT DISTINCT actiontype as action, COUNT(*) as frequency
+      FROM journalactivite
+      GROUP BY actiontype
       ORDER BY frequency DESC
       LIMIT 10
     `);
@@ -984,63 +577,24 @@ exports.getCommonActions = async (req, res) => {
 };
 
 /**
- * Diagnostic du système de logs
+ * Diagnostic du système de logs - REDIRIGÉ VERS JOURNAL
  * GET /api/logs/diagnostic
  */
 exports.diagnostic = async (req, res) => {
   try {
-    const startTime = Date.now();
+    // Vérifier les droits d'accès
+    const droits = peutAccederLogs(req);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        error: droits.message
+      });
+    }
 
-    const result = await db.query(`
-      SELECT 
-        COUNT(*) as total_logs,
-        COUNT(DISTINCT utilisateur) as utilisateurs_distincts,
-        COUNT(DISTINCT action) as actions_distinctes,
-        MIN(dateheure) as premier_log,
-        MAX(dateheure) as dernier_log,
-        COUNT(CASE WHEN dateheure > NOW() - INTERVAL '24 hours' THEN 1 END) as logs_24h,
-        COUNT(CASE WHEN dateheure > NOW() - INTERVAL '7 days' THEN 1 END) as logs_7j,
-        pg_total_relation_size('log') as table_size,
-        pg_size_pretty(pg_total_relation_size('log')) as table_size_pretty
-      FROM log
-    `);
+    console.log(`📋 Redirection diagnostic vers journalController.diagnostic`);
 
-    const stats = result.rows[0];
-
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      service: 'logs',
-      statistiques: {
-        total_logs: parseInt(stats.total_logs),
-        utilisateurs_distincts: parseInt(stats.utilisateurs_distincts),
-        actions_distinctes: parseInt(stats.actions_distinctes),
-        premier_log: stats.premier_log,
-        dernier_log: stats.dernier_log,
-        logs_24h: parseInt(stats.logs_24h),
-        logs_7j: parseInt(stats.logs_7j)
-      },
-      stockage: {
-        taille_table: stats.table_size_pretty,
-        taille_bytes: parseInt(stats.table_size)
-      },
-      config: CONFIG,
-      performance: {
-        queryTime: Date.now() - startTime
-      },
-      endpoints: [
-        '/api/logs',
-        '/api/logs/user/:utilisateur',
-        '/api/logs/date-range',
-        '/api/logs/recent',
-        '/api/logs/stats',
-        '/api/logs/search',
-        '/api/logs/filtered',
-        '/api/logs/export',
-        '/api/logs/actions',
-        '/api/logs/diagnostic'
-      ]
-    });
+    // Rediriger vers le diagnostic du journal
+    return await journalController.diagnostic(req, res);
 
   } catch (err) {
     console.error('❌ Erreur diagnostic:', err);

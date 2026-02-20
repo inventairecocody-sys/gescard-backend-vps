@@ -5,21 +5,19 @@ const rateLimit = require('express-rate-limit');
 const { 
   loginUser,
   logoutUser,
-  verifyToken,
-  refreshToken,
-  forgotPassword,
-  resetPassword
-} = require("../Controllers/utilisateursController");
-const { verifyToken: verifyTokenMiddleware } = require("../middleware/auth");
+  verifyToken
+} = require("../controllers/authController");
+const { verifierToken } = require("../middleware/auth");
+const journalRequetes = require("../middleware/journalRequetes");
 
 // ============================================
-// CONFIGURATION OPTIMISÉE POUR VPS
+// CONFIGURATION OPTIMISÉE POUR VPS/LWS
 // ============================================
 const AUTH_CONFIG = {
   // Rate limiting pour login
   loginLimiter: rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // 10 tentatives max (augmenté pour VPS)
+    max: 10, // 10 tentatives max
     skipSuccessfulRequests: true,
     message: {
       success: false,
@@ -35,31 +33,7 @@ const AUTH_CONFIG = {
     }
   }),
 
-  // Rate limiting pour forgot password
-  forgotLimiter: rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 heure
-    max: 5, // 5 demandes max par heure (augmenté)
-    message: {
-      success: false,
-      error: 'Trop de demandes',
-      message: 'Vous avez atteint la limite de demandes de réinitialisation',
-      code: 'RATE_LIMIT_FORGOT'
-    }
-  }),
-
-  // Rate limiting pour reset password
-  resetLimiter: rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 heure
-    max: 10, // 10 tentatives max par heure (augmenté)
-    message: {
-      success: false,
-      error: 'Trop de tentatives',
-      message: 'Trop de tentatives de réinitialisation',
-      code: 'RATE_LIMIT_RESET'
-    }
-  }),
-
-  // Validation des entrées
+  // Validation des entrées avec les nouveaux rôles
   validations: {
     login: [
       body('NomUtilisateur')
@@ -71,29 +45,6 @@ const AUTH_CONFIG = {
       body('MotDePasse')
         .notEmpty().withMessage("Mot de passe requis")
         .isLength({ min: 6 }).withMessage("Le mot de passe doit contenir au moins 6 caractères")
-    ],
-
-    forgotPassword: [
-      body('email')
-        .trim()
-        .notEmpty().withMessage("Email requis")
-        .isEmail().withMessage("Email invalide")
-        .normalizeEmail()
-    ],
-
-    resetPassword: [
-      body('token')
-        .notEmpty().withMessage("Token requis"),
-      
-      body('newPassword')
-        .notEmpty().withMessage("Nouveau mot de passe requis")
-        .isLength({ min: 8 }).withMessage("Le mot de passe doit contenir au moins 8 caractères")
-        .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage("Le mot de passe doit contenir au moins une majuscule, une minuscule et un chiffre")
-    ],
-
-    refreshToken: [
-      body('refreshToken')
-        .notEmpty().withMessage("Refresh token requis")
     ]
   }
 };
@@ -160,7 +111,7 @@ router.post(
  * Route de déconnexion
  * POST /api/auth/logout
  */
-router.post("/logout", verifyTokenMiddleware, async (req, res) => {
+router.post("/logout", verifierToken, async (req, res) => {
   try {
     await logoutUser(req, res);
   } catch (error) {
@@ -177,7 +128,7 @@ router.post("/logout", verifyTokenMiddleware, async (req, res) => {
  * Vérification du token
  * GET /api/auth/verify
  */
-router.get("/verify", verifyTokenMiddleware, async (req, res) => {
+router.get("/verify", verifierToken, async (req, res) => {
   try {
     await verifyToken(req, res);
   } catch (error) {
@@ -189,75 +140,6 @@ router.get("/verify", verifyTokenMiddleware, async (req, res) => {
     });
   }
 });
-
-/**
- * Rafraîchissement du token
- * POST /api/auth/refresh
- */
-router.post(
-  "/refresh",
-  AUTH_CONFIG.resetLimiter,
-  AUTH_CONFIG.validations.refreshToken,
-  validate,
-  async (req, res) => {
-    try {
-      await refreshToken(req, res);
-    } catch (error) {
-      console.error('❌ Erreur route refresh:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Erreur serveur',
-        code: 'SERVER_ERROR'
-      });
-    }
-  }
-);
-
-/**
- * Mot de passe oublié
- * POST /api/auth/forgot-password
- */
-router.post(
-  "/forgot-password",
-  AUTH_CONFIG.forgotLimiter,
-  AUTH_CONFIG.validations.forgotPassword,
-  validate,
-  async (req, res) => {
-    try {
-      await forgotPassword(req, res);
-    } catch (error) {
-      console.error('❌ Erreur route forgot-password:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Erreur serveur',
-        code: 'SERVER_ERROR'
-      });
-    }
-  }
-);
-
-/**
- * Réinitialisation du mot de passe
- * POST /api/auth/reset-password
- */
-router.post(
-  "/reset-password",
-  AUTH_CONFIG.resetLimiter,
-  AUTH_CONFIG.validations.resetPassword,
-  validate,
-  async (req, res) => {
-    try {
-      await resetPassword(req, res);
-    } catch (error) {
-      console.error('❌ Erreur route reset-password:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Erreur serveur',
-        code: 'SERVER_ERROR'
-      });
-    }
-  }
-);
 
 // ============================================
 // ROUTES DE DIAGNOSTIC (développement uniquement)
@@ -274,13 +156,16 @@ if (process.env.NODE_ENV !== 'production') {
       message: "Routes d'authentification fonctionnelles",
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV || 'development',
+      roles: [
+        'Administrateur',
+        'Gestionnaire',
+        'Chef d\'équipe',
+        'Opérateur'
+      ],
       availableEndpoints: [
         'POST /login',
         'POST /logout',
-        'GET /verify',
-        'POST /refresh',
-        'POST /forgot-password',
-        'POST /reset-password'
+        'GET /verify'
       ]
     });
   });
@@ -294,15 +179,19 @@ if (process.env.NODE_ENV !== 'production') {
       success: true,
       config: {
         rateLimiting: {
-          login: '10 per 15 minutes',
-          forgot: '5 per hour',
-          reset: '10 per hour'
+          login: '10 per 15 minutes'
         },
         validation: {
           passwordMinLength: 8,
           usernamePattern: '^[a-zA-Z0-9._-]{3,50}$'
         },
         jwtExpiration: process.env.JWT_EXPIRATION || '8h',
+        roles: [
+          'Administrateur',
+          'Gestionnaire',
+          'Chef d\'équipe',
+          'Opérateur'
+        ],
         environment: process.env.NODE_ENV || 'development'
       }
     });
@@ -321,10 +210,7 @@ router.use((req, res) => {
     availableRoutes: [
       'POST /api/auth/login',
       'POST /api/auth/logout',
-      'GET /api/auth/verify',
-      'POST /api/auth/refresh',
-      'POST /api/auth/forgot-password',
-      'POST /api/auth/reset-password'
+      'GET /api/auth/verify'
     ],
     code: 'ROUTE_NOT_FOUND'
   });

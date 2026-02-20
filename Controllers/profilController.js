@@ -16,6 +16,33 @@ const CONFIG = {
 };
 
 // ============================================
+// FONCTIONS UTILITAIRES DE VÉRIFICATION
+// ============================================
+
+/**
+ * Vérifie si l'utilisateur peut accéder/modifier un profil
+ */
+const peutAccederProfil = (req, userIdCible) => {
+  const role = req.user?.role;
+  const userId = req.user?.id;
+
+  // Admin peut tout voir
+  if (role === 'Administrateur') {
+    return { autorise: true };
+  }
+
+  // Gestionnaire, Chef d'équipe, Opérateur ne voient que leur propre profil
+  if (parseInt(userId) === parseInt(userIdCible)) {
+    return { autorise: true };
+  }
+
+  return { 
+    autorise: false, 
+    message: "Vous ne pouvez accéder qu'à votre propre profil" 
+  };
+};
+
+// ============================================
 // CONTROLEUR PROFIL OPTIMISÉ POUR LWS
 // ============================================
 
@@ -37,6 +64,7 @@ exports.getProfile = async (req, res) => {
         email, 
         agence, 
         role,
+        coordination,
         actif,
         TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation,
         TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion
@@ -68,6 +96,73 @@ exports.getProfile = async (req, res) => {
 
   } catch (error) {
     console.error("❌ Erreur récupération profil:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Erreur serveur", 
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * Récupérer le profil d'un utilisateur par ID (Admin uniquement)
+ * GET /api/profil/:userId
+ */
+exports.getUserProfile = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Vérifier les droits
+    const droits = peutAccederProfil(req, userId);
+    if (!droits.autorise) {
+      return res.status(403).json({
+        success: false,
+        message: droits.message
+      });
+    }
+
+    const startTime = Date.now();
+
+    const result = await db.query(
+      `SELECT 
+        id, 
+        nomutilisateur, 
+        nomcomplet, 
+        email, 
+        agence, 
+        role,
+        coordination,
+        actif,
+        TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation,
+        TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion
+      FROM utilisateurs 
+      WHERE id = $1`,
+      [userId]
+    );
+
+    const user = result.rows[0];
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Utilisateur non trouvé" 
+      });
+    }
+
+    // Ne pas retourner le mot de passe
+    delete user.motdepasse;
+
+    res.json({
+      success: true,
+      user,
+      performance: {
+        queryTime: Date.now() - startTime
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("❌ Erreur récupération profil utilisateur:", error);
     res.status(500).json({ 
       success: false,
       message: "Erreur serveur", 
@@ -119,7 +214,6 @@ exports.changePassword = async (req, res) => {
     const hasUpperCase = /[A-Z]/.test(newPassword);
     const hasLowerCase = /[a-z]/.test(newPassword);
     const hasNumbers = /\d/.test(newPassword);
-    const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
 
     if (!(hasUpperCase && hasLowerCase && hasNumbers)) {
       await client.query('ROLLBACK');
@@ -181,6 +275,7 @@ exports.changePassword = async (req, res) => {
       nomComplet: user.nomcomplet,
       role: user.role,
       agence: user.agence,
+      coordination: user.coordination,
       action: "Changement de mot de passe",
       actionType: "UPDATE_PASSWORD",
       tableName: "Utilisateurs",
@@ -285,7 +380,16 @@ exports.updateProfile = async (req, res) => {
 
     // Récupérer le nouveau profil
     const newProfileResult = await client.query(
-      'SELECT id, nomutilisateur, nomcomplet, email, agence, role, actif FROM utilisateurs WHERE id = $1',
+      `SELECT 
+        id, 
+        nomutilisateur, 
+        nomcomplet, 
+        email, 
+        agence, 
+        role,
+        coordination,
+        actif 
+      FROM utilisateurs WHERE id = $1`,
       [userId]
     );
 
@@ -304,6 +408,7 @@ exports.updateProfile = async (req, res) => {
         nomComplet: oldProfile.nomcomplet,
         role: oldProfile.role,
         agence: oldProfile.agence,
+        coordination: oldProfile.coordination,
         action: "Modification du profil",
         actionType: "UPDATE_PROFILE",
         tableName: "Utilisateurs",
@@ -373,7 +478,9 @@ exports.getUserActivity = async (req, res) => {
         TO_CHAR(dateaction, 'YYYY-MM-DD HH24:MI:SS') as dateaction,
         tablename,
         detailsaction,
-        importbatchid
+        importbatchid,
+        annulee,
+        coordination
        FROM journalactivite 
        WHERE utilisateurid = $1 
        ORDER BY dateaction DESC 
@@ -408,6 +515,83 @@ exports.getUserActivity = async (req, res) => {
 
   } catch (error) {
     console.error("❌ Erreur récupération activités:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Erreur serveur", 
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * Récupérer l'activité d'un utilisateur (Admin uniquement)
+ * GET /api/profil/:userId/activity
+ */
+exports.getUserActivityById = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Vérifier les droits (Admin uniquement)
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent consulter l'activité des autres utilisateurs"
+      });
+    }
+
+    const { limit = 20, page = 1 } = req.query;
+
+    const actualLimit = Math.min(parseInt(limit), CONFIG.maxActivityLimit);
+    const actualPage = Math.max(1, parseInt(page));
+    const offset = (actualPage - 1) * actualLimit;
+
+    const startTime = Date.now();
+
+    const result = await db.query(
+      `SELECT 
+        actiontype,
+        action,
+        TO_CHAR(dateaction, 'YYYY-MM-DD HH24:MI:SS') as dateaction,
+        tablename,
+        detailsaction,
+        importbatchid,
+        annulee,
+        coordination
+       FROM journalactivite 
+       WHERE utilisateurid = $1 
+       ORDER BY dateaction DESC 
+       LIMIT $2 OFFSET $3`,
+      [userId, actualLimit, offset]
+    );
+
+    const countResult = await db.query(
+      'SELECT COUNT(*) as total FROM journalactivite WHERE utilisateurid = $1',
+      [userId]
+    );
+
+    const total = parseInt(countResult.rows[0].total);
+    const totalPages = Math.ceil(total / actualLimit);
+
+    res.json({
+      success: true,
+      userId: parseInt(userId),
+      activities: result.rows,
+      pagination: {
+        page: actualPage,
+        limit: actualLimit,
+        total,
+        totalPages,
+        hasNext: actualPage < totalPages,
+        hasPrev: actualPage > 1
+      },
+      performance: {
+        queryTime: Date.now() - startTime
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("❌ Erreur récupération activités utilisateur:", error);
     res.status(500).json({ 
       success: false,
       message: "Erreur serveur", 
@@ -565,6 +749,7 @@ exports.updateUsername = async (req, res) => {
       nomComplet: user.nomcomplet,
       role: user.role,
       agence: user.agence,
+      coordination: user.coordination,
       action: "Changement de nom d'utilisateur",
       actionType: "UPDATE_USERNAME",
       tableName: "Utilisateurs",
@@ -690,7 +875,9 @@ exports.getProfileStats = async (req, res) => {
         actionsLast30Days: parseInt(activityStats.rows[0].actions_30j),
         lastLogin: lastLoginResult.rows[0]?.dateaction || null,
         firstAction: firstLoginResult.rows[0]?.first_action || null,
-        memberSince: Math.ceil((Date.now() - new Date(firstLoginResult.rows[0]?.first_action || Date.now())) / (1000 * 60 * 60 * 24)) + ' jours'
+        memberSince: firstLoginResult.rows[0]?.first_action 
+          ? Math.ceil((Date.now() - new Date(firstLoginResult.rows[0].first_action)) / (1000 * 60 * 60 * 24)) + ' jours'
+          : 'N/A'
       },
       frequentActions: frequentActions.rows.map(a => ({
         ...a,
@@ -796,6 +983,7 @@ exports.deactivateAccount = async (req, res) => {
       nomComplet: user.nomcomplet,
       role: user.role,
       agence: user.agence,
+      coordination: user.coordination,
       action: "Désactivation du compte",
       actionType: "DEACTIVATE_ACCOUNT",
       tableName: "Utilisateurs",
@@ -846,12 +1034,7 @@ exports.reactivateAccount = async (req, res) => {
     const adminId = req.user.id;
 
     // Vérifier les droits admin
-    const adminResult = await client.query(
-      'SELECT role FROM utilisateurs WHERE id = $1',
-      [adminId]
-    );
-
-    if (!adminResult.rows[0] || !adminResult.rows[0].role.toLowerCase().includes('admin')) {
+    if (req.user.role !== 'Administrateur') {
       await client.query('ROLLBACK');
       return res.status(403).json({ 
         success: false,
@@ -892,10 +1075,11 @@ exports.reactivateAccount = async (req, res) => {
     // ✅ JOURNALISATION
     await journalController.logAction({
       utilisateurId: adminId,
-      nomUtilisateur: req.user.NomUtilisateur,
-      nomComplet: req.user.NomComplet,
+      nomUtilisateur: req.user.nomutilisateur,
+      nomComplet: req.user.nomcomplet,
       role: req.user.role,
       agence: req.user.agence,
+      coordination: req.user.coordination,
       action: "Réactivation de compte",
       actionType: "REACTIVATE_ACCOUNT",
       tableName: "Utilisateurs",
@@ -955,6 +1139,7 @@ exports.exportProfileData = async (req, res) => {
         email, 
         agence, 
         role,
+        coordination,
         actif,
         TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation,
         TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion
@@ -971,7 +1156,9 @@ exports.exportProfileData = async (req, res) => {
         TO_CHAR(dateaction, 'YYYY-MM-DD HH24:MI:SS') as dateaction,
         tablename,
         detailsaction,
-        importbatchid
+        importbatchid,
+        annulee,
+        coordination
        FROM journalactivite 
        WHERE utilisateurid = $1 
        ORDER BY dateaction DESC`,
@@ -983,16 +1170,16 @@ exports.exportProfileData = async (req, res) => {
       activities: activitiesResult.rows,
       exportDate: new Date().toISOString(),
       totalActivities: activitiesResult.rows.length,
-      generatedBy: req.user.NomUtilisateur
+      generatedBy: req.user.nomutilisateur
     };
 
-    const filename = `profil-${req.user.NomUtilisateur}-${new Date().toISOString().split('T')[0]}`;
+    const filename = `profil-${req.user.nomutilisateur}-${new Date().toISOString().split('T')[0]}`;
 
     if (format === 'csv') {
       // Export CSV
-      const csvHeaders = 'Type,Action,Date,Table,Détails\n';
+      const csvHeaders = 'Type,Action,Date,Table,Détails,BatchID,Annulée\n';
       const csvData = activitiesResult.rows.map(row => 
-        `"${row.actiontype}","${(row.action || '').replace(/"/g, '""')}","${row.dateaction}","${row.tablename || ''}","${(row.detailsaction || '').replace(/"/g, '""')}"`
+        `"${row.actiontype || ''}","${(row.action || '').replace(/"/g, '""')}","${row.dateaction || ''}","${row.tablename || ''}","${(row.detailsaction || '').replace(/"/g, '""')}","${row.importbatchid || ''}","${row.annulee ? 'Oui' : 'Non'}"`
       ).join('\n');
       
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -1124,11 +1311,19 @@ exports.clearUserCache = async (req, res) => {
 };
 
 /**
- * Diagnostic du profil
+ * Diagnostic du profil (Admin uniquement)
  * GET /api/profil/diagnostic
  */
 exports.diagnostic = async (req, res) => {
   try {
+    // Vérifier les droits
+    if (req.user.role !== 'Administrateur') {
+      return res.status(403).json({
+        success: false,
+        message: "Seuls les administrateurs peuvent accéder au diagnostic"
+      });
+    }
+
     const startTime = Date.now();
 
     const result = await db.query(`
@@ -1139,8 +1334,21 @@ exports.diagnostic = async (req, res) => {
         MIN(datecreation) as premier_utilisateur,
         MAX(datecreation) as dernier_utilisateur,
         COUNT(DISTINCT role) as roles_distincts,
-        COUNT(DISTINCT agence) as agences_distinctes
+        COUNT(DISTINCT agence) as agences_distinctes,
+        COUNT(DISTINCT coordination) as coordinations_distinctes
       FROM utilisateurs
+    `);
+
+    // Statistiques par coordination
+    const coordinationStats = await db.query(`
+      SELECT 
+        coordination,
+        COUNT(*) as total_utilisateurs,
+        COUNT(CASE WHEN actif THEN 1 END) as utilisateurs_actifs
+      FROM utilisateurs
+      WHERE coordination IS NOT NULL
+      GROUP BY coordination
+      ORDER BY total_utilisateurs DESC
     `);
 
     const stats = result.rows[0];
@@ -1149,6 +1357,10 @@ exports.diagnostic = async (req, res) => {
       success: true,
       timestamp: new Date().toISOString(),
       service: 'profil',
+      utilisateur: {
+        role: req.user.role,
+        coordination: req.user.coordination
+      },
       statistiques: {
         total_utilisateurs: parseInt(stats.total_utilisateurs),
         utilisateurs_actifs: parseInt(stats.utilisateurs_actifs),
@@ -1159,8 +1371,10 @@ exports.diagnostic = async (req, res) => {
         premier_utilisateur: stats.premier_utilisateur,
         dernier_utilisateur: stats.dernier_utilisateur,
         roles_distincts: parseInt(stats.roles_distincts),
-        agences_distinctes: parseInt(stats.agences_distinctes)
+        agences_distinctes: parseInt(stats.agences_distinctes),
+        coordinations_distinctes: parseInt(stats.coordinations_distinctes)
       },
+      coordination_stats: coordinationStats.rows,
       config: {
         saltRounds: CONFIG.saltRounds,
         minPasswordLength: CONFIG.minPasswordLength,
@@ -1172,12 +1386,15 @@ exports.diagnostic = async (req, res) => {
       },
       endpoints: [
         '/api/profil',
+        '/api/profil/:userId',
         '/api/profil/change-password',
         '/api/profil/activity',
+        '/api/profil/:userId/activity',
         '/api/profil/check-username',
         '/api/profil/username',
         '/api/profil/stats',
         '/api/profil/deactivate',
+        '/api/profil/reactivate/:userId',
         '/api/profil/export',
         '/api/profil/sessions',
         '/api/profil/logout-others',

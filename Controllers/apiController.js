@@ -1,4 +1,5 @@
 const db = require('../db/db');
+const annulationService = require('../Services/annulationService');
 
 // 🔧 CONFIGURATION API EXTERNE - OPTIMISÉE POUR LWS
 const API_CONFIG = {
@@ -49,7 +50,8 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
     'CONTACT DE RETRAIT': 'contact',
     'DELIVRANCE': 'delivrance',
     'DATE DE NAISSANCE': 'date',
-    'DATE DE DELIVRANCE': 'date'
+    'DATE DE DELIVRANCE': 'date',
+    'COORDINATION': 'texte' // ← NOUVEAU
   };
 
   for (const [colonne, type] of Object.entries(colonnesAFusionner)) {
@@ -223,7 +225,8 @@ exports.healthCheck = async (req, res) => {
         COUNT(*) as total_cartes,
         COUNT(DISTINCT "SITE DE RETRAIT") as sites_actifs,
         COUNT(DISTINCT nom) as beneficiaires_uniques,
-        COUNT(CASE WHEN dateimport > NOW() - INTERVAL '24 hours' THEN 1 END) as imports_24h
+        COUNT(CASE WHEN dateimport > NOW() - INTERVAL '24 hours' THEN 1 END) as imports_24h,
+        COUNT(DISTINCT coordination) as coordinations_distinctes
       FROM cartes
     `);
 
@@ -266,7 +269,8 @@ exports.healthCheck = async (req, res) => {
         total_cartes: parseInt(statsResult.rows[0].total_cartes),
         sites_actifs: parseInt(statsResult.rows[0].sites_actifs),
         beneficiaires_uniques: parseInt(statsResult.rows[0].beneficiaires_uniques),
-        imports_24h: parseInt(statsResult.rows[0].imports_24h)
+        imports_24h: parseInt(statsResult.rows[0].imports_24h),
+        coordinations_distinctes: parseInt(statsResult.rows[0].coordinations_distinctes)
       },
       sites_configures: API_CONFIG.SITES,
       sites_statistiques: sitesStats.rows,
@@ -281,7 +285,8 @@ exports.healthCheck = async (req, res) => {
           'gestion_conflits', 
           'synchronisation_multicolonne',
           'compression_gzip',
-          'batch_processing'
+          'batch_processing',
+          'coordination_support'
         ]
       },
       timestamp: new Date().toISOString()
@@ -328,6 +333,7 @@ exports.getChanges = async (req, res) => {
         delivrance,
         "CONTACT DE RETRAIT",
         TO_CHAR("DATE DE DELIVRANCE", 'YYYY-MM-DD') as "DATE DE DELIVRANCE",
+        coordination,
         TO_CHAR(dateimport, 'YYYY-MM-DD HH24:MI:SS') as dateimport,
         'UPDATE' as operation
       FROM cartes 
@@ -461,6 +467,24 @@ exports.syncData = async (req, res) => {
             
             if (resultUpdate.updated) {
               updated++;
+              
+              // 📝 JOURNALISATION DE LA MISE À JOUR
+              await annulationService.enregistrerAction(
+                null, // utilisateurId (synchronisation externe)
+                'SYSTEM',
+                'Synchronisation externe',
+                source,
+                null,
+                `Mise à jour via synchronisation (batch ${batch_id || 'N/A'})`,
+                'UPDATE',
+                'cartes',
+                carteExistante.id,
+                carteExistante,
+                item,
+                req.ip,
+                batch_id,
+                carteExistante.coordination || item.COORDINATION || null
+              );
             } else {
               duplicates++;
             }
@@ -479,18 +503,38 @@ exports.syncData = async (req, res) => {
               "CONTACT DE RETRAIT": item["CONTACT DE RETRAIT"]?.toString().trim() || '',
               "DATE DE DELIVRANCE": item["DATE DE DELIVRANCE"] ? new Date(item["DATE DE DELIVRANCE"]) : null,
               "sourceimport": source,
-              "batch_id": batch_id || null
+              "batch_id": batch_id || null,
+              "coordination": item.COORDINATION || null
             };
 
-            await client.query(`
+            const insertResult = await client.query(`
               INSERT INTO cartes (
                 "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
                 "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
-                "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", sourceimport, batch_id
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", sourceimport, batch_id, coordination
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+              RETURNING id
             `, Object.values(insertData));
 
             imported++;
+
+            // 📝 JOURNALISATION DE L'INSERTION
+            await annulationService.enregistrerAction(
+              null, // utilisateurId (synchronisation externe)
+              'SYSTEM',
+              'Synchronisation externe',
+              source,
+              null,
+              `Insertion via synchronisation (batch ${batch_id || 'N/A'})`,
+              'INSERT',
+              'cartes',
+              insertResult.rows[0].id,
+              null,
+              item,
+              req.ip,
+              batch_id,
+              insertData.coordination
+            );
           }
 
         } catch (error) {
@@ -573,7 +617,8 @@ exports.getColonnesAFusionner = () => {
     'CONTACT DE RETRAIT': 'contact',
     'DELIVRANCE': 'delivrance',
     'DATE DE NAISSANCE': 'date',
-    'DATE DE DELIVRANCE': 'date'
+    'DATE DE DELIVRANCE': 'date',
+    'COORDINATION': 'texte'
   };
 };
 
@@ -592,6 +637,7 @@ exports.getCartes = async (req, res) => {
       dateDebut,
       dateFin,
       delivrance,
+      coordination,
       page = 1,
       limit = API_CONFIG.defaultLimit,
       export_all = 'false'
@@ -619,6 +665,7 @@ exports.getCartes = async (req, res) => {
         delivrance,
         "CONTACT DE RETRAIT",
         TO_CHAR("DATE DE DELIVRANCE", 'YYYY-MM-DD') as "DATE DE DELIVRANCE",
+        coordination,
         TO_CHAR(dateimport, 'YYYY-MM-DD HH24:MI:SS') as dateimport
       FROM cartes 
       WHERE 1=1
@@ -676,6 +723,12 @@ exports.getCartes = async (req, res) => {
       params.push(`%${delivrance}%`);
     }
 
+    if (coordination) {
+      paramCount++;
+      query += ` AND coordination = $${paramCount}`;
+      params.push(coordination);
+    }
+
     // Pagination
     query += ` ORDER BY id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
     params.push(actualLimit, offset);
@@ -727,6 +780,11 @@ exports.getCartes = async (req, res) => {
       countQuery += ` AND delivrance ILIKE $${countParamCount}`;
       countParams.push(`%${delivrance}%`);
     }
+    if (coordination) {
+      countParamCount++;
+      countQuery += ` AND coordination = $${countParamCount}`;
+      countParams.push(coordination);
+    }
 
     const countResult = await db.query(countQuery, countParams);
     const total = parseInt(countResult.rows[0].total);
@@ -775,6 +833,7 @@ exports.getStats = async (req, res) => {
         COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as cartes_retirees,
         COUNT(DISTINCT "SITE DE RETRAIT") as sites_actifs,
         COUNT(DISTINCT nom) as beneficiaires_uniques,
+        COUNT(DISTINCT coordination) as coordinations_distinctes,
         MIN(dateimport) as premiere_importation,
         MAX(dateimport) as derniere_importation,
         COUNT(DISTINCT batch_id) as total_batches,
@@ -793,6 +852,17 @@ exports.getStats = async (req, res) => {
       GROUP BY "SITE DE RETRAIT"
       ORDER BY total_cartes DESC
       LIMIT 10
+    `);
+
+    const statsByCoordination = await db.query(`
+      SELECT 
+        coordination,
+        COUNT(*) as total_cartes,
+        COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as cartes_retirees
+      FROM cartes 
+      WHERE coordination IS NOT NULL AND coordination != ''
+      GROUP BY coordination
+      ORDER BY total_cartes DESC
     `);
 
     const recentActivity = await db.query(`
@@ -821,12 +891,14 @@ exports.getStats = async (req, res) => {
             : 0,
           sites_actifs: parseInt(global.sites_actifs),
           beneficiaires_uniques: parseInt(global.beneficiaires_uniques),
+          coordinations_distinctes: parseInt(global.coordinations_distinctes),
           premiere_importation: global.premiere_importation,
           derniere_importation: global.derniere_importation,
           total_batches: parseInt(global.total_batches || 0),
           imports_7j: parseInt(global.imports_7j || 0)
         },
         top_sites: topSites.rows,
+        stats_by_coordination: statsByCoordination.rows,
         recent_activity: recentActivity.rows,
         sites_configures: API_CONFIG.SITES,
         system: {
@@ -875,7 +947,22 @@ exports.getModifications = async (req, res) => {
     const actualLimit = Math.min(parseInt(limit), API_CONFIG.maxResults);
 
     let query = `
-      SELECT * FROM cartes 
+      SELECT 
+        id,
+        "LIEU D'ENROLEMENT",
+        "SITE DE RETRAIT",
+        rangement,
+        nom,
+        prenoms,
+        "DATE DE NAISSANCE",
+        "LIEU NAISSANCE",
+        contact,
+        delivrance,
+        "CONTACT DE RETRAIT",
+        "DATE DE DELIVRANCE",
+        coordination,
+        dateimport
+      FROM cartes 
       WHERE "SITE DE RETRAIT" = $1 
       AND dateimport > $2
       ORDER BY dateimport ASC
@@ -959,6 +1046,7 @@ exports.diagnostic = async (req, res) => {
       SELECT 
         COUNT(*) as total,
         COUNT(DISTINCT "SITE DE RETRAIT") as sites,
+        COUNT(DISTINCT coordination) as coordinations,
         MAX(dateimport) as last_import
       FROM cartes
     `);
@@ -973,6 +1061,7 @@ exports.diagnostic = async (req, res) => {
         connected: dbTest.rows.length > 0,
         total_cartes: parseInt(stats.rows[0].total),
         sites_actifs: parseInt(stats.rows[0].sites),
+        coordinations: parseInt(stats.rows[0].coordinations),
         dernier_import: stats.rows[0].last_import
       },
       system: {

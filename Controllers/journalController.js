@@ -1,4 +1,5 @@
 const db = require('../db/db');
+const annulationService = require('../Services/annulationService');
 
 // ============================================
 // CONFIGURATION OPTIMISÉE POUR LWS
@@ -28,6 +29,97 @@ const CONFIG = {
 };
 
 // ============================================
+// FONCTIONS UTILITAIRES DE FILTRAGE
+// ============================================
+
+/**
+ * Ajoute le filtre de coordination à une requête SQL selon le rôle
+ */
+const ajouterFiltreCoordination = (req, query, params, colonne = 'coordination') => {
+  const role = req.user?.role;
+  const coordination = req.user?.coordination;
+  
+  // Admin voit tout
+  if (role === 'Administrateur') {
+    return { query, params };
+  }
+  
+  // Gestionnaire et Chef d'équipe n'ont pas accès au journal (déjà filtré par middleware)
+  // Mais si on arrive ici, on filtre par coordination par sécurité
+  if ((role === 'Gestionnaire' || role === "Chef d'équipe") && coordination) {
+    return {
+      query: query + ` AND ${colonne} = $${params.length + 1}`,
+      params: [...params, coordination]
+    };
+  }
+  
+  return { query, params };
+};
+
+/**
+ * Masque les informations sensibles selon le rôle
+ */
+const masquerInfosSensibles = (req, log) => {
+  if (!log) return log;
+  
+  const role = req.user?.role;
+  const optionsMasquage = req.optionsMasquage || { ip: true, anciennesValeurs: true };
+  
+  // Créer une copie pour ne pas modifier l'original
+  const logMasque = { ...log };
+  
+  // Masquer l'IP si nécessaire
+  if (optionsMasquage.ip && logMasque.iputilisateur) {
+    logMasque.iputilisateur = '***.***.***.***';
+    logMasque.adresseip = '***.***.***.***';
+  }
+  
+  // Masquer les anciennes valeurs si nécessaire
+  if (optionsMasquage.anciennesValeurs) {
+    if (logMasque.oldvalue) {
+      try {
+        const oldValue = typeof logMasque.oldvalue === 'string' 
+          ? JSON.parse(logMasque.oldvalue) 
+          : logMasque.oldvalue;
+        logMasque.oldvalue = JSON.stringify('[MASQUÉ]');
+        logMasque.anciennes_valeurs = '[MASQUÉ]';
+      } catch (e) {
+        logMasque.oldvalue = '[MASQUÉ]';
+      }
+    }
+    
+    if (logMasque.newvalue) {
+      try {
+        const newValue = typeof logMasque.newvalue === 'string' 
+          ? JSON.parse(logMasque.newvalue) 
+          : logMasque.newvalue;
+        logMasque.newvalue = JSON.stringify('[MASQUÉ]');
+        logMasque.nouvelles_valeurs = '[MASQUÉ]';
+      } catch (e) {
+        logMasque.newvalue = '[MASQUÉ]';
+      }
+    }
+  }
+  
+  // Gestionnaire: peut voir les valeurs mais pas les IPs
+  if (role === 'Gestionnaire') {
+    // Déjà géré par optionsMasquage
+  }
+  
+  // Chef d'équipe et Opérateur: tout est masqué (déjà filtré par middleware d'accès)
+  
+  return logMasque;
+};
+
+/**
+ * Masque les informations sensibles sur un tableau de logs
+ */
+const masquerInfosSensiblesTableau = (req, logs) => {
+  if (!Array.isArray(logs)) return logs;
+  return logs.map(log => masquerInfosSensibles(req, log));
+};
+
+// ============================================
 // CONTROLEUR JOURNAL OPTIMISÉ POUR LWS
 // ============================================
 class JournalController {
@@ -38,6 +130,15 @@ class JournalController {
      */
     async getJournal(req, res) {
         try {
+            // Vérifier que l'utilisateur a accès au journal (admin seulement)
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent consulter le journal'
+                });
+            }
+
             const {
                 page = 1,
                 pageSize = CONFIG.defaultPageSize,
@@ -47,6 +148,8 @@ class JournalController {
                 actionType,
                 tableName,
                 importBatchID,
+                coordination, // Nouveau filtre par coordination
+                annulee, // Nouveau filtre pour actions annulées
                 export_all = 'false'
             } = req.query;
 
@@ -58,30 +161,37 @@ class JournalController {
             
             const offset = (actualPage - 1) * actualPageSize;
 
-            // Construction de la requête principale
+            // Construction de la requête principale avec les nouvelles colonnes
             let query = `
                 SELECT 
-                    journalid,
-                    utilisateurid,
-                    nomutilisateur,
-                    nomcomplet,
-                    role,
-                    agence,
-                    TO_CHAR(dateaction, 'YYYY-MM-DD HH24:MI:SS') as dateaction,
-                    action,
-                    tableaffectee,
-                    ligneaffectee,
-                    iputilisateur,
-                    actiontype,
-                    tablename,
-                    recordid,
-                    oldvalue,
-                    newvalue,
-                    adresseip,
-                    userid,
-                    importbatchid,
-                    detailsaction
-                FROM journalactivite 
+                    j.journalid,
+                    j.utilisateurid,
+                    j.nomutilisateur,
+                    j.nomcomplet,
+                    j.role,
+                    j.agence,
+                    j.coordination,
+                    TO_CHAR(j.dateaction, 'YYYY-MM-DD HH24:MI:SS') as dateaction,
+                    j.action,
+                    j.tableaffectee,
+                    j.ligneaffectee,
+                    j.iputilisateur,
+                    j.actiontype,
+                    j.tablename,
+                    j.recordid,
+                    j.oldvalue,
+                    j.newvalue,
+                    j.adresseip,
+                    j.userid,
+                    j.importbatchid,
+                    j.detailsaction,
+                    j.anciennes_valeurs,
+                    j.nouvelles_valeurs,
+                    j.annulee,
+                    u.nomutilisateur as annule_par_nom,
+                    TO_CHAR(j.date_annulation, 'YYYY-MM-DD HH24:MI:SS') as date_annulation
+                FROM journalactivite j
+                LEFT JOIN utilisateurs u ON j.annulee_par = u.id
                 WHERE 1=1
             `;
             
@@ -91,38 +201,52 @@ class JournalController {
             // Filtres avec optimisation
             if (dateDebut) {
                 paramCount++;
-                query += ` AND dateaction >= $${paramCount}`;
+                query += ` AND j.dateaction >= $${paramCount}`;
                 params.push(new Date(dateDebut));
             }
 
             if (dateFin) {
                 paramCount++;
-                query += ` AND dateaction <= $${paramCount}`;
+                query += ` AND j.dateaction <= $${paramCount}`;
                 params.push(new Date(dateFin + ' 23:59:59'));
             }
 
             if (utilisateur && utilisateur.trim() !== '') {
                 paramCount++;
-                query += ` AND nomutilisateur ILIKE $${paramCount}`;
+                query += ` AND j.nomutilisateur ILIKE $${paramCount}`;
                 params.push(`%${utilisateur.trim()}%`);
             }
 
             if (actionType && actionType.trim() !== '') {
                 paramCount++;
-                query += ` AND actiontype = $${paramCount}`;
+                query += ` AND j.actiontype = $${paramCount}`;
                 params.push(actionType.trim().toUpperCase());
             }
 
             if (tableName && tableName.trim() !== '') {
                 paramCount++;
-                query += ` AND (tablename = $${paramCount} OR tableaffectee = $${paramCount})`;
+                query += ` AND (j.tablename = $${paramCount} OR j.tableaffectee = $${paramCount})`;
                 params.push(tableName.trim());
             }
 
             if (importBatchID && importBatchID.trim() !== '') {
                 paramCount++;
-                query += ` AND importbatchid = $${paramCount}`;
+                query += ` AND j.importbatchid = $${paramCount}`;
                 params.push(importBatchID.trim());
+            }
+
+            // Nouveau filtre par coordination
+            if (coordination && coordination.trim() !== '') {
+                paramCount++;
+                query += ` AND j.coordination = $${paramCount}`;
+                params.push(coordination.trim());
+            }
+
+            // Nouveau filtre pour actions annulées
+            if (annulee !== undefined && annulee !== '') {
+                paramCount++;
+                query += ` AND j.annulee = $${paramCount}`;
+                params.push(annulee === 'true' || annulee === '1');
             }
 
             // Construction de la requête COUNT (similaire sans pagination)
@@ -135,7 +259,7 @@ class JournalController {
 
             // Ajout du tri et pagination
             query += `
-                ORDER BY dateaction DESC
+                ORDER BY j.dateaction DESC
                 LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
             `;
             params.push(actualPageSize, offset);
@@ -152,19 +276,63 @@ class JournalController {
             const total = parseInt(totalResult.rows[0].total);
             const totalPages = Math.ceil(total / actualPageSize);
 
+            // Traiter et masquer les données sensibles
+            const logsTraites = logsResult.rows.map(log => {
+                try {
+                    // Parser les JSON si nécessaire
+                    const logTraite = { ...log };
+                    
+                    if (logTraite.oldvalue && typeof logTraite.oldvalue === 'string') {
+                        try {
+                            logTraite.oldvalue_parse = JSON.parse(logTraite.oldvalue);
+                        } catch (e) {
+                            logTraite.oldvalue_parse = logTraite.oldvalue;
+                        }
+                    }
+                    
+                    if (logTraite.newvalue && typeof logTraite.newvalue === 'string') {
+                        try {
+                            logTraite.newvalue_parse = JSON.parse(logTraite.newvalue);
+                        } catch (e) {
+                            logTraite.newvalue_parse = logTraite.newvalue;
+                        }
+                    }
+                    
+                    if (logTraite.anciennes_valeurs && typeof logTraite.anciennes_valeurs === 'string') {
+                        try {
+                            logTraite.anciennes_valeurs_parse = JSON.parse(logTraite.anciennes_valeurs);
+                        } catch (e) {
+                            logTraite.anciennes_valeurs_parse = logTraite.anciennes_valeurs;
+                        }
+                    }
+                    
+                    if (logTraite.nouvelles_valeurs && typeof logTraite.nouvelles_valeurs === 'string') {
+                        try {
+                            logTraite.nouvelles_valeurs_parse = JSON.parse(logTraite.nouvelles_valeurs);
+                        } catch (e) {
+                            logTraite.nouvelles_valeurs_parse = logTraite.nouvelles_valeurs;
+                        }
+                    }
+                    
+                    return logTraite;
+                } catch (e) {
+                    return log;
+                }
+            });
+
+            // Masquer les informations sensibles
+            const logsMasques = masquerInfosSensiblesTableau(req, logsTraites);
+
             // En-têtes pour export
             if (export_all === 'true') {
                 res.setHeader('X-Total-Rows', total);
                 res.setHeader('X-Query-Time', `${duration}ms`);
             }
+            res.setHeader('X-User-Role', req.user.role);
 
             res.json({
                 success: true,
-                logs: logsResult.rows.map(log => ({
-                    ...log,
-                    oldvalue: log.oldvalue ? JSON.parse(log.oldvalue) : null,
-                    newvalue: log.newvalue ? JSON.parse(log.newvalue) : null
-                })),
+                logs: logsMasques,
                 pagination: {
                     page: actualPage,
                     pageSize: actualPageSize,
@@ -183,7 +351,9 @@ class JournalController {
                     utilisateur: utilisateur || null,
                     actionType: actionType || null,
                     tableName: tableName || null,
-                    importBatchID: importBatchID || null
+                    importBatchID: importBatchID || null,
+                    coordination: coordination || null,
+                    annulee: annulee || null
                 },
                 timestamp: new Date().toISOString()
             });
@@ -205,6 +375,15 @@ class JournalController {
      */
     async getImports(req, res) {
         try {
+            // Vérifier que l'utilisateur a accès au journal (admin seulement)
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent consulter les imports'
+                });
+            }
+
             const { limit = 100 } = req.query;
             const actualLimit = Math.min(parseInt(limit), 500);
 
@@ -219,13 +398,15 @@ class JournalController {
                     j.nomutilisateur,
                     j.nomcomplet,
                     j.agence,
+                    j.coordination,
                     COUNT(DISTINCT j.actiontype) as types_actions,
                     COUNT(CASE WHEN j.actiontype = 'IMPORT' THEN 1 END) as imports_count,
-                    COUNT(CASE WHEN j.actiontype = 'ANNULATION' THEN 1 END) as annulations_count
+                    COUNT(CASE WHEN j.actiontype = 'ANNULATION' THEN 1 END) as annulations_count,
+                    COUNT(CASE WHEN j.annulee = true THEN 1 END) as actions_annulees
                 FROM journalactivite j
                 LEFT JOIN cartes c ON j.importbatchid = c.importbatchid
                 WHERE j.importbatchid IS NOT NULL
-                GROUP BY j.importbatchid, j.nomutilisateur, j.nomcomplet, j.agence
+                GROUP BY j.importbatchid, j.nomutilisateur, j.nomcomplet, j.agence, j.coordination
                 ORDER BY dateimport DESC
                 LIMIT $1
             `, [actualLimit]);
@@ -258,6 +439,15 @@ class JournalController {
      */
     async getImportDetails(req, res) {
         try {
+            // Vérifier que l'utilisateur a accès au journal (admin seulement)
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent consulter les détails d\'import'
+                });
+            }
+
             const { batchId } = req.params;
             const { page = 1, pageSize = 50 } = req.query;
 
@@ -274,7 +464,9 @@ class JournalController {
                     MAX(j.dateaction) as fin_import,
                     COUNT(CASE WHEN j.actiontype = 'CREATION' THEN 1 END) as creations,
                     COUNT(CASE WHEN j.actiontype = 'MODIFICATION' THEN 1 END) as modifications,
-                    COUNT(CASE WHEN j.actiontype = 'ANNULATION' THEN 1 END) as annulations
+                    COUNT(CASE WHEN j.actiontype = 'ANNULATION' THEN 1 END) as annulations,
+                    COUNT(CASE WHEN j.annulee = true THEN 1 END) as actions_annulees,
+                    MIN(j.coordination) as coordination
                 FROM journalactivite j
                 LEFT JOIN cartes c ON j.importbatchid = c.importbatchid
                 WHERE j.importbatchid = $1
@@ -284,18 +476,25 @@ class JournalController {
             // Actions détaillées avec pagination
             const actionsResult = await db.query(`
                 SELECT 
-                    journalid,
-                    TO_CHAR(dateaction, 'YYYY-MM-DD HH24:MI:SS') as dateaction,
-                    actiontype,
-                    tablename,
-                    recordid,
-                    detailsaction,
-                    nomutilisateur,
-                    oldvalue,
-                    newvalue
-                FROM journalactivite
-                WHERE importbatchid = $1
-                ORDER BY dateaction DESC
+                    j.journalid,
+                    TO_CHAR(j.dateaction, 'YYYY-MM-DD HH24:MI:SS') as dateaction,
+                    j.actiontype,
+                    j.tablename,
+                    j.recordid,
+                    j.detailsaction,
+                    j.nomutilisateur,
+                    j.oldvalue,
+                    j.newvalue,
+                    j.anciennes_valeurs,
+                    j.nouvelles_valeurs,
+                    j.annulee,
+                    j.date_annulation,
+                    j.annulee_par,
+                    u.nomutilisateur as annule_par_nom
+                FROM journalactivite j
+                LEFT JOIN utilisateurs u ON j.annulee_par = u.id
+                WHERE j.importbatchid = $1
+                ORDER BY j.dateaction DESC
                 LIMIT $2 OFFSET $3
             `, [batchId, actualPageSize, offset]);
 
@@ -309,6 +508,21 @@ class JournalController {
             const total = parseInt(countResult.rows[0].total);
             const totalPages = Math.ceil(total / actualPageSize);
 
+            // Traiter les actions
+            const actionsTraitees = actionsResult.rows.map(action => {
+                try {
+                    return {
+                        ...action,
+                        oldvalue: action.oldvalue ? JSON.parse(action.oldvalue) : null,
+                        newvalue: action.newvalue ? JSON.parse(action.newvalue) : null,
+                        anciennes_valeurs: action.anciennes_valeurs ? JSON.parse(action.anciennes_valeurs) : null,
+                        nouvelles_valeurs: action.nouvelles_valeurs ? JSON.parse(action.nouvelles_valeurs) : null
+                    };
+                } catch (e) {
+                    return action;
+                }
+            });
+
             res.json({
                 success: true,
                 batchId,
@@ -316,11 +530,7 @@ class JournalController {
                     cartes_importees: 0,
                     actions_journal: 0
                 },
-                actions: actionsResult.rows.map(action => ({
-                    ...action,
-                    oldvalue: action.oldvalue ? JSON.parse(action.oldvalue) : null,
-                    newvalue: action.newvalue ? JSON.parse(action.newvalue) : null
-                })),
+                actions: actionsTraitees,
                 pagination: {
                     page: actualPage,
                     pageSize: actualPageSize,
@@ -343,6 +553,123 @@ class JournalController {
     }
 
     /**
+     * Annuler une action (Admin uniquement) - Utilise le service d'annulation
+     * POST /api/journal/:id/annuler
+     */
+    async annulerAction(req, res) {
+        try {
+            const { id } = req.params;
+            
+            // Vérifier que l'utilisateur est admin (déjà fait par middleware)
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent annuler des actions'
+                });
+            }
+
+            // Vérifier que l'action existe et n'est pas déjà annulée
+            const verification = await annulationService.peutEtreAnnulee(id);
+            
+            if (!verification.peutAnnuler) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Action non annulable',
+                    message: verification.raison,
+                    details: verification
+                });
+            }
+
+            // Procéder à l'annulation
+            await annulationService.annulerAction(
+                id,
+                req.user.id,
+                req.user.nomUtilisateur,
+                req.ip
+            );
+
+            res.json({
+                success: true,
+                message: 'Action annulée avec succès',
+                actionId: id,
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (error) {
+            console.error('❌ Erreur annulation action:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Erreur lors de l\'annulation',
+                message: error.message,
+                timestamp: new Date().toISOString()
+            });
+        }
+    }
+
+    /**
+     * Lister les actions annulables (Admin uniquement)
+     * GET /api/journal/actions/annulables
+     */
+    async listerActionsAnnulables(req, res) {
+        try {
+            // Vérifier que l'utilisateur est admin (déjà fait par middleware)
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent lister les actions annulables'
+                });
+            }
+
+            const { limit = 100, table, utilisateurId, coordination } = req.query;
+
+            const filtres = {};
+            if (table) filtres.table = table;
+            if (utilisateurId) filtres.utilisateurId = parseInt(utilisateurId);
+            if (coordination) filtres.coordination = coordination;
+
+            const actions = await annulationService.listerActionsAnnulables(filtres, parseInt(limit));
+
+            // Masquer les infos sensibles si nécessaire
+            const actionsMasquees = masquerInfosSensiblesTableau(req, actions);
+
+            res.json({
+                success: true,
+                actions: actionsMasquees,
+                total: actionsMasquees.length,
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (error) {
+            console.error('❌ Erreur lister actions annulables:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Erreur lors de la récupération des actions annulables',
+                message: error.message
+            });
+        }
+    }
+
+    /**
+     * ✅ Annuler une action (méthode legacy) - À DEPRECIER
+     * POST /api/journal/undo/:id
+     */
+    async undoAction(req, res) {
+        try {
+            // Rediriger vers la nouvelle méthode
+            req.params.id = req.params.id;
+            return this.annulerAction(req, res);
+        } catch (error) {
+            console.error('❌ Erreur undoAction:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Annuler une importation - VERSION OPTIMISÉE
      * POST /api/journal/annuler-import
      */
@@ -351,6 +678,15 @@ class JournalController {
         const startTime = Date.now();
         
         try {
+            // Vérifier que l'utilisateur est admin
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent annuler des importations'
+                });
+            }
+
             await client.query('BEGIN');
             
             const { importBatchID } = req.body;
@@ -369,7 +705,8 @@ class JournalController {
                 SELECT 
                     COUNT(*) as count,
                     MIN(dateimport) as date_import,
-                    MAX(dateimport) as dernier_import
+                    MAX(dateimport) as dernier_import,
+                    MIN(coordination) as coordination
                 FROM cartes 
                 WHERE importbatchid = $1
             `, [importBatchID]);
@@ -384,34 +721,34 @@ class JournalController {
                 });
             }
 
-            // 2. Journaliser l'action avant suppression
-            await client.query(`
-                INSERT INTO journalactivite (
-                    utilisateurid, nomutilisateur, nomcomplet, role, agence,
-                    dateaction, action, tableaffectee, iputilisateur,
-                    actiontype, tablename, importbatchid, detailsaction
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-            `, [
-                utilisateur.id, 
-                utilisateur.NomUtilisateur, 
-                utilisateur.NomComplet || utilisateur.NomUtilisateur, 
-                utilisateur.Role,
-                utilisateur.Agence || '',
-                new Date(), 
-                `Annulation importation batch ${importBatchID}`, 
-                'Cartes', 
-                req.ip,
-                'ANNULATION_IMPORT', 
-                'Cartes', 
-                importBatchID, 
-                `Annulation de l'importation - ${count} cartes supprimées`
-            ]);
+            // 2. Récupérer les cartes avant suppression pour le journal
+            const cartesResult = await client.query(`
+                SELECT * FROM cartes WHERE importbatchid = $1
+            `, [importBatchID]);
 
-            // 3. Supprimer les cartes de ce batch
+            // 3. Journaliser l'action avant suppression avec anciennes valeurs
+            await annulationService.enregistrerAction(
+                utilisateur.id,
+                utilisateur.nomUtilisateur,
+                utilisateur.nomComplet || utilisateur.nomUtilisateur,
+                utilisateur.role,
+                utilisateur.agence || '',
+                `Annulation importation batch ${importBatchID}`,
+                'ANNULATION_IMPORT',
+                'cartes',
+                null,
+                { cartes: cartesResult.rows }, // Anciennes valeurs
+                null,
+                req.ip,
+                importBatchID,
+                countResult.rows[0].coordination
+            );
+
+            // 4. Supprimer les cartes de ce batch
             const deleteResult = await client.query(`
                 DELETE FROM cartes 
                 WHERE importbatchid = $1 
-                RETURNING id, nom, prenoms, "SITE DE RETRAIT"
+                RETURNING id, nom, prenoms, "SITE DE RETRAIT", coordination
             `, [importBatchID]);
 
             await client.query('COMMIT');
@@ -446,252 +783,47 @@ class JournalController {
     }
 
     /**
-     * ✅ Annuler une action (modification/création/suppression)
-     * POST /api/journal/undo/:id
-     */
-    async undoAction(req, res) {
-        const { id } = req.params;
-        const user = req.user;
-        const client = await db.connect();
-        const startTime = Date.now();
-
-        try {
-            await client.query('BEGIN');
-            
-            console.log(`🔄 Tentative d'annulation (JournalID: ${id})`);
-
-            // 🔍 Récupérer le log avec détails
-            const result = await client.query(
-                'SELECT * FROM journalactivite WHERE journalid = $1',
-                [id]
-            );
-
-            if (result.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return res.status(404).json({ 
-                    success: false,
-                    message: 'Entrée de journal non trouvée.' 
-                });
-            }
-
-            const log = result.rows[0];
-            const oldData = log.oldvalue ? JSON.parse(log.oldvalue) : null;
-            const newData = log.newvalue ? JSON.parse(log.newvalue) : null;
-            const tableName = log.tablename || log.tableaffectee;
-            const recordId = log.recordid || log.ligneaffectee;
-
-            if (!oldData && !newData) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ 
-                    success: false,
-                    message: 'Aucune donnée à restaurer.' 
-                });
-            }
-
-            console.log(`🕓 Action: ${log.actiontype}, Table: ${tableName}, ID: ${recordId}`);
-
-            // 🔄 Exécuter l'annulation selon le type d'action
-            switch(log.actiontype) {
-                case 'MODIFICATION':
-                case 'MODIFICATION_CARTE':
-                    await this.executeManualUpdate(client, tableName, recordId, oldData);
-                    break;
-                    
-                case 'CREATION':
-                case 'CREATION_CARTE':
-                    await client.query(
-                        `DELETE FROM ${tableName} WHERE id = $1`,
-                        [recordId]
-                    );
-                    break;
-                    
-                case 'SUPPRESSION':
-                case 'SUPPRESSION_CARTE':
-                    await this.executeManualInsert(client, tableName, oldData);
-                    break;
-                    
-                default:
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({ 
-                        success: false,
-                        message: `Type d'action non supporté: ${log.actiontype}` 
-                    });
-            }
-
-            // 🧾 Journaliser cette restauration
-            await this.logUndoAction(client, user, req, log, newData, oldData);
-
-            await client.query('COMMIT');
-
-            const duration = Date.now() - startTime;
-
-            console.log('✅ Action annulée avec succès');
-            return res.json({ 
-                success: true, 
-                message: '✅ Action annulée avec succès.',
-                performance: {
-                    duration_ms: duration
-                },
-                timestamp: new Date().toISOString()
-            });
-
-        } catch (err) {
-            await client.query('ROLLBACK');
-            console.error('❌ Erreur annulation:', err);
-            return res.status(500).json({ 
-                success: false,
-                message: 'Erreur serveur pendant l\'annulation.',
-                details: err.message 
-            });
-        } finally {
-            client.release();
-        }
-    }
-
-    /**
-     * ✅ Mise à jour manuelle avec gestion des colonnes
-     */
-    async executeManualUpdate(client, tableName, recordId, oldData) {
-        const setClauses = [];
-        const params = [recordId];
-        let paramCount = 1;
-        
-        // Colonnes à exclure
-        const excludedColumns = ['id', 'ID', 'HashDoublon', 'hashdoublon'];
-        
-        Object.entries(oldData).forEach(([key, value]) => {
-            // Exclure les colonnes non modifiables
-            if (excludedColumns.includes(key) || excludedColumns.includes(key.toLowerCase())) {
-                console.log(`⚠️ Colonne exclue: ${key}`);
-                return;
-            }
-            
-            paramCount++;
-            setClauses.push(`"${key}" = $${paramCount}`);
-            
-            // Gestion des types
-            if (value === null) {
-                params.push(null);
-            } else if (key.toLowerCase().includes('date') || key.includes('Date')) {
-                params.push(value ? new Date(value) : null);
-            } else {
-                params.push(value);
-            }
-        });
-
-        if (setClauses.length === 0) {
-            throw new Error('Aucune colonne modifiable à mettre à jour');
-        }
-
-        const updateQuery = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE id = $1`;
-        console.log('🔧 Requête UPDATE:', updateQuery);
-        await client.query(updateQuery, params);
-    }
-
-    /**
-     * ✅ Insertion manuelle avec gestion des colonnes
-     */
-    async executeManualInsert(client, tableName, oldData) {
-        // Filtrer les colonnes - exclure ID pour l'insertion
-        const filteredData = { ...oldData };
-        delete filteredData.ID;
-        delete filteredData.id;
-        
-        const columns = Object.keys(filteredData).map(k => `"${k}"`).join(', ');
-        const placeholders = Object.keys(filteredData).map((_, index) => `$${index + 1}`).join(', ');
-
-        const params = Object.values(filteredData).map(value => {
-            if (value === null) return null;
-            if (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/)) {
-                return new Date(value);
-            }
-            return value;
-        });
-
-        const insertQuery = `INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`;
-        console.log('🔧 Requête INSERT:', insertQuery);
-        await client.query(insertQuery, params);
-    }
-
-    /**
-     * ✅ Journaliser l'annulation
-     */
-    async logUndoAction(client, user, req, log, newData, oldData) {
-        const tableName = log.tablename || log.tableaffectee;
-        const recordId = log.recordid || log.ligneaffectee;
-
-        await client.query(`
-            INSERT INTO journalactivite 
-            (utilisateurid, nomutilisateur, nomcomplet, role, agence, dateaction, action, 
-             tableaffectee, ligneaffectee, iputilisateur, actiontype, tablename, recordid, 
-             oldvalue, newvalue, adresseip, userid, detailsaction)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-        `, [
-            user.id, 
-            user.NomUtilisateur, 
-            user.NomComplet || user.NomUtilisateur, 
-            user.Role, 
-            user.Agence || '', 
-            new Date(), 
-            `Annulation de ${log.actiontype}`,
-            tableName, 
-            recordId ? recordId.toString() : '', 
-            req.ip || '', 
-            'ANNULATION', 
-            tableName, 
-            recordId ? recordId.toString() : '', 
-            JSON.stringify(newData), 
-            JSON.stringify(oldData), 
-            req.ip || '', 
-            user.id, 
-            `Annulation de: ${log.actiontype}`
-        ]);
-    }
-
-    /**
      * Journaliser une action (méthode utilitaire)
      */
     async logAction(logData) {
         try {
-            await db.query(`
-                INSERT INTO journalactivite (
-                    utilisateurid, nomutilisateur, nomcomplet, role, agence,
-                    dateaction, action, tableaffectee, ligneaffectee, iputilisateur,
-                    actiontype, tablename, recordid, oldvalue, newvalue, adresseip,
-                    userid, importbatchid, detailsaction
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-            `, [
+            // Utiliser le service d'annulation pour la cohérence
+            await annulationService.enregistrerAction(
                 logData.utilisateurId || null,
                 logData.nomUtilisateur || 'System',
-                logData.nomComplet || 'System', 
+                logData.nomComplet || 'System',
                 logData.role || 'System',
                 logData.agence || null,
-                new Date(),
                 logData.action || logData.actionType,
-                logData.tableName || null,
-                logData.recordId ? logData.recordId.toString() : null,
-                logData.ip || null,
                 logData.actionType,
                 logData.tableName || null,
-                logData.recordId ? logData.recordId.toString() : null,
-                logData.oldValue ? JSON.stringify(logData.oldValue) : null,
-                logData.newValue ? JSON.stringify(logData.newValue) : null,
+                logData.recordId || null,
+                logData.oldValue || null,
+                logData.newValue || null,
                 logData.ip || null,
-                logData.utilisateurId || null,
                 logData.importBatchID || null,
-                logData.details || null
-            ]);
+                logData.coordination || null
+            );
         } catch (error) {
             console.error('❌ Erreur journalisation:', error);
         }
     }
 
     /**
-     * Statistiques d'activité avec cache
+     * Statistiques d'activité avec cache (Admin uniquement)
      * GET /api/journal/stats
      */
     async getStats(req, res) {
         try {
+            // Vérifier que l'utilisateur est admin
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent consulter les statistiques du journal'
+                });
+            }
+
             const { forceRefresh, periode = 30 } = req.query;
             
             // Vérifier le cache
@@ -719,7 +851,9 @@ class JournalController {
                     COUNT(DISTINCT nomutilisateur) as utilisateurs_distincts,
                     COUNT(DISTINCT tablename) as tables_concernees,
                     COUNT(CASE WHEN dateaction > NOW() - INTERVAL '7 days' THEN 1 END) as count_7j,
-                    COUNT(CASE WHEN dateaction > NOW() - INTERVAL '30 days' THEN 1 END) as count_30j
+                    COUNT(CASE WHEN dateaction > NOW() - INTERVAL '30 days' THEN 1 END) as count_30j,
+                    COUNT(CASE WHEN annulee = true THEN 1 END) as count_annulees,
+                    COUNT(DISTINCT coordination) as coordinations_distinctes
                 FROM journalactivite 
                 WHERE dateaction >= CURRENT_DATE - INTERVAL '${jours} days'
                 GROUP BY actiontype
@@ -738,7 +872,8 @@ class JournalController {
                     total_actions: totalActions,
                     types_distincts: result.rows.length,
                     periode_jours: jours,
-                    date_calcul: new Date().toISOString()
+                    date_calcul: new Date().toISOString(),
+                    total_annulees: result.rows.reduce((acc, row) => acc + parseInt(row.count_annulees || 0), 0)
                 },
                 performance: {
                     queryTime: Date.now() - startTime
@@ -774,6 +909,15 @@ class JournalController {
         const client = await db.connect();
         
         try {
+            // Vérifier que l'utilisateur est admin
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent nettoyer le journal'
+                });
+            }
+
             await client.query('BEGIN');
             
             const { jours = CONFIG.defaultRetentionDays } = req.body;
@@ -795,6 +939,7 @@ class JournalController {
                 SELECT COUNT(*) as count
                 FROM journalactivite 
                 WHERE dateaction < CURRENT_DATE - INTERVAL '${retentionJours} days'
+                AND annulee = false -- Ne pas supprimer les actions annulées récentes
             `);
 
             const countASupprimer = parseInt(countResult.rows[0].count);
@@ -809,28 +954,28 @@ class JournalController {
             }
 
             // Journaliser le nettoyage
-            await client.query(`
-                INSERT INTO journalactivite (
-                    utilisateurid, nomutilisateur, nomcomplet, role, agence,
-                    dateaction, action, iputilisateur, actiontype, detailsaction
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            `, [
+            await annulationService.enregistrerAction(
                 utilisateur.id,
-                utilisateur.NomUtilisateur,
-                utilisateur.NomComplet || utilisateur.NomUtilisateur,
-                utilisateur.Role,
-                utilisateur.Agence || '',
-                new Date(),
+                utilisateur.nomUtilisateur,
+                utilisateur.nomComplet || utilisateur.nomUtilisateur,
+                utilisateur.role,
+                utilisateur.agence || '',
                 `Nettoyage journal (>${retentionJours} jours)`,
-                req.ip,
                 'NETTOYAGE_JOURNAL',
-                `${countASupprimer} entrées supprimées (conservation ${retentionJours} jours)`
-            ]);
+                'journalactivite',
+                null,
+                null,
+                { count: countASupprimer, retentionJours },
+                req.ip,
+                null,
+                null
+            );
 
             // Supprimer les vieilles entrées
             const deleteResult = await client.query(`
                 DELETE FROM journalactivite 
                 WHERE dateaction < CURRENT_DATE - INTERVAL '${retentionJours} days'
+                AND annulee = false
                 RETURNING journalid
             `);
             
@@ -861,11 +1006,20 @@ class JournalController {
     }
 
     /**
-     * Diagnostic du journal
+     * Diagnostic du journal (Admin seulement)
      * GET /api/journal/diagnostic
      */
     async diagnostic(req, res) {
         try {
+            // Vérifier que l'utilisateur est admin
+            if (req.user.role !== 'Administrateur') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Accès refusé',
+                    message: 'Seuls les administrateurs peuvent accéder au diagnostic'
+                });
+            }
+
             const startTime = Date.now();
 
             const result = await db.query(`
@@ -878,18 +1032,36 @@ class JournalController {
                     COUNT(CASE WHEN dateaction > NOW() - INTERVAL '24 hours' THEN 1 END) as entrees_24h,
                     COUNT(CASE WHEN dateaction > NOW() - INTERVAL '7 days' THEN 1 END) as entrees_7j,
                     COUNT(CASE WHEN dateaction > NOW() - INTERVAL '30 days' THEN 1 END) as entrees_30j,
+                    COUNT(CASE WHEN annulee = true THEN 1 END) as actions_annulees,
+                    COUNT(DISTINCT coordination) as coordinations_distinctes,
                     pg_database_size(current_database()) as db_size,
                     pg_size_pretty(pg_total_relation_size('journalactivite')) as table_size
                 FROM journalactivite
             `);
 
-            // Taille estimée
+            // Statistiques par coordination
+            const coordinationStats = await db.query(`
+                SELECT 
+                    coordination,
+                    COUNT(*) as total_entrees,
+                    COUNT(CASE WHEN annulee = true THEN 1 END) as actions_annulees
+                FROM journalactivite
+                WHERE coordination IS NOT NULL
+                GROUP BY coordination
+                ORDER BY total_entrees DESC
+                LIMIT 10
+            `);
+
             const stats = result.rows[0];
 
             res.json({
                 success: true,
                 timestamp: new Date().toISOString(),
                 service: 'journal',
+                utilisateur: {
+                    role: req.user.role,
+                    coordination: req.user.coordination
+                },
                 statistiques: {
                     total_entrees: parseInt(stats.total_entrees),
                     types_actions: parseInt(stats.types_actions),
@@ -898,12 +1070,15 @@ class JournalController {
                     derniere_entree: stats.derniere_entree,
                     entrees_24h: parseInt(stats.entrees_24h),
                     entrees_7j: parseInt(stats.entrees_7j),
-                    entrees_30j: parseInt(stats.entrees_30j)
+                    entrees_30j: parseInt(stats.entrees_30j),
+                    actions_annulees: parseInt(stats.actions_annulees),
+                    coordinations_distinctes: parseInt(stats.coordinations_distinctes)
                 },
                 stockage: {
                     taille_table: stats.table_size,
                     db_size_bytes: parseInt(stats.db_size)
                 },
+                coordination_stats: coordinationStats.rows,
                 config: {
                     defaultPageSize: CONFIG.defaultPageSize,
                     maxPageSize: CONFIG.maxPageSize,
@@ -918,6 +1093,8 @@ class JournalController {
                     '/api/journal',
                     '/api/journal/imports',
                     '/api/journal/imports/:batchId',
+                    '/api/journal/:id/annuler',
+                    '/api/journal/actions/annulables',
                     '/api/journal/annuler-import',
                     '/api/journal/undo/:id',
                     '/api/journal/stats',

@@ -1,4 +1,5 @@
 const db = require('../db/db');
+const annulationService = require('../Services/annulationService');
 
 // 🔧 CONFIGURATION API EXTERNE - OPTIMISÉE POUR LWS
 const API_CONFIG = {
@@ -250,7 +251,460 @@ const estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
 };
 
 // ====================================================
-// 🔹 ROUTES API PUBLIQUES
+// 🔹 NOUVELLES FONCTIONS POUR GESTION DES CARTES (INTÉRIEUR)
+// ====================================================
+
+/**
+ * Récupérer toutes les cartes avec pagination
+ * GET /api/cartes
+ */
+const getToutesCartes = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = (page - 1) * limit;
+    const recherche = req.query.recherche || '';
+
+    let query = `
+      SELECT 
+        id,
+        "LIEU D'ENROLEMENT",
+        "SITE DE RETRAIT",
+        rangement,
+        nom,
+        prenoms,
+        "DATE DE NAISSANCE",
+        "LIEU NAISSANCE",
+        contact,
+        delivrance,
+        "CONTACT DE RETRAIT",
+        "DATE DE DELIVRANCE",
+        coordination,
+        dateimport
+      FROM cartes
+    `;
+    
+    const params = [];
+    let paramCount = 0;
+
+    // Filtre par coordination si l'utilisateur n'est pas admin
+    if (req.infosRole?.peutVoirStatistiques === 'coordination' && req.user.coordination) {
+      paramCount++;
+      query += ` WHERE coordination = $${paramCount}`;
+      params.push(req.user.coordination);
+    }
+
+    // Recherche textuelle
+    if (recherche) {
+      paramCount++;
+      const searchCondition = ` (nom ILIKE $${paramCount} OR prenoms ILIKE $${paramCount} OR contact ILIKE $${paramCount})`;
+      query += query.includes('WHERE') ? ` AND${searchCondition}` : ` WHERE${searchCondition}`;
+      params.push(`%${recherche}%`);
+    }
+
+    // Compter le total
+    const countQuery = query.replace(
+      /SELECT.*FROM/, 
+      'SELECT COUNT(*) as total FROM'
+    ).split(' ORDER BY')[0];
+    
+    const countResult = await db.requete(countQuery, params);
+    const total = parseInt(countResult.lignes[0].total);
+
+    // Ajouter pagination et tri
+    query += ` ORDER BY id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+    params.push(limit, offset);
+
+    const result = await db.requete(query, params);
+
+    res.json({
+      success: true,
+      data: result.lignes,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur getToutesCartes:', error);
+    res.status(500).json({
+      success: false,
+      erreur: 'Erreur lors de la récupération des cartes',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Récupérer une carte par ID
+ * GET /api/cartes/:id
+ */
+const getCarteParId = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await db.requete(
+      `SELECT 
+        id,
+        "LIEU D'ENROLEMENT",
+        "SITE DE RETRAIT",
+        rangement,
+        nom,
+        prenoms,
+        "DATE DE NAISSANCE",
+        "LIEU NAISSANCE",
+        contact,
+        delivrance,
+        "CONTACT DE RETRAIT",
+        "DATE DE DELIVRANCE",
+        coordination,
+        dateimport
+       FROM cartes WHERE id = $1`,
+      [id]
+    );
+
+    if (result.lignes.length === 0) {
+      return res.status(404).json({
+        success: false,
+        erreur: 'Carte non trouvée'
+      });
+    }
+
+    // Vérifier la coordination pour les chefs d'équipe
+    if (req.infosRole?.role === "Chef d'équipe" && 
+        result.lignes[0].coordination !== req.user.coordination) {
+      return res.status(403).json({
+        success: false,
+        erreur: "Vous ne pouvez consulter que les cartes de votre coordination"
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result.lignes[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur getCarteParId:', error);
+    res.status(500).json({
+      success: false,
+      erreur: 'Erreur lors de la récupération de la carte',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Créer une nouvelle carte
+ * POST /api/cartes
+ */
+const createCarte = async (req, res) => {
+  const client = await db.pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+
+    const {
+      "LIEU D'ENROLEMENT": lieuEnrolement,
+      "SITE DE RETRAIT": siteRetrait,
+      rangement,
+      nom,
+      prenoms,
+      "DATE DE NAISSANCE": dateNaissance,
+      "LIEU NAISSANCE": lieuNaissance,
+      contact,
+      delivrance,
+      "CONTACT DE RETRAIT": contactRetrait,
+      "DATE DE DELIVRANCE": dateDelivrance
+    } = req.body;
+
+    // Validation
+    if (!nom || !prenoms) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(400).json({
+        success: false,
+        erreur: 'Nom et prénoms sont obligatoires'
+      });
+    }
+
+    // Ajouter la coordination depuis l'utilisateur connecté
+    const coordination = req.user.coordination || null;
+
+    const insertQuery = `
+      INSERT INTO cartes (
+        "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
+        "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
+        "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, dateimport
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+      RETURNING id
+    `;
+
+    const result = await client.query(insertQuery, [
+      lieuEnrolement || '',
+      siteRetrait || '',
+      rangement || '',
+      nom,
+      prenoms,
+      dateNaissance || null,
+      lieuNaissance || '',
+      contact || '',
+      delivrance || '',
+      contactRetrait || '',
+      dateDelivrance || null,
+      coordination
+    ]);
+
+    const newId = result.rows[0].id;
+
+    // 📝 ENREGISTRER DANS LE JOURNAL
+    await annulationService.enregistrerAction(
+      req.user.id,
+      req.user.nomUtilisateur,
+      req.user.nomComplet || req.user.nomUtilisateur,
+      req.user.role,
+      req.user.agence || '',
+      `Création de la carte pour ${nom} ${prenoms}`,
+      'INSERT',
+      'cartes',
+      newId,
+      null, // Pas d'anciennes valeurs
+      req.body, // Nouvelles valeurs
+      req.ip,
+      null, // importBatchId
+      coordination
+    );
+
+    await client.query('COMMIT');
+    client.release();
+
+    res.status(201).json({
+      success: true,
+      message: 'Carte créée avec succès',
+      id: newId
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    client.release();
+    console.error('❌ Erreur createCarte:', error);
+    res.status(500).json({
+      success: false,
+      erreur: 'Erreur lors de la création de la carte',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Modifier une carte existante
+ * PUT /api/cartes/:id
+ */
+const updateCarte = async (req, res) => {
+  const client = await db.pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+
+    const { id } = req.params;
+    
+    // Récupérer la carte existante
+    const carteExistante = await client.query(
+      'SELECT * FROM cartes WHERE id = $1',
+      [id]
+    );
+
+    if (carteExistante.rows.length === 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({
+        success: false,
+        erreur: 'Carte non trouvée'
+      });
+    }
+
+    const ancienneCarte = carteExistante.rows[0];
+
+    // 🔍 FILTRER LES COLONNES SELON LE RÔLE
+    let donneesAModifier = { ...req.body };
+    
+    // Si colonnesAutorisees est un tableau (Chef d'équipe), ne garder que ces colonnes
+    if (Array.isArray(req.colonnesAutorisees) && req.colonnesAutorisees.length > 0) {
+      donneesAModifier = {};
+      req.colonnesAutorisees.forEach(col => {
+        if (req.body[col] !== undefined) {
+          donneesAModifier[col] = req.body[col];
+        }
+      });
+
+      // Vérifier qu'il y a au moins une modification
+      if (Object.keys(donneesAModifier).length === 0) {
+        await client.query('ROLLBACK');
+        client.release();
+        return res.status(400).json({
+          success: false,
+          erreur: 'Aucune modification valide',
+          message: `Vous ne pouvez modifier que: ${req.colonnesAutorisees.join(', ')}`
+        });
+      }
+    }
+
+    // Construire la requête UPDATE dynamique
+    const updates = [];
+    const params = [];
+    let paramCount = 0;
+
+    for (const [key, value] of Object.entries(donneesAModifier)) {
+      paramCount++;
+      updates.push(`"${key}" = $${paramCount}`);
+      params.push(value);
+    }
+
+    // Toujours mettre à jour dateimport
+    paramCount++;
+    updates.push(`dateimport = $${paramCount}`);
+    params.push(new Date());
+
+    // Ajouter l'ID à la fin
+    params.push(id);
+
+    const updateQuery = `
+      UPDATE cartes 
+      SET ${updates.join(', ')}
+      WHERE id = $${paramCount + 1}
+    `;
+
+    await client.query(updateQuery, params);
+
+    // Récupérer la carte modifiée pour le journal
+    const carteModifiee = await client.query(
+      'SELECT * FROM cartes WHERE id = $1',
+      [id]
+    );
+
+    // 📝 ENREGISTRER DANS LE JOURNAL
+    await annulationService.enregistrerAction(
+      req.user.id,
+      req.user.nomUtilisateur,
+      req.user.nomComplet || req.user.nomUtilisateur,
+      req.user.role,
+      req.user.agence || '',
+      `Modification de la carte #${id}`,
+      'UPDATE',
+      'cartes',
+      id,
+      ancienneCarte, // Anciennes valeurs complètes
+      carteModifiee.rows[0], // Nouvelles valeurs complètes
+      req.ip,
+      null,
+      ancienneCarte.coordination || req.user.coordination
+    );
+
+    await client.query('COMMIT');
+    client.release();
+
+    res.json({
+      success: true,
+      message: 'Carte modifiée avec succès',
+      modifications: Object.keys(donneesAModifier)
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    client.release();
+    console.error('❌ Erreur updateCarte:', error);
+    res.status(500).json({
+      success: false,
+      erreur: 'Erreur lors de la modification de la carte',
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Supprimer une carte
+ * DELETE /api/cartes/:id
+ */
+const deleteCarte = async (req, res) => {
+  const client = await db.pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+
+    const { id } = req.params;
+
+    // Récupérer la carte avant suppression
+    const carteASupprimer = await client.query(
+      'SELECT * FROM cartes WHERE id = $1',
+      [id]
+    );
+
+    if (carteASupprimer.rows.length === 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({
+        success: false,
+        erreur: 'Carte non trouvée'
+      });
+    }
+
+    // Vérifier la coordination pour les chefs d'équipe (normalement déjà fait par middleware)
+    if (req.infosRole?.role === "Chef d'équipe" && 
+        carteASupprimer.rows[0].coordination !== req.user.coordination) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({
+        success: false,
+        erreur: "Vous ne pouvez supprimer que les cartes de votre coordination"
+      });
+    }
+
+    // Supprimer la carte
+    await client.query('DELETE FROM cartes WHERE id = $1', [id]);
+
+    // 📝 ENREGISTRER DANS LE JOURNAL
+    await annulationService.enregistrerAction(
+      req.user.id,
+      req.user.nomUtilisateur,
+      req.user.nomComplet || req.user.nomUtilisateur,
+      req.user.role,
+      req.user.agence || '',
+      `Suppression de la carte #${id}`,
+      'DELETE',
+      'cartes',
+      id,
+      carteASupprimer.rows[0], // Anciennes valeurs pour restauration
+      null, // Pas de nouvelles valeurs
+      req.ip,
+      null,
+      carteASupprimer.rows[0].coordination
+    );
+
+    await client.query('COMMIT');
+    client.release();
+
+    res.json({
+      success: true,
+      message: 'Carte supprimée avec succès'
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    client.release();
+    console.error('❌ Erreur deleteCarte:', error);
+    res.status(500).json({
+      success: false,
+      erreur: 'Erreur lors de la suppression de la carte',
+      details: error.message
+    });
+  }
+};
+
+// ====================================================
+// 🔹 ROUTES API PUBLIQUES (existantes)
 // ====================================================
 
 /**
@@ -372,6 +826,7 @@ const getChanges = async (req, res) => {
         delivrance,
         "CONTACT DE RETRAIT",
         "DATE DE DELIVRANCE",
+        coordination,
         dateimport,
         'UPDATE' as operation
       FROM cartes 
@@ -501,6 +956,24 @@ const syncData = async (req, res) => {
             
             if (resultUpdate.updated) {
               updated++;
+              
+              // 📝 ENREGISTRER DANS LE JOURNAL POUR LA MISE À JOUR
+              await annulationService.enregistrerAction(
+                null, // utilisateurId (synchronisation externe)
+                'SYSTEM',
+                'Synchronisation externe',
+                source,
+                null,
+                `Mise à jour via synchronisation (batch ${batch_id || 'N/A'})`,
+                'UPDATE',
+                'cartes',
+                carteExistante.id,
+                carteExistante,
+                item,
+                req.ip,
+                batch_id,
+                carteExistante.coordination
+              );
             } else {
               duplicates++;
             }
@@ -520,18 +993,38 @@ const syncData = async (req, res) => {
               "CONTACT DE RETRAIT": item["CONTACT DE RETRAIT"]?.toString().trim() || '',
               "DATE DE DELIVRANCE": item["DATE DE DELIVRANCE"] ? new Date(item["DATE DE DELIVRANCE"]) : null,
               "sourceimport": source,
-              "batch_id": batch_id || null
+              "batch_id": batch_id || null,
+              "coordination": item.coordination || null
             };
 
-            await client.query(`
+            const insertResult = await client.query(`
               INSERT INTO cartes (
                 "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
                 "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
-                "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", sourceimport, batch_id
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", sourceimport, batch_id, coordination
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+              RETURNING id
             `, Object.values(insertData));
 
             imported++;
+
+            // 📝 ENREGISTRER DANS LE JOURNAL POUR L'INSERTION
+            await annulationService.enregistrerAction(
+              null, // utilisateurId (synchronisation externe)
+              'SYSTEM',
+              'Synchronisation externe',
+              source,
+              null,
+              `Insertion via synchronisation (batch ${batch_id || 'N/A'})`,
+              'INSERT',
+              'cartes',
+              insertResult.rows[0].id,
+              null,
+              item,
+              req.ip,
+              batch_id,
+              insertData.coordination
+            );
           }
 
         } catch (error) {
@@ -670,6 +1163,7 @@ const getCartes = async (req, res) => {
         delivrance,
         "CONTACT DE RETRAIT",
         TO_CHAR("DATE DE DELIVRANCE", 'YYYY-MM-DD') as "DATE DE DELIVRANCE",
+        coordination,
         TO_CHAR(dateimport, 'YYYY-MM-DD HH24:MI:SS') as dateimport
       FROM cartes 
       WHERE 1=1
@@ -992,11 +1486,21 @@ const getSites = async (req, res) => {
 
 // Export des fonctions
 module.exports = {
+  // Nouvelles fonctions internes
+  getToutesCartes,
+  getCarteParId,
+  createCarte,
+  updateCarte,
+  deleteCarte,
+  
+  // Fonctions de fusion (exportées pour tests)
   mettreAJourCarte,
   resoudreConflitNom,
   estContactPlusComplet,
   estDatePlusRecente,
   estValeurPlusComplete,
+  
+  // Routes API publiques
   healthCheck,
   getChanges,
   syncData,
