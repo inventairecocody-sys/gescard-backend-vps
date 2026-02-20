@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const utilisateursController = require('../controllers/authController'); // Note: import depuis authController
+const utilisateursController = require('../Controllers/utilisateursController'); // Note: import depuis authController
 const { verifierToken } = require('../middleware/auth');
 const role = require('../middleware/verificationRole');
 const permission = require('../middleware/permission');
