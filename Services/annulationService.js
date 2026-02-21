@@ -8,7 +8,6 @@
 const db = require('../db/db');
 
 class ServiceAnnulation {
-  
   /**
    * Enregistrer une action dans le journal avec les valeurs JSON pour annulation
    * @param {number} utilisateurId - ID de l'utilisateur
@@ -28,35 +27,38 @@ class ServiceAnnulation {
    * @returns {Promise<number>} - ID du journal créé
    */
   async enregistrerAction(
-    utilisateurId, 
-    nomUtilisateur, 
-    nomComplet, 
-    role, 
-    agence, 
-    action, 
-    actionType, 
-    table, 
-    recordId, 
-    anciennesValeurs, 
-    nouvellesValeurs, 
-    ip, 
+    utilisateurId,
+    nomUtilisateur,
+    nomComplet,
+    role,
+    agence,
+    action,
+    actionType,
+    table,
+    recordId,
+    anciennesValeurs,
+    nouvellesValeurs,
+    ip,
     importBatchId = null,
     coordination = null
   ) {
-    
     // Validation des paramètres requis
     if (!utilisateurId || !nomUtilisateur || !actionType || !table) {
       throw new Error('Paramètres manquants pour enregistrerAction');
     }
 
     // Sérialisation sécurisée des JSON
-    const anciennesValeursJSON = anciennesValeurs ? 
-      (typeof anciennesValeurs === 'string' ? anciennesValeurs : JSON.stringify(anciennesValeurs)) : 
-      null;
-    
-    const nouvellesValeursJSON = nouvellesValeurs ? 
-      (typeof nouvellesValeurs === 'string' ? nouvellesValeurs : JSON.stringify(nouvellesValeurs)) : 
-      null;
+    const anciennesValeursJSON = anciennesValeurs
+      ? typeof anciennesValeurs === 'string'
+        ? anciennesValeurs
+        : JSON.stringify(anciennesValeurs)
+      : null;
+
+    const nouvellesValeursJSON = nouvellesValeurs
+      ? typeof nouvellesValeurs === 'string'
+        ? nouvellesValeurs
+        : JSON.stringify(nouvellesValeurs)
+      : null;
 
     // Construire le message d'action par défaut si non fourni
     const actionMessage = action || `Action ${actionType} sur ${table} #${recordId || '?'}`;
@@ -95,7 +97,7 @@ class ServiceAnnulation {
       )
       RETURNING journalid
     `;
-    
+
     const resultat = await db.requete(requete, [
       utilisateurId,
       nomUtilisateur,
@@ -116,11 +118,11 @@ class ServiceAnnulation {
       actionMessage, // detailsaction
       anciennesValeursJSON, // anciennes_valeurs (JSONB)
       nouvellesValeursJSON, // nouvelles_valeurs (JSONB)
-      coordination // Nouvelle colonne coordination
+      coordination, // Nouvelle colonne coordination
     ]);
-    
+
     if (!resultat.lignes || resultat.lignes.length === 0) {
-      throw new Error('Échec de l\'enregistrement dans le journal');
+      throw new Error("Échec de l'enregistrement dans le journal");
     }
 
     return resultat.lignes[0].journalid;
@@ -144,7 +146,7 @@ class ServiceAnnulation {
     const action = await db.requete(
       `SELECT * FROM journalactivite 
        WHERE journalid = $1 AND annulee = false 
-       FOR UPDATE`,  // Verrouillage ligne
+       FOR UPDATE`, // Verrouillage ligne
       [idJournal]
     );
 
@@ -153,18 +155,18 @@ class ServiceAnnulation {
     }
 
     const entree = action.lignes[0];
-    
+
     // Récupérer les anciennes valeurs depuis le JSON
     let anciennesValeurs = {};
     try {
       if (entree.anciennes_valeurs) {
-        anciennesValeurs = typeof entree.anciennes_valeurs === 'string' 
-          ? JSON.parse(entree.anciennes_valeurs) 
-          : entree.anciennes_valeurs;
+        anciennesValeurs =
+          typeof entree.anciennes_valeurs === 'string'
+            ? JSON.parse(entree.anciennes_valeurs)
+            : entree.anciennes_valeurs;
       } else if (entree.oldvalue) {
-        anciennesValeurs = typeof entree.oldvalue === 'string' 
-          ? JSON.parse(entree.oldvalue) 
-          : entree.oldvalue;
+        anciennesValeurs =
+          typeof entree.oldvalue === 'string' ? JSON.parse(entree.oldvalue) : entree.oldvalue;
       }
     } catch (e) {
       console.warn(`Erreur parsing anciennes valeurs pour journal ${idJournal}:`, e);
@@ -180,13 +182,13 @@ class ServiceAnnulation {
 
     // Exécuter la restauration dans une transaction
     const client = await db.pool.connect();
-    
+
     try {
       await client.query('BEGIN');
 
       // Restaurer les anciennes valeurs selon le type d'action
       const actionType = (entree.actiontype || entree.action || '').toUpperCase();
-      
+
       switch (actionType) {
         case 'AJOUT':
         case 'INSERT':
@@ -211,7 +213,7 @@ class ServiceAnnulation {
             }
 
             valeurs.push(idEnregistrement);
-            
+
             await client.query(
               `UPDATE ${table} SET ${champs.join(', ')} WHERE id = $${index}`,
               valeurs
@@ -224,10 +226,14 @@ class ServiceAnnulation {
         case 'REMOVE':
           // Pour une suppression, on réinsère les anciennes valeurs
           if (Object.keys(anciennesValeurs).length > 0) {
-            const colonnes = Object.keys(anciennesValeurs).map(c => `"${c}"`).join(', ');
-            const placeholders = Object.keys(anciennesValeurs).map((_, i) => `$${i + 1}`).join(', ');
+            const colonnes = Object.keys(anciennesValeurs)
+              .map((c) => `"${c}"`)
+              .join(', ');
+            const placeholders = Object.keys(anciennesValeurs)
+              .map((_, i) => `$${i + 1}`)
+              .join(', ');
             const valeursInsert = Object.values(anciennesValeurs);
-            
+
             await client.query(
               `INSERT INTO ${table} (${colonnes}) VALUES (${placeholders})`,
               valeursInsert
@@ -249,7 +255,7 @@ class ServiceAnnulation {
 
       // Enregistrer l'annulation comme nouvelle entrée (sans récursion)
       const actionAnnulation = `Annulation de l'action #${idJournal} (${entree.action})`;
-      
+
       await client.query(
         `INSERT INTO journalactivite (
           utilisateurid, nomutilisateur, nomcomplet, role, agence,
@@ -280,15 +286,14 @@ class ServiceAnnulation {
           actionAnnulation,
           JSON.stringify({ action_originale_id: idJournal }),
           JSON.stringify({ statut: 'annulation_réussie' }),
-          entree.coordination
+          entree.coordination,
         ]
       );
 
       await client.query('COMMIT');
-      
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Erreur lors de l\'annulation:', error);
+      console.error("Erreur lors de l'annulation:", error);
       throw new Error(`Échec de l'annulation: ${error.message}`);
     } finally {
       client.release();
@@ -371,7 +376,7 @@ class ServiceAnnulation {
     valeurs.push(limite);
 
     const resultat = await db.requete(requete, valeurs);
-    
+
     return resultat.lignes;
   }
 
@@ -411,16 +416,16 @@ class ServiceAnnulation {
     // Optionnel: limite de temps pour l'annulation (ex: 30 jours)
     const limiteHeures = 30 * 24; // 30 jours
     if (action.heures_ecoulees > limiteHeures) {
-      return { 
-        peutAnnuler: false, 
+      return {
+        peutAnnuler: false,
         raison: `Délai d'annulation dépassé (plus de 30 jours)`,
-        heures_ecoulees: Math.round(action.heures_ecoulees)
+        heures_ecoulees: Math.round(action.heures_ecoulees),
       };
     }
 
-    return { 
+    return {
       peutAnnuler: true,
-      heures_ecoulees: Math.round(action.heures_ecoulees)
+      heures_ecoulees: Math.round(action.heures_ecoulees),
     };
   }
 }

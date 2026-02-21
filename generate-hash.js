@@ -12,7 +12,7 @@ const passwords = [
   'Binge!Chef4',
   'Binge!Oper4',
   'Adj!Chef5',
-  'Adj!Oper5'
+  'Adj!Oper5',
 ];
 
 async function run() {

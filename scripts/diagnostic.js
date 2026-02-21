@@ -15,10 +15,10 @@ async function runDiagnostic() {
   console.log('🔍 Diagnostic API GESCard (VPS)');
   console.log(`🌐 API cible: ${API_BASE}`);
   console.log('============================\n');
-  
+
   let successCount = 0;
   let totalTests = 0;
-  
+
   try {
     // Test 1: API de base
     totalTests++;
@@ -30,7 +30,7 @@ async function runDiagnostic() {
     } catch (error) {
       console.log(`❌ Échec API de base: ${error.message}`);
     }
-    
+
     // Test 2: Health check
     totalTests++;
     console.log('\n2️⃣ Test Health Check...');
@@ -44,7 +44,7 @@ async function runDiagnostic() {
     } catch (error) {
       console.log(`❌ Échec Health: ${error.message}`);
     }
-    
+
     // Test 3: CORS
     totalTests++;
     console.log('\n3️⃣ Test CORS...');
@@ -55,7 +55,7 @@ async function runDiagnostic() {
     } catch (error) {
       console.log(`❌ Échec CORS: ${error.message}`);
     }
-    
+
     // Test 4: API externe publique (si elle existe encore)
     totalTests++;
     console.log('\n4️⃣ Test API externe (publique)...');
@@ -70,7 +70,7 @@ async function runDiagnostic() {
         console.log(`❌ Échec API externe: ${error.message}`);
       }
     }
-    
+
     // Test 5: API changes (publique)
     totalTests++;
     console.log('\n5️⃣ Test API changes (publique)...');
@@ -88,7 +88,7 @@ async function runDiagnostic() {
         console.log(`❌ Échec API changes: ${error.message}`);
       }
     }
-    
+
     // Test 6: Debug external (si elle existe)
     totalTests++;
     console.log('\n6️⃣ Test debug external...');
@@ -103,7 +103,7 @@ async function runDiagnostic() {
         console.log(`❌ Échec debug: ${error.message}`);
       }
     }
-    
+
     // Test 7: API externe protégée (sans token)
     totalTests++;
     console.log('\n7️⃣ Test API protégée (sans token - devrait échouer)...');
@@ -119,13 +119,13 @@ async function runDiagnostic() {
         successCount++;
       }
     }
-    
+
     // Test 8: API externe protégée (avec token)
     totalTests++;
     console.log('\n8️⃣ Test API protégée (avec token)...');
     try {
       const protectedRes = await axios.get(`${API_BASE}/api/external/cartes`, {
-        headers: { 'X-API-Token': API_TOKEN }
+        headers: { 'X-API-Token': API_TOKEN },
       });
       console.log(`✅ API protégée accessible avec token`);
       if (protectedRes.data.data) {
@@ -139,7 +139,7 @@ async function runDiagnostic() {
         console.log(`❌ Erreur token: ${error.response?.data?.error || error.message}`);
       }
     }
-    
+
     // Test 9: Connexion directe à la BDD (optionnel)
     totalTests++;
     console.log('\n9️⃣ Test route protégée JWT (sans token - devrait échouer)...');
@@ -155,25 +155,24 @@ async function runDiagnostic() {
         successCount++;
       }
     }
-    
+
     console.log('\n🎯 RÉSULTATS DU DIAGNOSTIC');
     console.log('========================');
     console.log(`✅ Tests réussis: ${successCount}/${totalTests}`);
     console.log(`🌐 API testée: ${API_BASE}`);
-    
+
     if (successCount === totalTests) {
       console.log('\n🎉 Tous les tests ont réussi ! API prête pour la production.');
     } else {
       console.log('\n⚠️ Certains tests ont échoué. Vérifie les routes manquantes.');
     }
-    
   } catch (error) {
     console.error('\n❌ Diagnostic échoué - Erreur générale:');
     console.error(`Message: ${error.message}`);
     if (error.code === 'ECONNREFUSED') {
-      console.error('💡 Le serveur n\'est pas accessible. Vérifie que ton backend tourne bien.');
+      console.error("💡 Le serveur n'est pas accessible. Vérifie que ton backend tourne bien.");
     } else if (error.code === 'ENOTFOUND') {
-      console.error('💡 L\'URL n\'est pas valide. Vérifie API_BASE.');
+      console.error("💡 L'URL n'est pas valide. Vérifie API_BASE.");
     }
     process.exit(1);
   }

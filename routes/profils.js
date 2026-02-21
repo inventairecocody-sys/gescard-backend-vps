@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const logController = require('../Controllers/logController');
+const profilController = require('../Controllers/profilController'); // ✅ CORRECT
 const { verifierToken } = require('../middleware/auth');
 const role = require('../middleware/verificationRole');
 const permission = require('../middleware/permission');
@@ -9,8 +9,8 @@ const rateLimit = require('express-rate-limit');
 // ============================================
 // CONFIGURATION OPTIMISÉE POUR LWS
 // ============================================
-const LOG_CONFIG = {
-  // Rate limiting spécifique aux logs
+const PROFIL_CONFIG = {
+  // Rate limiting spécifique au profil
   rateLimits: {
     standard: rateLimit({
       windowMs: 60 * 1000, // 1 minute
@@ -18,41 +18,37 @@ const LOG_CONFIG = {
       message: {
         success: false,
         error: 'Trop de requêtes',
-        code: 'STANDARD_RATE_LIMIT'
-      }
+        code: 'STANDARD_RATE_LIMIT',
+      },
     }),
-    
+
     sensitive: rateLimit({
       windowMs: 15 * 60 * 1000, // 15 minutes
       max: 10, // 10 actions sensibles
       message: {
         success: false,
-        error: 'Trop d\'actions sensibles',
-        code: 'SENSITIVE_RATE_LIMIT'
-      }
+        error: "Trop d'actions sensibles",
+        code: 'SENSITIVE_RATE_LIMIT',
+      },
     }),
-    
-    export: rateLimit({
+
+    password: rateLimit({
       windowMs: 60 * 60 * 1000, // 1 heure
-      max: 5, // 5 exports par heure
+      max: 3, // 3 tentatives de changement de mot de passe par heure
       message: {
         success: false,
-        error: 'Trop d\'exports',
-        code: 'EXPORT_RATE_LIMIT'
-      }
-    })
+        error: 'Trop de tentatives de changement de mot de passe',
+        code: 'PASSWORD_RATE_LIMIT',
+      },
+    }),
   },
-  
+
   // Cache control
   cacheControl: {
-    list: 'private, max-age=5', // 5 secondes
-    user: 'private, max-age=10', // 10 secondes
-    recent: 'private, max-age=2', // 2 secondes
-    stats: 'private, max-age=300' // 5 minutes
+    profile: 'private, max-age=60', // 1 minute
+    stats: 'private, max-age=300', // 5 minutes
+    activity: 'private, max-age=30', // 30 secondes
   },
-  
-  // Routes publiques
-  publicRoutes: ['/health', '/test']
 };
 
 // ============================================
@@ -61,15 +57,17 @@ const LOG_CONFIG = {
 
 // Middleware de cache-control dynamique
 router.use((req, res, next) => {
-  const path = req.path.split('/').pop();
-  const cacheControl = LOG_CONFIG.cacheControl[path] || 'private, no-cache';
+  const path = req.path.split('/')[1]; // profile, activity, stats, etc.
+  const cacheControl = PROFIL_CONFIG.cacheControl[path] || 'private, no-cache';
   res.setHeader('Cache-Control', cacheControl);
   next();
 });
 
 // Middleware de logging spécifique
 router.use((req, res, next) => {
-  console.log(`📝 [Logs] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur || 'non authentifié'} (${req.user?.role || 'aucun'})`);
+  console.log(
+    `👤 [Profil] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur || 'non authentifié'} (${req.user?.role || 'aucun'})`
+  );
   next();
 });
 
@@ -78,54 +76,45 @@ router.use((req, res, next) => {
 // ============================================
 
 /**
- * GET /api/logs/health - Santé du service
+ * GET /api/profil/health - Santé du service
  */
-router.get('/health', LOG_CONFIG.rateLimits.standard, (req, res) => {
+router.get('/health', PROFIL_CONFIG.rateLimits.standard, (req, res) => {
   res.json({
     success: true,
     status: 'healthy',
-    service: 'logs',
+    service: 'profil',
     timestamp: new Date().toISOString(),
-    version: '3.0.0-lws',
-    roles_autorises: {
-      consultation: 'Administrateur uniquement (redirigé vers journal)',
-      actions: 'Administrateur uniquement',
-      export: 'Administrateur uniquement'
-    },
-    redirection: '⚠️ Ce module est maintenu pour compatibilité. Utilisez /api/journal pour les nouvelles fonctionnalités.',
+    version: '2.0.0-lws',
     endpoints: [
-      'GET /api/logs',
-      'GET /api/logs/recent',
-      'GET /api/logs/user/:utilisateur',
-      'GET /api/logs/date-range',
-      'GET /api/logs/stats',
-      'GET /api/logs/search',
-      'GET /api/logs/filtered',
-      'GET /api/logs/actions',
-      'GET /api/logs/export',
-      'GET /api/logs/diagnostic',
-      'POST /api/logs',
-      'DELETE /api/logs/old',
-      'DELETE /api/logs/all'
-    ]
+      'GET /api/profil',
+      'GET /api/profil/:userId',
+      'POST /api/profil/change-password',
+      'GET /api/profil/activity',
+      'GET /api/profil/:userId/activity',
+      'GET /api/profil/check-username',
+      'PUT /api/profil/username',
+      'GET /api/profil/stats',
+      'POST /api/profil/deactivate',
+      'POST /api/profil/reactivate/:userId',
+      'GET /api/profil/export',
+      'GET /api/profil/sessions',
+      'POST /api/profil/logout-others',
+      'POST /api/profil/cache/clear',
+      'GET /api/profil/diagnostic',
+    ],
   });
 });
 
 /**
- * GET /api/logs/test - Test du service
+ * GET /api/profil/test - Test du service
  */
 router.get('/test', (req, res) => {
   res.json({
     success: true,
-    message: 'Service logs fonctionnel',
-    version: '3.0.0-lws',
+    message: 'Service profil fonctionnel',
+    version: '2.0.0-lws',
     timestamp: new Date().toISOString(),
     authentifie: !!req.user,
-    redirection: '⚠️ Ce module est maintenu pour compatibilité. Utilisez /api/journal pour les nouvelles fonctionnalités.',
-    roles_autorises: {
-      consultation: 'Administrateur uniquement',
-      actions: 'Administrateur uniquement'
-    }
   });
 });
 
@@ -133,184 +122,121 @@ router.get('/test', (req, res) => {
 // ROUTES PROTÉGÉES (authentification requise)
 // ============================================
 router.use(verifierToken);
-router.use(permission.peutVoirInfosSensibles);
 
 // ============================================
-// ROUTES DE CONSULTATION (Admin uniquement)
-// ============================================
-
-/**
- * GET /api/logs - Récupérer tous les logs
- * Admin uniquement - redirigé vers journal
- */
-router.get(
-  '/', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getAllLogs
-);
-
-/**
- * GET /api/logs/list - Alias pour la liste
- * Admin uniquement - redirigé vers journal
- */
-router.get(
-  '/list', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getAllLogs
-);
-
-/**
- * GET /api/logs/recent - Récupérer les logs récents
- * Admin uniquement - redirigé vers journal
- */
-router.get(
-  '/recent', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getRecentLogs
-);
-
-/**
- * GET /api/logs/user/:utilisateur - Logs par utilisateur
- * Admin uniquement - redirigé vers journal
- */
-router.get(
-  '/user/:utilisateur', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getLogsByUser
-);
-
-/**
- * GET /api/logs/date-range - Logs par plage de dates
- * Admin uniquement - redirigé vers journal
- */
-router.get(
-  '/date-range', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getLogsByDateRange
-);
-
-/**
- * GET /api/logs/filtered - Logs avec filtres avancés
- * Admin uniquement - redirigé vers journal
- */
-router.get(
-  '/filtered', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getFilteredLogs
-);
-
-// ============================================
-// ROUTES DE RECHERCHE ET STATISTIQUES (Admin uniquement)
+// ROUTES DE PROFIL (utilisateur connecté)
 // ============================================
 
 /**
- * GET /api/logs/search - Recherche avancée
- * Admin uniquement - redirigé vers journal
+ * GET /api/profil - Récupérer le profil de l'utilisateur connecté
+ */
+router.get('/', PROFIL_CONFIG.rateLimits.standard, profilController.getProfile);
+
+/**
+ * PUT /api/profil - Mettre à jour le profil
+ */
+router.put('/', PROFIL_CONFIG.rateLimits.standard, profilController.updateProfile);
+
+/**
+ * POST /api/profil/change-password - Changer le mot de passe
+ */
+router.post('/change-password', PROFIL_CONFIG.rateLimits.password, profilController.changePassword);
+
+/**
+ * GET /api/profil/activity - Activité de l'utilisateur connecté
+ */
+router.get('/activity', PROFIL_CONFIG.rateLimits.standard, profilController.getUserActivity);
+
+/**
+ * GET /api/profil/check-username - Vérifier disponibilité du nom d'utilisateur
  */
 router.get(
-  '/search', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.searchLogs
+  '/check-username',
+  PROFIL_CONFIG.rateLimits.standard,
+  profilController.checkUsernameAvailability
 );
 
 /**
- * GET /api/logs/stats - Statistiques des logs
- * Admin uniquement - redirigé vers journal
+ * PUT /api/profil/username - Mettre à jour le nom d'utilisateur
  */
-router.get(
-  '/stats', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getLogStats
-);
+router.put('/username', PROFIL_CONFIG.rateLimits.sensitive, profilController.updateUsername);
 
 /**
- * GET /api/logs/actions - Actions fréquentes (auto-complétion)
- * Admin uniquement
+ * GET /api/profil/stats - Statistiques du profil
  */
-router.get(
-  '/actions', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getCommonActions
-);
-
-// ============================================
-// ROUTES DE CRÉATION (Admin uniquement)
-// ============================================
+router.get('/stats', PROFIL_CONFIG.rateLimits.standard, profilController.getProfileStats);
 
 /**
- * POST /api/logs - Créer un nouveau log
- * Admin uniquement
+ * POST /api/profil/deactivate - Désactiver le compte
+ */
+router.post('/deactivate', PROFIL_CONFIG.rateLimits.sensitive, profilController.deactivateAccount);
+
+/**
+ * GET /api/profil/export - Exporter les données du profil
+ */
+router.get('/export', PROFIL_CONFIG.rateLimits.standard, profilController.exportProfileData);
+
+/**
+ * GET /api/profil/sessions - Sessions actives
+ */
+router.get('/sessions', PROFIL_CONFIG.rateLimits.standard, profilController.getActiveSessions);
+
+/**
+ * POST /api/profil/logout-others - Déconnecter les autres sessions
  */
 router.post(
-  '/', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.createLog
+  '/logout-others',
+  PROFIL_CONFIG.rateLimits.sensitive,
+  profilController.logoutOtherSessions
 );
 
-// ============================================
-// ROUTES DE SUPPRESSION (Admin uniquement)
-// ============================================
-
 /**
- * DELETE /api/logs/old - Supprimer les vieux logs
- * Admin uniquement - redirigé vers journal
+ * POST /api/profil/cache/clear - Nettoyer le cache utilisateur
  */
-router.delete(
-  '/old', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.sensitive, 
-  logController.deleteOldLogs
-);
-
-/**
- * DELETE /api/logs/all - Supprimer tous les logs
- * Admin uniquement - redirigé vers journal
- */
-router.delete(
-  '/all', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.sensitive, 
-  logController.clearAllLogs
-);
+router.post('/cache/clear', PROFIL_CONFIG.rateLimits.standard, profilController.clearUserCache);
 
 // ============================================
-// ROUTES D'EXPORT (Admin uniquement)
+// ROUTES ADMINISTRATEUR (Admin uniquement)
 // ============================================
 
 /**
- * GET /api/logs/export - Exporter les logs
- * Admin uniquement - redirigé vers journal
+ * GET /api/profil/:userId - Récupérer le profil d'un utilisateur (Admin uniquement)
  */
 router.get(
-  '/export', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.export, 
-  logController.exportLogs
+  '/:userId',
+  role.peutGererComptes,
+  PROFIL_CONFIG.rateLimits.standard,
+  profilController.getUserProfile
 );
 
-// ============================================
-// ROUTES DE DIAGNOSTIC (Admin uniquement)
-// ============================================
-
 /**
- * GET /api/logs/diagnostic - Diagnostic du module
- * Admin uniquement - redirigé vers journal
+ * GET /api/profil/:userId/activity - Activité d'un utilisateur (Admin uniquement)
  */
 router.get(
-  '/diagnostic', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.diagnostic
+  '/:userId/activity',
+  role.peutGererComptes,
+  PROFIL_CONFIG.rateLimits.standard,
+  profilController.getUserActivityById
+);
+
+/**
+ * POST /api/profil/reactivate/:userId - Réactiver un compte (Admin uniquement)
+ */
+router.post(
+  '/reactivate/:userId',
+  role.peutGererComptes,
+  PROFIL_CONFIG.rateLimits.sensitive,
+  profilController.reactivateAccount
+);
+
+/**
+ * GET /api/profil/diagnostic - Diagnostic du module (Admin uniquement)
+ */
+router.get(
+  '/diagnostic',
+  role.peutGererComptes,
+  PROFIL_CONFIG.rateLimits.standard,
+  profilController.diagnostic
 );
 
 // ============================================
@@ -318,95 +244,20 @@ router.get(
 // ============================================
 
 router.get('/', (req, res) => {
-  const roleInfo = req.user ? 
-    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - ${req.user.role === 'Administrateur' ? '✅ Accès autorisé' : '❌ Accès restreint'}` : 
-    'Non authentifié';
-  
   res.json({
-    name: "API Logs GESCARD",
-    description: "Module de journalisation système (maintenu pour compatibilité)",
-    version: "3.0.0-lws",
+    name: 'API Profil GESCARD',
+    description: 'Module de gestion des profils utilisateurs',
+    version: '2.0.0-lws',
     timestamp: new Date().toISOString(),
-    authentification: roleInfo,
-    redirection: "⚠️ Ce module est maintenu pour compatibilité ascendante. Pour les nouvelles fonctionnalités (annulation, coordination), utilisez /api/journal",
-    roles_autorises: {
-      administrateur: "✅ Accès complet (redirigé vers journal)",
-      gestionnaire: "❌ Non autorisé (pas d'accès aux logs)",
-      chef_equipe: "❌ Non autorisé (pas d'accès aux logs)",
-      operateur: "❌ Non autorisé (pas d'accès aux logs)"
+    authentifie: !!req.user,
+    documentation: {
+      mon_profil: '/api/profil/me - Mon profil',
+      modifier: '/api/profil - PUT - Modifier mon profil',
+      mot_de_passe: '/api/profil/change-password - POST - Changer mot de passe',
+      activite: '/api/profil/activity - Mon activité',
+      statistiques: '/api/profil/stats - Mes statistiques',
+      exporter: '/api/profil/export - Exporter mes données',
     },
-    compatibilite: {
-      statut: "✅ Maintenu pour compatibilité ascendante",
-      redirection_vers: "/api/journal",
-      fonctionnalites_nouvelles: [
-        "Annulation d'actions",
-        "Support de la coordination",
-        "Journalisation enrichie (JSON)",
-        "Filtrage avancé"
-      ]
-    },
-    user: req.user ? {
-      id: req.user.id,
-      username: req.user.nomUtilisateur,
-      role: req.user.role,
-      coordination: req.user.coordination
-    } : null,
-    endpoints: {
-      consultation: {
-        'GET /': 'Liste paginée des logs (Admin)',
-        'GET /list': 'Liste (alias - Admin)',
-        'GET /recent': 'Logs récents (Admin)',
-        'GET /user/:utilisateur': 'Logs par utilisateur (Admin)',
-        'GET /date-range': 'Logs par plage de dates (Admin)',
-        'GET /filtered': 'Logs avec filtres avancés (Admin)'
-      },
-      recherche: {
-        'GET /search': 'Recherche avancée (Admin)',
-        'GET /stats': 'Statistiques (Admin)',
-        'GET /actions': 'Actions fréquentes (Admin)'
-      },
-      creation: {
-        'POST /': 'Créer un log (Admin)'
-      },
-      suppression: {
-        'DELETE /old': 'Supprimer vieux logs (Admin)',
-        'DELETE /all': 'Supprimer tous les logs (Admin)'
-      },
-      export: {
-        'GET /export': 'Exporter les logs (Admin)'
-      },
-      diagnostic: {
-        'GET /diagnostic': 'Diagnostic module (Admin)',
-        'GET /health': 'Santé service (public)',
-        'GET /test': 'Test service (public)'
-      }
-    },
-    rate_limits: {
-      standard: '30 requêtes par minute',
-      sensitive: '10 actions par 15 minutes',
-      export: '5 exports par heure'
-    },
-    cache: {
-      list: '5 secondes',
-      user: '10 secondes',
-      recent: '2 secondes',
-      stats: '5 minutes'
-    },
-    formats_supportes: {
-      import: ['CSV'],
-      export: ['JSON', 'CSV']
-    },
-    migration: {
-      recommandation: "Pour bénéficier des nouvelles fonctionnalités (annulation, coordination), migrez vers /api/journal",
-      documentation: "/api/journal/ pour plus d'informations"
-    },
-    exemples: {
-      curl_liste: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs?page=1&limit=50"',
-      curl_user: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/user/admin"',
-      curl_search: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/search?q=import&page=1"',
-      curl_export: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/export?format=csv"',
-      curl_stats: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/stats"'
-    }
   });
 });
 
@@ -418,27 +269,28 @@ router.use((req, res) => {
   res.status(404).json({
     success: false,
     error: 'Route non trouvée',
-    message: `La route ${req.method} ${req.path} n'existe pas dans l'API logs`,
+    message: `La route ${req.method} ${req.path} n'existe pas dans l'API profil`,
     available_routes: [
-      'GET /api/logs/',
-      'GET /api/logs/list',
-      'GET /api/logs/recent',
-      'GET /api/logs/user/:utilisateur',
-      'GET /api/logs/date-range',
-      'GET /api/logs/filtered',
-      'GET /api/logs/search',
-      'GET /api/logs/stats',
-      'GET /api/logs/actions',
-      'GET /api/logs/export',
-      'GET /api/logs/diagnostic',
-      'GET /api/logs/health',
-      'GET /api/logs/test',
-      'POST /api/logs/',
-      'DELETE /api/logs/old',
-      'DELETE /api/logs/all'
+      'GET /api/profil',
+      'GET /api/profil/:userId',
+      'GET /api/profil/activity',
+      'GET /api/profil/:userId/activity',
+      'GET /api/profil/check-username',
+      'GET /api/profil/stats',
+      'GET /api/profil/export',
+      'GET /api/profil/sessions',
+      'GET /api/profil/diagnostic',
+      'GET /api/profil/health',
+      'GET /api/profil/test',
+      'PUT /api/profil',
+      'PUT /api/profil/username',
+      'POST /api/profil/change-password',
+      'POST /api/profil/deactivate',
+      'POST /api/profil/reactivate/:userId',
+      'POST /api/profil/logout-others',
+      'POST /api/profil/cache/clear',
     ],
-    redirection: 'Pour les nouvelles fonctionnalités, utilisez /api/journal',
-    code: 'ROUTE_NOT_FOUND'
+    code: 'ROUTE_NOT_FOUND',
   });
 });
 

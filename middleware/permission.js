@@ -18,20 +18,20 @@ const { normaliserRole, CONFIG_ROLES } = require('./verificationRole');
 const peutVoirStatistiques = (req, res, next) => {
   try {
     const role = normaliserRole(req.user?.role);
-    
+
     if (!role) {
       return res.status(401).json({
-        erreur: "Non authentifié",
-        message: "Vous devez être connecté pour voir les statistiques"
+        erreur: 'Non authentifié',
+        message: 'Vous devez être connecté pour voir les statistiques',
       });
     }
 
     const configRole = CONFIG_ROLES[role];
-    
+
     if (!configRole) {
       return res.status(403).json({
-        erreur: "Rôle inconnu",
-        message: "Votre rôle n'est pas reconnu dans le système"
+        erreur: 'Rôle inconnu',
+        message: "Votre rôle n'est pas reconnu dans le système",
       });
     }
 
@@ -40,16 +40,16 @@ const peutVoirStatistiques = (req, res, next) => {
     // Vérifier si l'utilisateur a le droit de voir les stats
     if (!modeVue) {
       return res.status(403).json({
-        erreur: "Accès refusé",
+        erreur: 'Accès refusé',
         message: "Vous n'avez pas les droits pour voir les statistiques",
-        role: role
+        role: role,
       });
     }
 
     // Ajouter le filtre à la requête
     req.filtreStats = {
       mode: modeVue, // 'tout' ou 'coordination'
-      coordination: req.user?.coordination || null // Pour le filtrage
+      coordination: req.user?.coordination || null, // Pour le filtrage
     };
 
     // Log en développement
@@ -59,10 +59,10 @@ const peutVoirStatistiques = (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error("Erreur dans peutVoirStatistiques:", error);
+    console.error('Erreur dans peutVoirStatistiques:', error);
     return res.status(500).json({
-      erreur: "Erreur serveur",
-      message: "Une erreur est survenue lors de la vérification des droits"
+      erreur: 'Erreur serveur',
+      message: 'Une erreur est survenue lors de la vérification des droits',
     });
   }
 };
@@ -70,7 +70,7 @@ const peutVoirStatistiques = (req, res, next) => {
 /**
  * Middleware pour gérer la visibilité des informations sensibles
  * Ajoute req.optionsMasquage avec la configuration appropriée
- * 
+ *
  * Informations sensibles gérées:
  * - Adresses IP
  * - Anciennes valeurs (dans le journal)
@@ -80,7 +80,7 @@ const peutVoirStatistiques = (req, res, next) => {
 const peutVoirInfosSensibles = (req, res, next) => {
   try {
     const role = normaliserRole(req.user?.role);
-    
+
     if (!role) {
       // Utilisateur non connecté: tout masquer par défaut
       req.optionsMasquage = {
@@ -88,43 +88,43 @@ const peutVoirInfosSensibles = (req, res, next) => {
         anciennesValeurs: true,
         nouvellesValeurs: true,
         informationsPersonnelles: true,
-        detailsConnexion: true
+        detailsConnexion: true,
       };
       return next();
     }
 
     // Configuration du masquage selon le rôle
-    switch(role) {
+    switch (role) {
       case 'Administrateur':
         // Admin voit tout
         req.optionsMasquage = {
-          ip: false,           // Voit les IPs
+          ip: false, // Voit les IPs
           anciennesValeurs: false, // Voit les anciennes valeurs
           nouvellesValeurs: false, // Voit les nouvelles valeurs
           informationsPersonnelles: false, // Voit toutes les infos
-          detailsConnexion: false // Voit les détails de connexion
+          detailsConnexion: false, // Voit les détails de connexion
         };
         break;
 
       case 'Gestionnaire':
         // Gestionnaire: voit presque tout sauf IP
         req.optionsMasquage = {
-          ip: true,            // Masque les IPs
+          ip: true, // Masque les IPs
           anciennesValeurs: false, // Voit les anciennes valeurs
           nouvellesValeurs: false, // Voit les nouvelles valeurs
           informationsPersonnelles: false, // Voit les infos personnelles
-          detailsConnexion: true // Masque les détails de connexion
+          detailsConnexion: true, // Masque les détails de connexion
         };
         break;
 
       case "Chef d'équipe":
         // Chef d'équipe: voit le minimum
         req.optionsMasquage = {
-          ip: true,            // Masque les IPs
+          ip: true, // Masque les IPs
           anciennesValeurs: true, // Masque les anciennes valeurs
           nouvellesValeurs: true, // Masque les nouvelles valeurs
           informationsPersonnelles: true, // Masque les infos personnelles
-          detailsConnexion: true // Masque les détails de connexion
+          detailsConnexion: true, // Masque les détails de connexion
         };
         break;
 
@@ -135,7 +135,7 @@ const peutVoirInfosSensibles = (req, res, next) => {
           anciennesValeurs: true,
           nouvellesValeurs: true,
           informationsPersonnelles: true,
-          detailsConnexion: true
+          detailsConnexion: true,
         };
         break;
 
@@ -146,7 +146,7 @@ const peutVoirInfosSensibles = (req, res, next) => {
           anciennesValeurs: true,
           nouvellesValeurs: true,
           informationsPersonnelles: true,
-          detailsConnexion: true
+          detailsConnexion: true,
         };
     }
 
@@ -155,7 +155,7 @@ const peutVoirInfosSensibles = (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error("Erreur dans peutVoirInfosSensibles:", error);
+    console.error('Erreur dans peutVoirInfosSensibles:', error);
     // En cas d'erreur, on masque tout par sécurité
     req.optionsMasquage = { ip: true, anciennesValeurs: true, toutes: true };
     next();
@@ -171,7 +171,7 @@ const filtrerDonneesSensibles = (donnees, optionsMasquage) => {
 
   // Si c'est un tableau, filtrer chaque élément
   if (Array.isArray(donnees)) {
-    return donnees.map(item => filtrerDonneesSensibles(item, optionsMasquage));
+    return donnees.map((item) => filtrerDonneesSensibles(item, optionsMasquage));
   }
 
   // Si c'est un objet, créer une copie filtrée
@@ -196,7 +196,7 @@ const filtrerDonneesSensibles = (donnees, optionsMasquage) => {
     // Masquer les informations personnelles
     if (optionsMasquage.informationsPersonnelles) {
       const champsPersonnels = ['email', 'telephone', 'adresse', 'dateNaissance'];
-      champsPersonnels.forEach(champ => {
+      champsPersonnels.forEach((champ) => {
         if (donneesFiltrees[champ]) {
           donneesFiltrees[champ] = '[MASQUÉ]';
         }
@@ -215,23 +215,23 @@ const filtrerDonneesSensibles = (donnees, optionsMasquage) => {
 const aRole = (rolesAutorises) => {
   return (req, res, next) => {
     const role = normaliserRole(req.user?.role);
-    
+
     if (!role) {
-      return res.status(401).json({ erreur: "Non authentifié" });
+      return res.status(401).json({ erreur: 'Non authentifié' });
     }
 
     const rolesList = Array.isArray(rolesAutorises) ? rolesAutorises : [rolesAutorises];
-    const rolesNormalises = rolesList.map(r => normaliserRole(r));
+    const rolesNormalises = rolesList.map((r) => normaliserRole(r));
 
     if (rolesNormalises.includes(role)) {
       return next();
     }
 
     return res.status(403).json({
-      erreur: "Accès refusé",
+      erreur: 'Accès refusé',
       message: "Vous n'avez pas le rôle requis pour cette action",
       rolesRequis: rolesList,
-      votreRole: role
+      votreRole: role,
     });
   };
 };
@@ -246,8 +246,8 @@ const estDansCoordination = (paramCoordination) => {
 
     if (!coordinationUtilisateur) {
       return res.status(403).json({
-        erreur: "Accès refusé",
-        message: "Vous n'êtes pas associé à une coordination"
+        erreur: 'Accès refusé',
+        message: "Vous n'êtes pas associé à une coordination",
       });
     }
 
@@ -261,8 +261,8 @@ const estDansCoordination = (paramCoordination) => {
     }
 
     return res.status(403).json({
-      erreur: "Accès refusé",
-      message: "Vous ne pouvez accéder qu'aux données de votre coordination"
+      erreur: 'Accès refusé',
+      message: "Vous ne pouvez accéder qu'aux données de votre coordination",
     });
   };
 };
@@ -272,5 +272,5 @@ module.exports = {
   peutVoirInfosSensibles,
   filtrerDonneesSensibles,
   aRole,
-  estDansCoordination
+  estDansCoordination,
 };

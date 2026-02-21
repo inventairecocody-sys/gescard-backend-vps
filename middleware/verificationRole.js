@@ -15,7 +15,7 @@ const CONFIG_ROLES = {
     peutAnnulerAction: true,
     peutVoirJournal: true,
     peutGererComptes: true,
-    peutVoirInfosSensibles: true // Voir IP, anciennes valeurs, etc.
+    peutVoirInfosSensibles: true, // Voir IP, anciennes valeurs, etc.
   },
   Gestionnaire: {
     niveau: 80,
@@ -26,7 +26,7 @@ const CONFIG_ROLES = {
     peutAnnulerAction: false,
     peutVoirJournal: false, // ❌ Gestionnaire ne voit pas le journal
     peutGererComptes: false, // ❌ Gestionnaire ne gère pas les comptes
-    peutVoirInfosSensibles: false
+    peutVoirInfosSensibles: false,
   },
   "Chef d'équipe": {
     niveau: 60,
@@ -37,7 +37,7 @@ const CONFIG_ROLES = {
     peutAnnulerAction: false,
     peutVoirJournal: false,
     peutGererComptes: false,
-    peutVoirInfosSensibles: false
+    peutVoirInfosSensibles: false,
   },
   Opérateur: {
     niveau: 40,
@@ -48,8 +48,8 @@ const CONFIG_ROLES = {
     peutAnnulerAction: false,
     peutVoirJournal: false,
     peutGererComptes: false,
-    peutVoirInfosSensibles: false
-  }
+    peutVoirInfosSensibles: false,
+  },
 };
 
 // ============================================
@@ -57,18 +57,18 @@ const CONFIG_ROLES = {
 // ============================================
 const normaliserRole = (role) => {
   if (!role) return null;
-  
+
   const correspondances = {
-    'administrateur': 'Administrateur',
-    'admin': 'Administrateur',
-    'gestionnaire': 'Gestionnaire',
-    'superviseur': 'Gestionnaire', // Ancien rôle mappé vers Gestionnaire
-    'chef d\'équipe': "Chef d'équipe",
-    'chef': "Chef d'équipe",
-    'operateur': 'Opérateur',
-    'opérateur': 'Opérateur'
+    administrateur: 'Administrateur',
+    admin: 'Administrateur',
+    gestionnaire: 'Gestionnaire',
+    superviseur: 'Gestionnaire', // Ancien rôle mappé vers Gestionnaire
+    "chef d'équipe": "Chef d'équipe",
+    chef: "Chef d'équipe",
+    operateur: 'Opérateur',
+    opérateur: 'Opérateur',
   };
-  
+
   const roleMin = role.toLowerCase().trim();
   return correspondances[roleMin] || role;
 };
@@ -84,20 +84,20 @@ const normaliserRole = (role) => {
 const peutAccederPage = (nomPage) => {
   return (req, res, next) => {
     const role = normaliserRole(req.user?.role);
-    
+
     if (!role) {
-      return res.status(401).json({ 
-        erreur: "Non authentifié",
-        message: "Utilisateur non authentifié ou rôle manquant"
+      return res.status(401).json({
+        erreur: 'Non authentifié',
+        message: 'Utilisateur non authentifié ou rôle manquant',
       });
     }
 
     const configRole = CONFIG_ROLES[role];
-    
+
     if (!configRole) {
       return res.status(403).json({
-        erreur: "Rôle inconnu",
-        votreRole: role
+        erreur: 'Rôle inconnu',
+        votreRole: role,
       });
     }
 
@@ -106,10 +106,10 @@ const peutAccederPage = (nomPage) => {
     }
 
     return res.status(403).json({
-      erreur: "Accès refusé",
+      erreur: 'Accès refusé',
       page: nomPage,
       votreRole: role,
-      message: "Vous n'avez pas les droits pour accéder à cette page"
+      message: "Vous n'avez pas les droits pour accéder à cette page",
     });
   };
 };
@@ -120,14 +120,14 @@ const peutAccederPage = (nomPage) => {
 const peutImporterExporter = (req, res, next) => {
   const role = normaliserRole(req.user?.role);
   const configRole = CONFIG_ROLES[role];
-  
+
   if (configRole?.peutImporterExporter) {
     return next();
   }
 
   return res.status(403).json({
-    erreur: "Action non autorisée",
-    message: "Seuls les administrateurs et gestionnaires peuvent importer/exporter"
+    erreur: 'Action non autorisée',
+    message: 'Seuls les administrateurs et gestionnaires peuvent importer/exporter',
   });
 };
 
@@ -145,14 +145,14 @@ const peutModifierCarte = async (req, res, next) => {
     const configRole = CONFIG_ROLES[role];
 
     if (!configRole) {
-      return res.status(403).json({ erreur: "Rôle non reconnu" });
+      return res.status(403).json({ erreur: 'Rôle non reconnu' });
     }
 
     // Opérateur : non
     if (role === 'Opérateur') {
-      return res.status(403).json({ 
-        erreur: "Action non autorisée",
-        message: "Les opérateurs ne peuvent pas modifier les cartes" 
+      return res.status(403).json({
+        erreur: 'Action non autorisée',
+        message: 'Les opérateurs ne peuvent pas modifier les cartes',
       });
     }
 
@@ -160,21 +160,18 @@ const peutModifierCarte = async (req, res, next) => {
     if (role === "Chef d'équipe") {
       // Vérifier que l'ID de carte est présent
       if (!carteId) {
-        return res.status(400).json({ erreur: "ID de carte manquant" });
+        return res.status(400).json({ erreur: 'ID de carte manquant' });
       }
 
       const db = require('../db/db');
-      
+
       try {
-        const carte = await db.requete(
-          'SELECT coordination FROM cartes WHERE id = $1',
-          [carteId]
-        );
+        const carte = await db.requete('SELECT coordination FROM cartes WHERE id = $1', [carteId]);
 
         if (carte.lignes.length === 0) {
-          return res.status(404).json({ 
-            erreur: "Carte non trouvée",
-            message: "Aucune carte trouvée avec cet ID"
+          return res.status(404).json({
+            erreur: 'Carte non trouvée',
+            message: 'Aucune carte trouvée avec cet ID',
           });
         }
 
@@ -185,15 +182,15 @@ const peutModifierCarte = async (req, res, next) => {
           return next();
         }
 
-        return res.status(403).json({ 
-          erreur: "Accès refusé",
-          message: "Vous ne pouvez modifier que les cartes de votre coordination" 
+        return res.status(403).json({
+          erreur: 'Accès refusé',
+          message: 'Vous ne pouvez modifier que les cartes de votre coordination',
         });
       } catch (dbError) {
-        console.error("Erreur base de données dans peutModifierCarte:", dbError);
-        return res.status(500).json({ 
-          erreur: "Erreur serveur",
-          message: "Impossible de vérifier les droits sur cette carte"
+        console.error('Erreur base de données dans peutModifierCarte:', dbError);
+        return res.status(500).json({
+          erreur: 'Erreur serveur',
+          message: 'Impossible de vérifier les droits sur cette carte',
         });
       }
     }
@@ -202,10 +199,10 @@ const peutModifierCarte = async (req, res, next) => {
     req.colonnesAutorisees = configRole.colonnesModifiables;
     next();
   } catch (error) {
-    console.error("Erreur dans peutModifierCarte:", error);
-    return res.status(500).json({ 
-      erreur: "Erreur serveur",
-      message: "Une erreur est survenue lors de la vérification des droits"
+    console.error('Erreur dans peutModifierCarte:', error);
+    return res.status(500).json({
+      erreur: 'Erreur serveur',
+      message: 'Une erreur est survenue lors de la vérification des droits',
     });
   }
 };
@@ -216,14 +213,14 @@ const peutModifierCarte = async (req, res, next) => {
 const peutAnnulerAction = (req, res, next) => {
   const role = normaliserRole(req.user?.role);
   const configRole = CONFIG_ROLES[role];
-  
+
   if (configRole?.peutAnnulerAction) {
     return next();
   }
 
   return res.status(403).json({
-    erreur: "Action non autorisée",
-    message: "Seuls les administrateurs peuvent annuler des actions"
+    erreur: 'Action non autorisée',
+    message: 'Seuls les administrateurs peuvent annuler des actions',
   });
 };
 
@@ -233,14 +230,14 @@ const peutAnnulerAction = (req, res, next) => {
 const peutVoirJournal = (req, res, next) => {
   const role = normaliserRole(req.user?.role);
   const configRole = CONFIG_ROLES[role];
-  
+
   if (configRole?.peutVoirJournal) {
     return next();
   }
 
   return res.status(403).json({
-    erreur: "Accès refusé",
-    message: "Seuls les administrateurs peuvent consulter le journal"
+    erreur: 'Accès refusé',
+    message: 'Seuls les administrateurs peuvent consulter le journal',
   });
 };
 
@@ -250,14 +247,14 @@ const peutVoirJournal = (req, res, next) => {
 const peutGererComptes = (req, res, next) => {
   const role = normaliserRole(req.user?.role);
   const configRole = CONFIG_ROLES[role];
-  
+
   if (configRole?.peutGererComptes) {
     return next();
   }
 
   return res.status(403).json({
-    erreur: "Accès refusé",
-    message: "Seuls les administrateurs peuvent gérer les comptes utilisateurs"
+    erreur: 'Accès refusé',
+    message: 'Seuls les administrateurs peuvent gérer les comptes utilisateurs',
   });
 };
 
@@ -268,17 +265,17 @@ const peutGererComptes = (req, res, next) => {
 const ajouterInfosRole = (req, res, next) => {
   const role = normaliserRole(req.user?.role);
   const configRole = CONFIG_ROLES[role];
-  
+
   if (configRole) {
     req.infosRole = {
       role: role,
       niveau: configRole.niveau,
       peutVoirStatistiques: configRole.peutVoirStatistiques,
       colonnesModifiables: configRole.colonnesModifiables,
-      peutVoirInfosSensibles: configRole.peutVoirInfosSensibles
+      peutVoirInfosSensibles: configRole.peutVoirInfosSensibles,
     };
   }
-  
+
   next();
 };
 
@@ -291,8 +288,8 @@ module.exports = {
   peutVoirJournal,
   peutGererComptes,
   ajouterInfosRole,
-  
+
   // Utilitaires
   normaliserRole,
-  CONFIG_ROLES
+  CONFIG_ROLES,
 };

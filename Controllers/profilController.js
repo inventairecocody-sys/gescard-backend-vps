@@ -1,18 +1,18 @@
 const bcrypt = require('bcryptjs');
-const db = require("../db/db");
-const journalController = require("./journalController");
+const db = require('../db/db');
+const journalController = require('./journalController');
 
 // ============================================
 // CONFIGURATION OPTIMISÉE POUR LWS
 // ============================================
 const CONFIG = {
-  saltRounds: 12,              // Niveau de hash bcrypt
-  minPasswordLength: 8,         // Longueur minimale mot de passe
-  maxActivityLimit: 1000,       // Max activités à retourner
-  sessionTimeout: 3600000,      // 1 heure en ms
-  cacheTimeout: 300,            // Cache stats 5 minutes
-  statsCache: new Map(),        // Cache pour les stats utilisateur
-  statsCacheTime: new Map()
+  saltRounds: 12, // Niveau de hash bcrypt
+  minPasswordLength: 8, // Longueur minimale mot de passe
+  maxActivityLimit: 1000, // Max activités à retourner
+  sessionTimeout: 3600000, // 1 heure en ms
+  cacheTimeout: 300, // Cache stats 5 minutes
+  statsCache: new Map(), // Cache pour les stats utilisateur
+  statsCacheTime: new Map(),
 };
 
 // ============================================
@@ -36,9 +36,9 @@ const peutAccederProfil = (req, userIdCible) => {
     return { autorise: true };
   }
 
-  return { 
-    autorise: false, 
-    message: "Vous ne pouvez accéder qu'à votre propre profil" 
+  return {
+    autorise: false,
+    message: "Vous ne pouvez accéder qu'à votre propre profil",
   };
 };
 
@@ -74,11 +74,11 @@ exports.getProfile = async (req, res) => {
     );
 
     const user = result.rows[0];
-    
+
     if (!user) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Utilisateur non trouvé" 
+        message: 'Utilisateur non trouvé',
       });
     }
 
@@ -89,17 +89,16 @@ exports.getProfile = async (req, res) => {
       success: true,
       user,
       performance: {
-        queryTime: Date.now() - startTime
+        queryTime: Date.now() - startTime,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur récupération profil:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur récupération profil:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -117,7 +116,7 @@ exports.getUserProfile = async (req, res) => {
     if (!droits.autorise) {
       return res.status(403).json({
         success: false,
-        message: droits.message
+        message: droits.message,
       });
     }
 
@@ -141,11 +140,11 @@ exports.getUserProfile = async (req, res) => {
     );
 
     const user = result.rows[0];
-    
+
     if (!user) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Utilisateur non trouvé" 
+        message: 'Utilisateur non trouvé',
       });
     }
 
@@ -156,17 +155,16 @@ exports.getUserProfile = async (req, res) => {
       success: true,
       user,
       performance: {
-        queryTime: Date.now() - startTime
+        queryTime: Date.now() - startTime,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur récupération profil utilisateur:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur récupération profil utilisateur:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -178,35 +176,35 @@ exports.getUserProfile = async (req, res) => {
 exports.changePassword = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     const { currentPassword, newPassword, confirmPassword } = req.body;
     const userId = req.user.id;
 
     // Validation
     if (!currentPassword || !newPassword) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Les mots de passe sont requis" 
+        message: 'Les mots de passe sont requis',
       });
     }
 
     if (newPassword.length < CONFIG.minPasswordLength) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: `Le mot de passe doit contenir au moins ${CONFIG.minPasswordLength} caractères` 
+        message: `Le mot de passe doit contenir au moins ${CONFIG.minPasswordLength} caractères`,
       });
     }
 
     if (confirmPassword && newPassword !== confirmPassword) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Les mots de passe ne correspondent pas" 
+        message: 'Les mots de passe ne correspondent pas',
       });
     }
 
@@ -217,25 +215,23 @@ exports.changePassword = async (req, res) => {
 
     if (!(hasUpperCase && hasLowerCase && hasNumbers)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Le mot de passe doit contenir au moins une majuscule, une minuscule et un chiffre" 
+        message:
+          'Le mot de passe doit contenir au moins une majuscule, une minuscule et un chiffre',
       });
     }
 
     // Récupérer l'utilisateur
-    const userResult = await client.query(
-      'SELECT * FROM utilisateurs WHERE id = $1',
-      [userId]
-    );
+    const userResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]);
 
     const user = userResult.rows[0];
-    
+
     if (!user) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Utilisateur non trouvé" 
+        message: 'Utilisateur non trouvé',
       });
     }
 
@@ -243,9 +239,9 @@ exports.changePassword = async (req, res) => {
     const isMatch = await bcrypt.compare(currentPassword, user.motdepasse);
     if (!isMatch) {
       await client.query('ROLLBACK');
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        message: "Mot de passe actuel incorrect" 
+        message: 'Mot de passe actuel incorrect',
       });
     }
 
@@ -253,9 +249,9 @@ exports.changePassword = async (req, res) => {
     const isSamePassword = await bcrypt.compare(newPassword, user.motdepasse);
     if (isSamePassword) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Le nouveau mot de passe doit être différent de l'ancien" 
+        message: "Le nouveau mot de passe doit être différent de l'ancien",
       });
     }
 
@@ -276,34 +272,33 @@ exports.changePassword = async (req, res) => {
       role: user.role,
       agence: user.agence,
       coordination: user.coordination,
-      action: "Changement de mot de passe",
-      actionType: "UPDATE_PASSWORD",
-      tableName: "Utilisateurs",
+      action: 'Changement de mot de passe',
+      actionType: 'UPDATE_PASSWORD',
+      tableName: 'Utilisateurs',
       recordId: user.id.toString(),
-      details: "Modification du mot de passe",
-      ip: req.ip
+      details: 'Modification du mot de passe',
+      ip: req.ip,
     });
 
     await client.query('COMMIT');
 
     const duration = Date.now() - startTime;
 
-    res.json({ 
+    res.json({
       success: true,
-      message: "Mot de passe modifié avec succès",
+      message: 'Mot de passe modifié avec succès',
       performance: {
-        duration
+        duration,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error("❌ Erreur changement mot de passe:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur changement mot de passe:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   } finally {
     client.release();
@@ -317,43 +312,42 @@ exports.changePassword = async (req, res) => {
 exports.updateProfile = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     const { nomComplet, email, agence } = req.body;
     const userId = req.user.id;
 
     // Validation
     if (!nomComplet || nomComplet.trim() === '') {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Le nom complet est requis" 
+        message: 'Le nom complet est requis',
       });
     }
 
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Format d'email invalide" 
+        message: "Format d'email invalide",
       });
     }
 
     // Récupérer l'ancien profil
-    const oldProfileResult = await client.query(
-      'SELECT * FROM utilisateurs WHERE id = $1',
-      [userId]
-    );
+    const oldProfileResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [
+      userId,
+    ]);
 
     const oldProfile = oldProfileResult.rows[0];
-    
+
     if (!oldProfile) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Utilisateur non trouvé" 
+        message: 'Utilisateur non trouvé',
       });
     }
 
@@ -365,9 +359,9 @@ exports.updateProfile = async (req, res) => {
       );
       if (emailCheck.rows.length > 0) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ 
+        return res.status(400).json({
           success: false,
-          message: "Cet email est déjà utilisé" 
+          message: 'Cet email est déjà utilisé',
         });
       }
     }
@@ -409,22 +403,22 @@ exports.updateProfile = async (req, res) => {
         role: oldProfile.role,
         agence: oldProfile.agence,
         coordination: oldProfile.coordination,
-        action: "Modification du profil",
-        actionType: "UPDATE_PROFILE",
-        tableName: "Utilisateurs",
+        action: 'Modification du profil',
+        actionType: 'UPDATE_PROFILE',
+        tableName: 'Utilisateurs',
         recordId: userId.toString(),
         oldValue: JSON.stringify({
           nomComplet: oldProfile.nomcomplet,
           email: oldProfile.email,
-          agence: oldProfile.agence
+          agence: oldProfile.agence,
         }),
         newValue: JSON.stringify({
           nomComplet: newProfile.nomcomplet,
           email: newProfile.email,
-          agence: newProfile.agence
+          agence: newProfile.agence,
         }),
         details: `Modification: ${changes.join(', ')}`,
-        ip: req.ip
+        ip: req.ip,
       });
     }
 
@@ -432,24 +426,23 @@ exports.updateProfile = async (req, res) => {
 
     const duration = Date.now() - startTime;
 
-    res.json({ 
+    res.json({
       success: true,
-      message: "Profil mis à jour avec succès",
+      message: 'Profil mis à jour avec succès',
       user: newProfile,
       changes: changes.length > 0 ? changes : ['aucun changement'],
       performance: {
-        duration
+        duration,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error("❌ Erreur mise à jour profil:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur mise à jour profil:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   } finally {
     client.release();
@@ -505,20 +498,19 @@ exports.getUserActivity = async (req, res) => {
         total,
         totalPages,
         hasNext: actualPage < totalPages,
-        hasPrev: actualPage > 1
+        hasPrev: actualPage > 1,
       },
       performance: {
-        queryTime: Date.now() - startTime
+        queryTime: Date.now() - startTime,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur récupération activités:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur récupération activités:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -535,7 +527,7 @@ exports.getUserActivityById = async (req, res) => {
     if (req.user.role !== 'Administrateur') {
       return res.status(403).json({
         success: false,
-        message: "Seuls les administrateurs peuvent consulter l'activité des autres utilisateurs"
+        message: "Seuls les administrateurs peuvent consulter l'activité des autres utilisateurs",
       });
     }
 
@@ -582,20 +574,19 @@ exports.getUserActivityById = async (req, res) => {
         total,
         totalPages,
         hasNext: actualPage < totalPages,
-        hasPrev: actualPage > 1
+        hasPrev: actualPage > 1,
       },
       performance: {
-        queryTime: Date.now() - startTime
+        queryTime: Date.now() - startTime,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur récupération activités utilisateur:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur récupération activités utilisateur:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -610,9 +601,9 @@ exports.checkUsernameAvailability = async (req, res) => {
     const userId = req.user.id;
 
     if (!username || username.trim() === '') {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Nom d'utilisateur requis" 
+        message: "Nom d'utilisateur requis",
       });
     }
 
@@ -621,7 +612,7 @@ exports.checkUsernameAvailability = async (req, res) => {
     if (!usernameRegex.test(username)) {
       return res.status(400).json({
         success: false,
-        message: "Le nom d'utilisateur doit contenir 3-30 caractères (lettres, chiffres, . _ -)"
+        message: "Le nom d'utilisateur doit contenir 3-30 caractères (lettres, chiffres, . _ -)",
       });
     }
 
@@ -639,17 +630,16 @@ exports.checkUsernameAvailability = async (req, res) => {
       available: isAvailable,
       message: isAvailable ? "Nom d'utilisateur disponible" : "Nom d'utilisateur déjà utilisé",
       performance: {
-        queryTime: Date.now() - startTime
+        queryTime: Date.now() - startTime,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error("❌ Erreur vérification nom d'utilisateur:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -661,19 +651,19 @@ exports.checkUsernameAvailability = async (req, res) => {
 exports.updateUsername = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     const { newUsername, password } = req.body;
     const userId = req.user.id;
 
     // Validation
     if (!newUsername || newUsername.trim() === '') {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Nouveau nom d'utilisateur requis" 
+        message: "Nouveau nom d'utilisateur requis",
       });
     }
 
@@ -683,7 +673,7 @@ exports.updateUsername = async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({
         success: false,
-        message: "Le nom d'utilisateur doit contenir 3-30 caractères (lettres, chiffres, . _ -)"
+        message: "Le nom d'utilisateur doit contenir 3-30 caractères (lettres, chiffres, . _ -)",
       });
     }
 
@@ -692,23 +682,20 @@ exports.updateUsername = async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({
         success: false,
-        message: "Mot de passe requis pour modifier le nom d'utilisateur"
+        message: "Mot de passe requis pour modifier le nom d'utilisateur",
       });
     }
 
     // Récupérer l'utilisateur
-    const userResult = await client.query(
-      'SELECT * FROM utilisateurs WHERE id = $1',
-      [userId]
-    );
+    const userResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]);
 
     const user = userResult.rows[0];
-    
+
     if (!user) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Utilisateur non trouvé" 
+        message: 'Utilisateur non trouvé',
       });
     }
 
@@ -716,9 +703,9 @@ exports.updateUsername = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.motdepasse);
     if (!isMatch) {
       await client.query('ROLLBACK');
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        message: "Mot de passe incorrect" 
+        message: 'Mot de passe incorrect',
       });
     }
 
@@ -730,17 +717,17 @@ exports.updateUsername = async (req, res) => {
 
     if (checkResult.rows.length > 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Ce nom d'utilisateur est déjà utilisé" 
+        message: "Ce nom d'utilisateur est déjà utilisé",
       });
     }
 
     // Mettre à jour le nom d'utilisateur
-    await client.query(
-      'UPDATE utilisateurs SET nomutilisateur = $1 WHERE id = $2',
-      [newUsername.trim(), userId]
-    );
+    await client.query('UPDATE utilisateurs SET nomutilisateur = $1 WHERE id = $2', [
+      newUsername.trim(),
+      userId,
+    ]);
 
     // ✅ JOURNALISATION
     await journalController.logAction({
@@ -751,36 +738,35 @@ exports.updateUsername = async (req, res) => {
       agence: user.agence,
       coordination: user.coordination,
       action: "Changement de nom d'utilisateur",
-      actionType: "UPDATE_USERNAME",
-      tableName: "Utilisateurs",
+      actionType: 'UPDATE_USERNAME',
+      tableName: 'Utilisateurs',
       recordId: userId.toString(),
       oldValue: JSON.stringify({ nomUtilisateur: user.nomutilisateur }),
       newValue: JSON.stringify({ nomUtilisateur: newUsername.trim() }),
       details: `Changement de nom d'utilisateur`,
-      ip: req.ip
+      ip: req.ip,
     });
 
     await client.query('COMMIT');
 
     const duration = Date.now() - startTime;
 
-    res.json({ 
+    res.json({
       success: true,
       message: "Nom d'utilisateur modifié avec succès",
       newUsername: newUsername.trim(),
       performance: {
-        duration
+        duration,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     await client.query('ROLLBACK');
     console.error("❌ Erreur changement nom d'utilisateur:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   } finally {
     client.release();
@@ -798,15 +784,17 @@ exports.getProfileStats = async (req, res) => {
 
     // Vérifier le cache
     const cacheKey = `user_stats_${userId}`;
-    if (!forceRefresh && 
-        CONFIG.statsCache.has(cacheKey) && 
-        CONFIG.statsCacheTime.has(cacheKey) && 
-        (Date.now() - CONFIG.statsCacheTime.get(cacheKey)) < CONFIG.cacheTimeout * 1000) {
+    if (
+      !forceRefresh &&
+      CONFIG.statsCache.has(cacheKey) &&
+      CONFIG.statsCacheTime.has(cacheKey) &&
+      Date.now() - CONFIG.statsCacheTime.get(cacheKey) < CONFIG.cacheTimeout * 1000
+    ) {
       return res.json({
         success: true,
         ...CONFIG.statsCache.get(cacheKey),
         cached: true,
-        cacheAge: Math.round((Date.now() - CONFIG.statsCacheTime.get(cacheKey)) / 1000) + 's'
+        cacheAge: Math.round((Date.now() - CONFIG.statsCacheTime.get(cacheKey)) / 1000) + 's',
       });
     }
 
@@ -875,21 +863,24 @@ exports.getProfileStats = async (req, res) => {
         actionsLast30Days: parseInt(activityStats.rows[0].actions_30j),
         lastLogin: lastLoginResult.rows[0]?.dateaction || null,
         firstAction: firstLoginResult.rows[0]?.first_action || null,
-        memberSince: firstLoginResult.rows[0]?.first_action 
-          ? Math.ceil((Date.now() - new Date(firstLoginResult.rows[0].first_action)) / (1000 * 60 * 60 * 24)) + ' jours'
-          : 'N/A'
+        memberSince: firstLoginResult.rows[0]?.first_action
+          ? Math.ceil(
+              (Date.now() - new Date(firstLoginResult.rows[0].first_action)) / (1000 * 60 * 60 * 24)
+            ) + ' jours'
+          : 'N/A',
       },
-      frequentActions: frequentActions.rows.map(a => ({
+      frequentActions: frequentActions.rows.map((a) => ({
         ...a,
         count: parseInt(a.count),
-        pourcentage: activityStats.rows[0].total_actions > 0 
-          ? Math.round((a.count / activityStats.rows[0].total_actions) * 100) 
-          : 0
+        pourcentage:
+          activityStats.rows[0].total_actions > 0
+            ? Math.round((a.count / activityStats.rows[0].total_actions) * 100)
+            : 0,
       })),
       dailyActivity: dailyActivity.rows,
       performance: {
-        queryTime: Date.now() - startTime
-      }
+        queryTime: Date.now() - startTime,
+      },
     };
 
     // Mettre en cache
@@ -900,15 +891,14 @@ exports.getProfileStats = async (req, res) => {
       success: true,
       ...statsData,
       cached: false,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur statistiques profil:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur statistiques profil:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -920,34 +910,31 @@ exports.getProfileStats = async (req, res) => {
 exports.deactivateAccount = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     const { password, reason } = req.body;
     const userId = req.user.id;
 
     if (!password) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Mot de passe requis pour désactiver le compte" 
+        message: 'Mot de passe requis pour désactiver le compte',
       });
     }
 
     // Récupérer l'utilisateur
-    const userResult = await client.query(
-      'SELECT * FROM utilisateurs WHERE id = $1',
-      [userId]
-    );
+    const userResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]);
 
     const user = userResult.rows[0];
-    
+
     if (!user) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Utilisateur non trouvé" 
+        message: 'Utilisateur non trouvé',
       });
     }
 
@@ -955,18 +942,18 @@ exports.deactivateAccount = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.motdepasse);
     if (!isMatch) {
       await client.query('ROLLBACK');
-      return res.status(401).json({ 
+      return res.status(401).json({
         success: false,
-        message: "Mot de passe incorrect" 
+        message: 'Mot de passe incorrect',
       });
     }
 
     // Vérifier si déjà inactif
     if (!user.actif) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Le compte est déjà désactivé" 
+        message: 'Le compte est déjà désactivé',
       });
     }
 
@@ -984,35 +971,34 @@ exports.deactivateAccount = async (req, res) => {
       role: user.role,
       agence: user.agence,
       coordination: user.coordination,
-      action: "Désactivation du compte",
-      actionType: "DEACTIVATE_ACCOUNT",
-      tableName: "Utilisateurs",
+      action: 'Désactivation du compte',
+      actionType: 'DEACTIVATE_ACCOUNT',
+      tableName: 'Utilisateurs',
       recordId: userId.toString(),
-      details: reason ? `Désactivation: ${reason}` : "Désactivation du compte",
-      ip: req.ip
+      details: reason ? `Désactivation: ${reason}` : 'Désactivation du compte',
+      ip: req.ip,
     });
 
     await client.query('COMMIT');
 
     const duration = Date.now() - startTime;
 
-    res.json({ 
+    res.json({
       success: true,
-      message: "Compte désactivé avec succès",
-      note: "Votre compte a été désactivé. Contactez un administrateur pour le réactiver.",
+      message: 'Compte désactivé avec succès',
+      note: 'Votre compte a été désactivé. Contactez un administrateur pour le réactiver.',
       performance: {
-        duration
+        duration,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error("❌ Erreur désactivation compte:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur désactivation compte:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   } finally {
     client.release();
@@ -1026,43 +1012,40 @@ exports.deactivateAccount = async (req, res) => {
 exports.reactivateAccount = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     const { userId } = req.params;
     const adminId = req.user.id;
 
     // Vérifier les droits admin
     if (req.user.role !== 'Administrateur') {
       await client.query('ROLLBACK');
-      return res.status(403).json({ 
+      return res.status(403).json({
         success: false,
-        message: "Permission refusée - Action réservée aux administrateurs" 
+        message: 'Permission refusée - Action réservée aux administrateurs',
       });
     }
 
     // Récupérer l'utilisateur à réactiver
-    const userResult = await client.query(
-      'SELECT * FROM utilisateurs WHERE id = $1',
-      [userId]
-    );
+    const userResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]);
 
     const user = userResult.rows[0];
-    
+
     if (!user) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Utilisateur non trouvé" 
+        message: 'Utilisateur non trouvé',
       });
     }
 
     if (user.actif) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Le compte est déjà actif" 
+        message: 'Le compte est déjà actif',
       });
     }
 
@@ -1080,39 +1063,38 @@ exports.reactivateAccount = async (req, res) => {
       role: req.user.role,
       agence: req.user.agence,
       coordination: req.user.coordination,
-      action: "Réactivation de compte",
-      actionType: "REACTIVATE_ACCOUNT",
-      tableName: "Utilisateurs",
+      action: 'Réactivation de compte',
+      actionType: 'REACTIVATE_ACCOUNT',
+      tableName: 'Utilisateurs',
       recordId: userId.toString(),
       details: `Compte réactivé par admin: ${user.nomutilisateur}`,
-      ip: req.ip
+      ip: req.ip,
     });
 
     await client.query('COMMIT');
 
     const duration = Date.now() - startTime;
 
-    res.json({ 
+    res.json({
       success: true,
-      message: "Compte réactivé avec succès",
+      message: 'Compte réactivé avec succès',
       user: {
         id: user.id,
         nomUtilisateur: user.nomutilisateur,
-        actif: true
+        actif: true,
       },
       performance: {
-        duration
+        duration,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error("❌ Erreur réactivation compte:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur réactivation compte:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   } finally {
     client.release();
@@ -1170,7 +1152,7 @@ exports.exportProfileData = async (req, res) => {
       activities: activitiesResult.rows,
       exportDate: new Date().toISOString(),
       totalActivities: activitiesResult.rows.length,
-      generatedBy: req.user.nomutilisateur
+      generatedBy: req.user.nomutilisateur,
     };
 
     const filename = `profil-${req.user.nomutilisateur}-${new Date().toISOString().split('T')[0]}`;
@@ -1178,16 +1160,18 @@ exports.exportProfileData = async (req, res) => {
     if (format === 'csv') {
       // Export CSV
       const csvHeaders = 'Type,Action,Date,Table,Détails,BatchID,Annulée\n';
-      const csvData = activitiesResult.rows.map(row => 
-        `"${row.actiontype || ''}","${(row.action || '').replace(/"/g, '""')}","${row.dateaction || ''}","${row.tablename || ''}","${(row.detailsaction || '').replace(/"/g, '""')}","${row.importbatchid || ''}","${row.annulee ? 'Oui' : 'Non'}"`
-      ).join('\n');
-      
+      const csvData = activitiesResult.rows
+        .map(
+          (row) =>
+            `"${row.actiontype || ''}","${(row.action || '').replace(/"/g, '""')}","${row.dateaction || ''}","${row.tablename || ''}","${(row.detailsaction || '').replace(/"/g, '""')}","${row.importbatchid || ''}","${row.annulee ? 'Oui' : 'Non'}"`
+        )
+        .join('\n');
+
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.write('\uFEFF'); // BOM UTF-8
       res.send(csvHeaders + csvData);
-
     } else {
       // Export JSON
       res.setHeader('Content-Type', 'application/json');
@@ -1196,17 +1180,16 @@ exports.exportProfileData = async (req, res) => {
         success: true,
         ...exportData,
         performance: {
-          queryTime: Date.now() - startTime
-        }
+          queryTime: Date.now() - startTime,
+        },
       });
     }
-
   } catch (error) {
-    console.error("❌ Erreur export données profil:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur export données profil:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -1239,15 +1222,14 @@ exports.getActiveSessions = async (req, res) => {
       success: true,
       sessions: result.rows,
       total: result.rows.length,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur récupération sessions:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur récupération sessions:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -1261,23 +1243,22 @@ exports.logoutOtherSessions = async (req, res) => {
     const userId = req.user.id;
     const currentSessionId = req.sessionId; // À adapter
 
-    await db.query(
-      'DELETE FROM user_sessions WHERE user_id = $1 AND id != $2',
-      [userId, currentSessionId]
-    );
+    await db.query('DELETE FROM user_sessions WHERE user_id = $1 AND id != $2', [
+      userId,
+      currentSessionId,
+    ]);
 
     res.json({
       success: true,
-      message: "Autres sessions déconnectées avec succès",
-      timestamp: new Date().toISOString()
+      message: 'Autres sessions déconnectées avec succès',
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur déconnexion autres sessions:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur déconnexion autres sessions:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -1290,22 +1271,21 @@ exports.clearUserCache = async (req, res) => {
   try {
     const userId = req.user.id;
     const cacheKey = `user_stats_${userId}`;
-    
+
     CONFIG.statsCache.delete(cacheKey);
     CONFIG.statsCacheTime.delete(cacheKey);
 
     res.json({
       success: true,
-      message: "Cache utilisateur nettoyé",
-      timestamp: new Date().toISOString()
+      message: 'Cache utilisateur nettoyé',
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur nettoyage cache:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur nettoyage cache:', error);
+    res.status(500).json({
       success: false,
-      message: "Erreur serveur", 
-      error: error.message 
+      message: 'Erreur serveur',
+      error: error.message,
     });
   }
 };
@@ -1320,7 +1300,7 @@ exports.diagnostic = async (req, res) => {
     if (req.user.role !== 'Administrateur') {
       return res.status(403).json({
         success: false,
-        message: "Seuls les administrateurs peuvent accéder au diagnostic"
+        message: 'Seuls les administrateurs peuvent accéder au diagnostic',
       });
     }
 
@@ -1359,30 +1339,31 @@ exports.diagnostic = async (req, res) => {
       service: 'profil',
       utilisateur: {
         role: req.user.role,
-        coordination: req.user.coordination
+        coordination: req.user.coordination,
       },
       statistiques: {
         total_utilisateurs: parseInt(stats.total_utilisateurs),
         utilisateurs_actifs: parseInt(stats.utilisateurs_actifs),
         utilisateurs_inactifs: parseInt(stats.utilisateurs_inactifs),
-        taux_activation: stats.total_utilisateurs > 0 
-          ? Math.round((stats.utilisateurs_actifs / stats.total_utilisateurs) * 100) 
-          : 0,
+        taux_activation:
+          stats.total_utilisateurs > 0
+            ? Math.round((stats.utilisateurs_actifs / stats.total_utilisateurs) * 100)
+            : 0,
         premier_utilisateur: stats.premier_utilisateur,
         dernier_utilisateur: stats.dernier_utilisateur,
         roles_distincts: parseInt(stats.roles_distincts),
         agences_distinctes: parseInt(stats.agences_distinctes),
-        coordinations_distinctes: parseInt(stats.coordinations_distinctes)
+        coordinations_distinctes: parseInt(stats.coordinations_distinctes),
       },
       coordination_stats: coordinationStats.rows,
       config: {
         saltRounds: CONFIG.saltRounds,
         minPasswordLength: CONFIG.minPasswordLength,
         maxActivityLimit: CONFIG.maxActivityLimit,
-        cacheTimeout: CONFIG.cacheTimeout
+        cacheTimeout: CONFIG.cacheTimeout,
       },
       performance: {
-        queryTime: Date.now() - startTime
+        queryTime: Date.now() - startTime,
       },
       endpoints: [
         '/api/profil',
@@ -1399,15 +1380,14 @@ exports.diagnostic = async (req, res) => {
         '/api/profil/sessions',
         '/api/profil/logout-others',
         '/api/profil/cache/clear',
-        '/api/profil/diagnostic'
-      ]
+        '/api/profil/diagnostic',
+      ],
     });
-
   } catch (error) {
-    console.error("❌ Erreur diagnostic:", error);
+    console.error('❌ Erreur diagnostic:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 };

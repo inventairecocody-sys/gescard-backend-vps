@@ -1,0 +1,25 @@
+{
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "extends": ["eslint:recommended", "plugin:prettier/recommended"],
+  "plugins": ["import"],
+  "parserOptions": {
+    "ecmaVersion": "latest"
+  },
+  "rules": {
+    "no-unused-vars": "warn",
+    "no-console": "off",
+    "no-undef": "error",
+
+    // 🔥 Règles du plugin import
+    "import/no-unresolved": ["error", { "caseSensitive": true }],
+    "import/named": "error",
+    "import/default": "error",
+    "import/namespace": "error",
+    "import/no-named-as-default": "error",
+    "import/no-useless-path-segments": "error",
+    "import/no-duplicates": "error"
+  }
+}

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const inventaireController = require('../controllers/inventaireController');
+const inventaireController = require('../Controllers/inventaireController');
 const { verifierToken } = require('../middleware/auth');
 const role = require('../middleware/verificationRole');
 const permission = require('../middleware/permission');
@@ -19,39 +19,39 @@ const INVENTAIRE_CONFIG = {
         success: false,
         error: 'Trop de recherches',
         message: 'Veuillez ralentir vos recherches',
-        code: 'SEARCH_RATE_LIMIT'
-      }
+        code: 'SEARCH_RATE_LIMIT',
+      },
     }),
-    
+
     stats: rateLimit({
       windowMs: 60 * 1000, // 1 minute
       max: 20, // 20 requêtes de stats par minute
       message: {
         success: false,
         error: 'Trop de requêtes de statistiques',
-        code: 'STATS_RATE_LIMIT'
-      }
+        code: 'STATS_RATE_LIMIT',
+      },
     }),
-    
+
     export: rateLimit({
       windowMs: 15 * 60 * 1000, // 15 minutes
       max: 10, // 10 exports par 15 minutes
       message: {
         success: false,
-        error: 'Trop d\'exports',
-        message: 'Limite d\'exports atteinte, réessayez dans 15 minutes',
-        code: 'EXPORT_RATE_LIMIT'
-      }
-    })
+        error: "Trop d'exports",
+        message: "Limite d'exports atteinte, réessayez dans 15 minutes",
+        code: 'EXPORT_RATE_LIMIT',
+      },
+    }),
   },
-  
+
   // Cache control
   cacheControl: {
     search: 'private, max-age=10', // 10 secondes
     stats: 'private, max-age=300', // 5 minutes
     sites: 'public, max-age=3600', // 1 heure
-    export: 'private, no-cache'
-  }
+    export: 'private, no-cache',
+  },
 };
 
 // ============================================
@@ -74,7 +74,9 @@ router.use((req, res, next) => {
 
 // Middleware de logging spécifique à l'inventaire
 router.use((req, res, next) => {
-  console.log(`📦 [Inventaire] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur} (${req.user?.role}) - Coordination: ${req.user?.coordination || 'Aucune'}`);
+  console.log(
+    `📦 [Inventaire] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur} (${req.user?.role}) - Coordination: ${req.user?.coordination || 'Aucune'}`
+  );
   next();
 });
 
@@ -88,9 +90,9 @@ router.use((req, res, next) => {
  * Accessible à tous les rôles (Admin, Gestionnaire, Chef d'équipe, Opérateur)
  */
 router.get(
-  '/recherche', 
+  '/recherche',
   role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.search, 
+  INVENTAIRE_CONFIG.rateLimits.search,
   inventaireController.rechercheCartes
 );
 
@@ -100,9 +102,9 @@ router.get(
  * Accessible à tous les rôles
  */
 router.get(
-  '/recherche-rapide', 
+  '/recherche-rapide',
   role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.search, 
+  INVENTAIRE_CONFIG.rateLimits.search,
   inventaireController.rechercheRapide
 );
 
@@ -116,9 +118,9 @@ router.get(
  * Accessible selon le rôle (Admin: tout, Gestionnaire: sa coordination)
  */
 router.get(
-  '/stats', 
+  '/stats',
   permission.peutVoirStatistiques,
-  INVENTAIRE_CONFIG.rateLimits.stats, 
+  INVENTAIRE_CONFIG.rateLimits.stats,
   inventaireController.getStatistiques
 );
 
@@ -128,9 +130,9 @@ router.get(
  * Accessible selon le rôle
  */
 router.get(
-  '/statistiques', 
+  '/statistiques',
   permission.peutVoirStatistiques,
-  INVENTAIRE_CONFIG.rateLimits.stats, 
+  INVENTAIRE_CONFIG.rateLimits.stats,
   inventaireController.getStatistiques
 );
 
@@ -140,9 +142,9 @@ router.get(
  * Accessible uniquement aux administrateurs
  */
 router.post(
-  '/cache/refresh', 
+  '/cache/refresh',
   role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.stats, 
+  INVENTAIRE_CONFIG.rateLimits.stats,
   inventaireController.refreshCache
 );
 
@@ -156,9 +158,9 @@ router.post(
  * Accessible à tous les rôles (filtré par coordination pour Gestionnaires/Chefs)
  */
 router.get(
-  '/sites', 
+  '/sites',
   role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.search, 
+  INVENTAIRE_CONFIG.rateLimits.search,
   inventaireController.getSites
 );
 
@@ -168,9 +170,9 @@ router.get(
  * Accessible à tous les rôles (filtré par coordination)
  */
 router.get(
-  '/site/:site', 
+  '/site/:site',
   role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.search, 
+  INVENTAIRE_CONFIG.rateLimits.search,
   inventaireController.getCartesParSite
 );
 
@@ -180,9 +182,9 @@ router.get(
  * Accessible selon le rôle (filtré par coordination)
  */
 router.get(
-  '/site/:site/stats', 
+  '/site/:site/stats',
   permission.peutVoirStatistiques,
-  INVENTAIRE_CONFIG.rateLimits.stats, 
+  INVENTAIRE_CONFIG.rateLimits.stats,
   inventaireController.getSiteStats
 );
 
@@ -196,9 +198,9 @@ router.get(
  * Accessible uniquement aux Admins et Gestionnaires (via importExportController)
  */
 router.get(
-  '/export', 
+  '/export',
   role.peutImporterExporter,
-  INVENTAIRE_CONFIG.rateLimits.export, 
+  INVENTAIRE_CONFIG.rateLimits.export,
   async (req, res) => {
     try {
       // Rediriger vers le contrôleur d'export avec les mêmes filtres
@@ -208,8 +210,8 @@ router.get(
       console.error('❌ Erreur export inventaire:', error);
       res.status(500).json({
         success: false,
-        error: 'Erreur lors de l\'export',
-        details: error.message
+        error: "Erreur lors de l'export",
+        details: error.message,
       });
     }
   }
@@ -225,9 +227,9 @@ router.get(
  * Accessible uniquement aux administrateurs
  */
 router.get(
-  '/diagnostic', 
+  '/diagnostic',
   role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.search, 
+  INVENTAIRE_CONFIG.rateLimits.search,
   inventaireController.diagnostic
 );
 
@@ -237,9 +239,9 @@ router.get(
  * Accessible à tous les rôles
  */
 router.get(
-  '/filtres', 
+  '/filtres',
   role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.search, 
+  INVENTAIRE_CONFIG.rateLimits.search,
   (req, res) => {
     res.json({
       success: true,
@@ -253,25 +255,25 @@ router.get(
         { nom: 'rangement', type: 'string', description: 'Code de rangement' },
         { nom: 'delivrance', type: 'string', description: 'Statut de délivrance (OUI/NON)' },
         { nom: 'dateDebut', type: 'date', description: 'Date début pour filtre temporel' },
-        { nom: 'dateFin', type: 'date', description: 'Date fin pour filtre temporel' }
+        { nom: 'dateFin', type: 'date', description: 'Date fin pour filtre temporel' },
       ],
       pagination: {
         page: 'Numéro de page (défaut: 1)',
         limit: 'Nombre de résultats par page (défaut: 50, max: 10000)',
-        export_all: 'true pour exporter toutes les données sans pagination'
+        export_all: 'true pour exporter toutes les données sans pagination',
       },
       roles_autorises: {
         administrateur: 'Accès complet à toutes les données',
         gestionnaire: 'Accès limité à sa coordination',
         chef_equipe: 'Accès limité à sa coordination (lecture seule)',
-        operateur: 'Accès limité à sa coordination (lecture seule)'
+        operateur: 'Accès limité à sa coordination (lecture seule)',
       },
       exemples: {
         recherche_simple: '/api/inventaire/recherche?nom=KOUAME&prenom=Jean',
         recherche_avancee: '/api/inventaire/recherche?siteRetrait=ADJAME&delivrance=OUI&limit=100',
-        export: '/api/inventaire/export?nom=KOUAME&export_all=true'
+        export: '/api/inventaire/export?nom=KOUAME&export_all=true',
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 );
@@ -281,13 +283,13 @@ router.get(
 // ============================================
 
 router.get('/', (req, res) => {
-  const roleInfo = req.user ? 
-    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - Coordination: ${req.user.coordination || 'Aucune'}` : 
-    'Non authentifié';
-  
+  const roleInfo = req.user
+    ? `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - Coordination: ${req.user.coordination || 'Aucune'}`
+    : 'Non authentifié';
+
   res.json({
     name: 'API Inventaire GESCARD',
-    description: 'Module de gestion et recherche d\'inventaire',
+    description: "Module de gestion et recherche d'inventaire",
     version: '2.0.0-lws',
     timestamp: new Date().toISOString(),
     authentification: roleInfo,
@@ -295,49 +297,59 @@ router.get('/', (req, res) => {
       administrateur: 'Accès complet à toutes les données',
       gestionnaire: 'Accès limité à sa coordination',
       chef_equipe: 'Accès limité à sa coordination (lecture seule)',
-      operateur: 'Accès limité à sa coordination (lecture seule)'
+      operateur: 'Accès limité à sa coordination (lecture seule)',
     },
     endpoints: {
       recherche: {
         'GET /recherche': 'Recherche multicritères avec pagination',
         'GET /recherche-rapide': 'Recherche rapide (barre de recherche)',
-        'GET /export': 'Exporter les résultats de recherche'
+        'GET /export': 'Exporter les résultats de recherche',
       },
       statistiques: {
         'GET /stats': 'Statistiques globales (filtrées par rôle)',
         'GET /statistiques': 'Statistiques détaillées (filtrées par rôle)',
         'GET /site/:site/stats': 'Statistiques par site (filtrées par rôle)',
-        'POST /cache/refresh': 'Rafraîchir le cache des stats (Admin)'
+        'POST /cache/refresh': 'Rafraîchir le cache des stats (Admin)',
       },
       sites: {
         'GET /sites': 'Liste des sites (filtrée par rôle)',
-        'GET /site/:site': 'Cartes par site avec pagination (filtrée par rôle)'
+        'GET /site/:site': 'Cartes par site avec pagination (filtrée par rôle)',
       },
       utilitaires: {
         'GET /diagnostic': 'Diagnostic du module (Admin)',
-        'GET /filtres': 'Liste des filtres disponibles'
-      }
+        'GET /filtres': 'Liste des filtres disponibles',
+      },
     },
     filtres_disponibles: [
-      'nom', 'prenom', 'contact', 'siteRetrait', 
-      'lieuNaissance', 'dateNaissance', 'rangement', 
-      'delivrance', 'dateDebut', 'dateFin'
+      'nom',
+      'prenom',
+      'contact',
+      'siteRetrait',
+      'lieuNaissance',
+      'dateNaissance',
+      'rangement',
+      'delivrance',
+      'dateDebut',
+      'dateFin',
     ],
     pagination: {
       page: 'Numéro de page',
       limit: 'Nombre de résultats (max 10000)',
-      export_all: 'Mode export (ignore la pagination)'
+      export_all: 'Mode export (ignore la pagination)',
     },
     rate_limits: {
       recherche: '30 requêtes par minute',
       stats: '20 requêtes par minute',
-      export: '10 exports par 15 minutes'
+      export: '10 exports par 15 minutes',
     },
     exemples: {
-      curl_recherche: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/inventaire/recherche?nom=KOUAME&page=1&limit=50"',
-      curl_site: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/inventaire/site/ADJAME"',
-      curl_stats: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/inventaire/stats"'
-    }
+      curl_recherche:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/inventaire/recherche?nom=KOUAME&page=1&limit=50"',
+      curl_site:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/inventaire/site/ADJAME"',
+      curl_stats:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/inventaire/stats"',
+    },
   });
 });
 
@@ -362,9 +374,9 @@ router.use((req, res) => {
       'GET /api/inventaire/export',
       'GET /api/inventaire/diagnostic',
       'GET /api/inventaire/filtres',
-      'POST /api/inventaire/cache/refresh'
+      'POST /api/inventaire/cache/refresh',
     ],
-    code: 'ROUTE_NOT_FOUND'
+    code: 'ROUTE_NOT_FOUND',
   });
 });
 

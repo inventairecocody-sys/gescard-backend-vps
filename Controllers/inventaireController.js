@@ -5,11 +5,11 @@ const db = require('../db/db');
 // ============================================
 const CONFIG = {
   defaultLimit: 50,
-  maxLimit: 10000,           // Limite max pour les exports
-  searchMinLength: 2,         // Longueur min pour recherche
-  cacheTimeout: 300,          // Cache de 5 minutes pour les stats
+  maxLimit: 10000, // Limite max pour les exports
+  searchMinLength: 2, // Longueur min pour recherche
+  cacheTimeout: 300, // Cache de 5 minutes pour les stats
   statsCache: null,
-  statsCacheTime: null
+  statsCacheTime: null,
 };
 
 // ============================================
@@ -22,20 +22,20 @@ const CONFIG = {
 const ajouterFiltreCoordination = (req, query, params, colonne = 'coordination') => {
   const role = req.user?.role;
   const coordination = req.user?.coordination;
-  
+
   // Admin voit tout
   if (role === 'Administrateur') {
     return { query, params };
   }
-  
+
   // Gestionnaire et Chef d'équipe: filtrés par coordination
   if ((role === 'Gestionnaire' || role === "Chef d'équipe") && coordination) {
     return {
       query: query + ` AND ${colonne} = $${params.length + 1}`,
-      params: [...params, coordination]
+      params: [...params, coordination],
     };
   }
-  
+
   // Opérateur: voit tout mais en lecture seule (pas de filtre)
   return { query, params };
 };
@@ -52,33 +52,33 @@ const peutVoirInfosSensibles = (req) => {
  */
 const masquerInfosSensibles = (req, carte) => {
   if (!carte) return carte;
-  
+
   const role = req.user?.role;
-  
+
   // Admin voit tout
   if (role === 'Administrateur') {
     return carte;
   }
-  
+
   // Créer une copie pour ne pas modifier l'original
   const carteMasquee = { ...carte };
-  
+
   // Gestionnaire et Chef d'équipe: voient tout (pas d'infos ultra-sensibles dans l'inventaire)
   if (role === 'Gestionnaire' || role === "Chef d'équipe") {
     return carteMasquee;
   }
-  
+
   // Opérateur: masquer certaines infos si nécessaire
   if (role === 'Opérateur') {
     // Par exemple, masquer les contacts partiellement
     if (carteMasquee.contact && carteMasquee.contact.length > 4) {
       carteMasquee.contact = carteMasquee.contact.slice(0, -4) + '****';
     }
-    if (carteMasquee["CONTACT DE RETRAIT"] && carteMasquee["CONTACT DE RETRAIT"].length > 4) {
-      carteMasquee["CONTACT DE RETRAIT"] = carteMasquee["CONTACT DE RETRAIT"].slice(0, -4) + '****';
+    if (carteMasquee['CONTACT DE RETRAIT'] && carteMasquee['CONTACT DE RETRAIT'].length > 4) {
+      carteMasquee['CONTACT DE RETRAIT'] = carteMasquee['CONTACT DE RETRAIT'].slice(0, -4) + '****';
     }
   }
-  
+
   return carteMasquee;
 };
 
@@ -87,14 +87,13 @@ const masquerInfosSensibles = (req, carte) => {
  */
 const masquerInfosSensiblesTableau = (req, cartes) => {
   if (!Array.isArray(cartes)) return cartes;
-  return cartes.map(carte => masquerInfosSensibles(req, carte));
+  return cartes.map((carte) => masquerInfosSensibles(req, carte));
 };
 
 // ============================================
 // CONTROLEUR D'INVENTAIRE OPTIMISÉ POUR LWS
 // ============================================
 const inventaireController = {
-  
   /**
    * 🔍 RECHERCHE MULTICRITÈRES AVEC PAGINATION - OPTIMISÉE POUR LWS
    * GET /api/inventaire/recherche
@@ -103,25 +102,24 @@ const inventaireController = {
     try {
       const {
         nom,
-        prenom, 
+        prenom,
         contact,
         siteRetrait,
-        lieuNaissance, 
+        lieuNaissance,
         dateNaissance,
         rangement,
         delivrance,
         page = 1,
         limit = CONFIG.defaultLimit,
-        export_all = 'false'
+        export_all = 'false',
       } = req.query;
 
       console.log(`📦 Recherche par ${req.user.nomUtilisateur} (${req.user.role}):`, req.query);
 
       // ✅ PAGINATION ADAPTATIVE
       const pageNum = Math.max(1, parseInt(page));
-      const limitNum = export_all === 'true' 
-        ? CONFIG.maxLimit 
-        : Math.min(parseInt(limit), CONFIG.maxLimit);
+      const limitNum =
+        export_all === 'true' ? CONFIG.maxLimit : Math.min(parseInt(limit), CONFIG.maxLimit);
       const offset = (pageNum - 1) * limitNum;
 
       // ✅ CONSTRUCTION DYNAMIQUE DE LA REQUÊTE
@@ -141,7 +139,7 @@ const inventaireController = {
         coordination,
         TO_CHAR(dateimport, 'YYYY-MM-DD HH24:MI:SS') as dateimport
       FROM cartes WHERE 1=1`;
-      
+
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
       const params = [];
       const countParams = [];
@@ -156,7 +154,7 @@ const inventaireController = {
         countParams.push(`%${nom.trim()}%`);
       }
 
-      // 🔤 PRÉNOM (recherche partielle)  
+      // 🔤 PRÉNOM (recherche partielle)
       if (prenom && prenom.trim() !== '' && prenom.length >= CONFIG.searchMinLength) {
         paramCount++;
         query += ` AND prenoms ILIKE $${paramCount}`;
@@ -180,11 +178,11 @@ const inventaireController = {
       if (siteRetrait && siteRetrait.trim() !== '') {
         paramCount++;
         if (siteRetrait.includes(',')) {
-          const sites = siteRetrait.split(',').map(s => s.trim());
+          const sites = siteRetrait.split(',').map((s) => s.trim());
           const siteParams = sites.map((_, idx) => `$${paramCount + idx}`).join(', ');
           query += ` AND "SITE DE RETRAIT" IN (${siteParams})`;
           countQuery += ` AND "SITE DE RETRAIT" IN (${siteParams})`;
-          sites.forEach(site => {
+          sites.forEach((site) => {
             params.push(site);
             countParams.push(site);
           });
@@ -198,7 +196,11 @@ const inventaireController = {
       }
 
       // 🗺️ LIEU DE NAISSANCE
-      if (lieuNaissance && lieuNaissance.trim() !== '' && lieuNaissance.length >= CONFIG.searchMinLength) {
+      if (
+        lieuNaissance &&
+        lieuNaissance.trim() !== '' &&
+        lieuNaissance.length >= CONFIG.searchMinLength
+      ) {
         paramCount++;
         query += ` AND "LIEU NAISSANCE" ILIKE $${paramCount}`;
         countQuery += ` AND "LIEU NAISSANCE" ILIKE $${paramCount}`;
@@ -210,7 +212,7 @@ const inventaireController = {
       if (dateNaissance && dateNaissance.trim() !== '') {
         paramCount++;
         if (dateNaissance.includes(',')) {
-          const [debut, fin] = dateNaissance.split(',').map(d => d.trim());
+          const [debut, fin] = dateNaissance.split(',').map((d) => d.trim());
           query += ` AND "DATE DE NAISSANCE" BETWEEN $${paramCount} AND $${paramCount + 1}`;
           countQuery += ` AND "DATE DE NAISSANCE" BETWEEN $${paramCount} AND $${paramCount + 1}`;
           params.push(debut, fin);
@@ -271,7 +273,7 @@ const inventaireController = {
 
       // 🗄️ EXÉCUTION DES REQUÊTES
       const startTime = Date.now();
-      
+
       const result = await db.query(filtreQuery.query, filtreQuery.params);
       const countResult = await db.query(filtreCountQuery.query, filtreCountQuery.params);
 
@@ -283,7 +285,7 @@ const inventaireController = {
       const cartesMasquees = masquerInfosSensiblesTableau(req, result.rows);
 
       console.log(`✅ ${result.rows.length} cartes trouvées sur ${total} total (${duration}ms)`);
-      
+
       // Headers pour export
       if (export_all === 'true') {
         res.setHeader('X-Total-Rows', total);
@@ -303,11 +305,11 @@ const inventaireController = {
           total: total,
           totalPages: totalPages,
           hasNext: pageNum < totalPages,
-          hasPrev: pageNum > 1
+          hasPrev: pageNum > 1,
         },
         performance: {
           queryTime: duration,
-          returnedRows: result.rows.length
+          returnedRows: result.rows.length,
         },
         criteres: {
           nom: nom || null,
@@ -317,22 +319,21 @@ const inventaireController = {
           lieuNaissance: lieuNaissance || null,
           dateNaissance: dateNaissance || null,
           rangement: rangement || null,
-          delivrance: delivrance || null
+          delivrance: delivrance || null,
         },
         utilisateur: {
           role: req.user.role,
-          coordination: req.user.coordination
+          coordination: req.user.coordination,
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
-
     } catch (error) {
       console.error('❌ Erreur recherche:', error);
       res.status(500).json({
         success: false,
         error: 'Erreur lors de la recherche',
         details: error.message,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
   },
@@ -344,19 +345,21 @@ const inventaireController = {
   getStatistiques: async (req, res) => {
     try {
       const { forceRefresh } = req.query;
-      
+
       // Vérifier le cache (5 minutes) - seulement pour Admin
-      if (req.user.role === 'Administrateur' && 
-          !forceRefresh && 
-          CONFIG.statsCache && 
-          CONFIG.statsCacheTime && 
-          (Date.now() - CONFIG.statsCacheTime) < CONFIG.cacheTimeout * 1000) {
+      if (
+        req.user.role === 'Administrateur' &&
+        !forceRefresh &&
+        CONFIG.statsCache &&
+        CONFIG.statsCacheTime &&
+        Date.now() - CONFIG.statsCacheTime < CONFIG.cacheTimeout * 1000
+      ) {
         console.log('📦 Stats servies depuis le cache');
         return res.json({
           success: true,
           ...CONFIG.statsCache,
           cached: true,
-          cacheAge: Math.round((Date.now() - CONFIG.statsCacheTime) / 1000) + 's'
+          cacheAge: Math.round((Date.now() - CONFIG.statsCacheTime) / 1000) + 's',
         });
       }
 
@@ -368,7 +371,7 @@ const inventaireController = {
 
       let totalQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
       let totalParams = [];
-      
+
       let retiresQuery = `
         SELECT COUNT(*) as retires FROM cartes 
         WHERE delivrance IS NOT NULL AND delivrance != '' AND UPPER(delivrance) != 'NON'
@@ -405,13 +408,13 @@ const inventaireController = {
       if (role === 'Gestionnaire' && coordination) {
         totalQuery += ` AND coordination = $1`;
         totalParams = [coordination];
-        
+
         retiresQuery += ` AND coordination = $1`;
         retiresParams = [coordination];
-        
+
         sitesQuery += ` AND coordination = $1`;
         sitesParams = [coordination];
-        
+
         recentesQuery = `
           SELECT 
             id, 
@@ -432,7 +435,10 @@ const inventaireController = {
       // Exécuter les requêtes
       const totalResult = await db.query(totalQuery, totalParams);
       const retiresResult = await db.query(retiresQuery, retiresParams);
-      const sitesResult = await db.query(sitesQuery + ' GROUP BY "SITE DE RETRAIT" ORDER BY total DESC', sitesParams);
+      const sitesResult = await db.query(
+        sitesQuery + ' GROUP BY "SITE DE RETRAIT" ORDER BY total DESC',
+        sitesParams
+      );
       const recentesResult = await db.query(recentesQuery, recentesParams);
 
       // Statistiques temporelles (optionnellement filtrées)
@@ -444,14 +450,14 @@ const inventaireController = {
         WHERE dateimport > NOW() - INTERVAL '6 months'
       `;
       let temporelParams = [];
-      
+
       if (role === 'Gestionnaire' && coordination) {
         temporelQuery += ` AND coordination = $1`;
         temporelParams = [coordination];
       }
-      
-      temporelQuery += ' GROUP BY DATE_TRUNC(\'month\', dateimport) ORDER BY mois DESC';
-      
+
+      temporelQuery += " GROUP BY DATE_TRUNC('month', dateimport) ORDER BY mois DESC";
+
       const temporelResult = await db.query(temporelQuery, temporelParams);
 
       const total = parseInt(totalResult.rows[0].total);
@@ -465,23 +471,23 @@ const inventaireController = {
             total,
             retires,
             disponibles,
-            tauxRetrait
+            tauxRetrait,
           },
-          parSite: sitesResult.rows.map(site => ({
+          parSite: sitesResult.rows.map((site) => ({
             ...site,
-            tauxRetrait: site.total > 0 ? Math.round((site.retires / site.total) * 100) : 0
+            tauxRetrait: site.total > 0 ? Math.round((site.retires / site.total) * 100) : 0,
           })),
           recentes: masquerInfosSensiblesTableau(req, recentesResult.rows),
-          temporel: temporelResult.rows
+          temporel: temporelResult.rows,
         },
         filtres: {
           role: req.user.role,
-          coordination: req.user.coordination || 'toutes'
+          coordination: req.user.coordination || 'toutes',
         },
         performance: {
-          queryTime: Date.now() - startTime
+          queryTime: Date.now() - startTime,
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       };
 
       // Mettre en cache seulement pour Admin
@@ -493,16 +499,15 @@ const inventaireController = {
       res.json({
         success: true,
         ...statsData,
-        cached: false
+        cached: false,
       });
-
     } catch (error) {
       console.error('❌ Erreur statistiques:', error);
       res.status(500).json({
         success: false,
         error: 'Erreur lors du calcul des statistiques',
         details: error.message,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     }
   },
@@ -519,7 +524,7 @@ const inventaireController = {
         return res.json({
           success: true,
           resultats: [],
-          total: 0
+          total: 0,
         });
       }
 
@@ -528,7 +533,7 @@ const inventaireController = {
           success: true,
           resultats: [],
           total: 0,
-          message: `Minimum ${CONFIG.searchMinLength} caractères requis`
+          message: `Minimum ${CONFIG.searchMinLength} caractères requis`,
         });
       }
 
@@ -568,11 +573,12 @@ const inventaireController = {
       `;
 
       const params = [searchTerm];
-      
+
       // Appliquer filtre de coordination
       const filtreQuery = ajouterFiltreCoordination(req, query, params, 'coordination');
-      
-      filtreQuery.query += ' ORDER BY pertinence DESC, nom, prenoms LIMIT $' + (filtreQuery.params.length + 1);
+
+      filtreQuery.query +=
+        ' ORDER BY pertinence DESC, nom, prenoms LIMIT $' + (filtreQuery.params.length + 1);
       filtreQuery.params.push(limitNum);
 
       const result = await db.query(filtreQuery.query, filtreQuery.params);
@@ -587,21 +593,20 @@ const inventaireController = {
         resultats: resultatsMasques,
         total: result.rows.length,
         performance: {
-          queryTime: duration
+          queryTime: duration,
         },
         utilisateur: {
           role: req.user.role,
-          coordination: req.user.coordination
+          coordination: req.user.coordination,
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
-
     } catch (error) {
       console.error('❌ Erreur recherche rapide:', error);
       res.status(500).json({
         success: false,
         error: 'Erreur lors de la recherche rapide',
-        details: error.message
+        details: error.message,
       });
     }
   },
@@ -626,19 +631,18 @@ const inventaireController = {
       `;
 
       let params = [];
-      
+
       // Appliquer filtre de coordination
       const filtreQuery = ajouterFiltreCoordination(req, query, params, 'coordination');
-      
+
       filtreQuery.query += ' GROUP BY "SITE DE RETRAIT" ORDER BY "SITE DE RETRAIT"';
 
       const result = await db.query(filtreQuery.query, filtreQuery.params);
 
-      const sites = result.rows.map(row => ({
+      const sites = result.rows.map((row) => ({
         ...row,
-        taux_retrait: row.total_cartes > 0 
-          ? Math.round((row.cartes_retirees / row.total_cartes) * 100) 
-          : 0
+        taux_retrait:
+          row.total_cartes > 0 ? Math.round((row.cartes_retirees / row.total_cartes) * 100) : 0,
       }));
 
       const duration = Date.now() - startTime;
@@ -649,20 +653,19 @@ const inventaireController = {
         total: sites.length,
         filtres: {
           role: req.user.role,
-          coordination: req.user.coordination || 'toutes'
+          coordination: req.user.coordination || 'toutes',
         },
         performance: {
-          queryTime: duration
+          queryTime: duration,
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
-
     } catch (error) {
       console.error('❌ Erreur récupération sites:', error);
       res.status(500).json({
         success: false,
         error: 'Erreur lors de la récupération des sites',
-        details: error.message
+        details: error.message,
       });
     }
   },
@@ -679,7 +682,7 @@ const inventaireController = {
       if (!site) {
         return res.status(400).json({
           success: false,
-          error: 'Le paramètre site est obligatoire'
+          error: 'Le paramètre site est obligatoire',
         });
       }
 
@@ -725,7 +728,12 @@ const inventaireController = {
 
       // Appliquer filtre de coordination
       const filtreQuery = ajouterFiltreCoordination(req, query, params, 'coordination');
-      const filtreCountQuery = ajouterFiltreCoordination(req, countQuery, countParams, 'coordination');
+      const filtreCountQuery = ajouterFiltreCoordination(
+        req,
+        countQuery,
+        countParams,
+        'coordination'
+      );
 
       // Tri et pagination
       filtreQuery.query += ` ORDER BY nom, prenoms LIMIT $${filtreQuery.params.length + 1} OFFSET $${filtreQuery.params.length + 2}`;
@@ -752,26 +760,25 @@ const inventaireController = {
           total: total,
           totalPages: totalPages,
           hasNext: pageNum < totalPages,
-          hasPrev: pageNum > 1
+          hasPrev: pageNum > 1,
         },
         site: decodedSite,
         filtres: {
           role: req.user.role,
           coordination: req.user.coordination || 'toutes',
-          delivrance: delivrance || null
+          delivrance: delivrance || null,
         },
         performance: {
-          queryTime: duration
+          queryTime: duration,
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
-
     } catch (error) {
       console.error('❌ Erreur cartes par site:', error);
       res.status(500).json({
         success: false,
         error: 'Erreur lors de la récupération des cartes par site',
-        details: error.message
+        details: error.message,
       });
     }
   },
@@ -787,7 +794,7 @@ const inventaireController = {
       if (!site) {
         return res.status(400).json({
           success: false,
-          error: 'Le paramètre site est obligatoire'
+          error: 'Le paramètre site est obligatoire',
         });
       }
 
@@ -807,16 +814,15 @@ const inventaireController = {
       `;
 
       const params = [decodedSite];
-      
+
       // Appliquer filtre de coordination
       const filtreQuery = ajouterFiltreCoordination(req, query, params, 'coordination');
 
       const result = await db.query(filtreQuery.query, filtreQuery.params);
 
       const stats = result.rows[0];
-      stats.taux_retrait = stats.total_cartes > 0 
-        ? Math.round((stats.cartes_retirees / stats.total_cartes) * 100) 
-        : 0;
+      stats.taux_retrait =
+        stats.total_cartes > 0 ? Math.round((stats.cartes_retirees / stats.total_cartes) * 100) : 0;
 
       res.json({
         success: true,
@@ -824,17 +830,16 @@ const inventaireController = {
         statistiques: stats,
         filtres: {
           role: req.user.role,
-          coordination: req.user.coordination || 'toutes'
+          coordination: req.user.coordination || 'toutes',
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
-
     } catch (error) {
       console.error('❌ Erreur stats site:', error);
       res.status(500).json({
         success: false,
         error: 'Erreur lors de la récupération des statistiques du site',
-        details: error.message
+        details: error.message,
       });
     }
   },
@@ -849,32 +854,31 @@ const inventaireController = {
       if (req.user.role !== 'Administrateur') {
         return res.status(403).json({
           success: false,
-          error: 'Seuls les administrateurs peuvent rafraîchir le cache'
+          error: 'Seuls les administrateurs peuvent rafraîchir le cache',
         });
       }
 
       // Vider le cache
       CONFIG.statsCache = null;
       CONFIG.statsCacheTime = null;
-      
+
       // Recalculer les stats
       const stats = await inventaireController.getStatistiques(
-        { query: { forceRefresh: true }, user: req.user }, 
+        { query: { forceRefresh: true }, user: req.user },
         { json: (data) => data }
       );
 
       res.json({
         success: true,
         message: 'Cache rafraîchi avec succès',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
-
     } catch (error) {
       console.error('❌ Erreur refresh cache:', error);
       res.status(500).json({
         success: false,
         error: 'Erreur lors du rafraîchissement du cache',
-        details: error.message
+        details: error.message,
       });
     }
   },
@@ -889,7 +893,7 @@ const inventaireController = {
       if (req.user.role !== 'Administrateur') {
         return res.status(403).json({
           success: false,
-          error: 'Seuls les administrateurs peuvent accéder au diagnostic'
+          error: 'Seuls les administrateurs peuvent accéder au diagnostic',
         });
       }
 
@@ -934,26 +938,26 @@ const inventaireController = {
         service: 'inventaire',
         utilisateur: {
           role: req.user.role,
-          coordination: req.user.coordination
+          coordination: req.user.coordination,
         },
         database: {
           total_cartes: total,
           dernier_import: lastImport.rows[0].dernier_import,
-          total_batches: parseInt(lastImport.rows[0].total_batches || 0)
+          total_batches: parseInt(lastImport.rows[0].total_batches || 0),
         },
         coordination_stats: coordinationStats.rows,
-        indexes: indexResult.rows.map(idx => ({
+        indexes: indexResult.rows.map((idx) => ({
           name: idx.indexname,
-          definition: idx.indexdef
+          definition: idx.indexdef,
         })),
         config: {
           defaultLimit: CONFIG.defaultLimit,
           maxLimit: CONFIG.maxLimit,
           searchMinLength: CONFIG.searchMinLength,
-          cacheTimeout: CONFIG.cacheTimeout
+          cacheTimeout: CONFIG.cacheTimeout,
         },
         performance: {
-          queryTime: Date.now() - startTime
+          queryTime: Date.now() - startTime,
         },
         endpoints: [
           '/api/inventaire/recherche',
@@ -963,18 +967,17 @@ const inventaireController = {
           '/api/inventaire/site/:site',
           '/api/inventaire/site/:site/stats',
           '/api/inventaire/cache/refresh',
-          '/api/inventaire/diagnostic'
-        ]
+          '/api/inventaire/diagnostic',
+        ],
       });
-
     } catch (error) {
       console.error('❌ Erreur diagnostic:', error);
       res.status(500).json({
         success: false,
-        error: error.message
+        error: error.message,
       });
     }
-  }
+  },
 };
 
 module.exports = inventaireController;

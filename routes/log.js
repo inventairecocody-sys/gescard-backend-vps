@@ -18,41 +18,41 @@ const LOG_CONFIG = {
       message: {
         success: false,
         error: 'Trop de requêtes',
-        code: 'STANDARD_RATE_LIMIT'
-      }
+        code: 'STANDARD_RATE_LIMIT',
+      },
     }),
-    
+
     sensitive: rateLimit({
       windowMs: 15 * 60 * 1000, // 15 minutes
       max: 10, // 10 actions sensibles
       message: {
         success: false,
-        error: 'Trop d\'actions sensibles',
-        code: 'SENSITIVE_RATE_LIMIT'
-      }
+        error: "Trop d'actions sensibles",
+        code: 'SENSITIVE_RATE_LIMIT',
+      },
     }),
-    
+
     export: rateLimit({
       windowMs: 60 * 60 * 1000, // 1 heure
       max: 5, // 5 exports par heure
       message: {
         success: false,
-        error: 'Trop d\'exports',
-        code: 'EXPORT_RATE_LIMIT'
-      }
-    })
+        error: "Trop d'exports",
+        code: 'EXPORT_RATE_LIMIT',
+      },
+    }),
   },
-  
+
   // Cache control
   cacheControl: {
     list: 'private, max-age=5', // 5 secondes
     user: 'private, max-age=10', // 10 secondes
     recent: 'private, max-age=2', // 2 secondes
-    stats: 'private, max-age=300' // 5 minutes
+    stats: 'private, max-age=300', // 5 minutes
   },
-  
+
   // Routes publiques
-  publicRoutes: ['/health', '/test']
+  publicRoutes: ['/health', '/test'],
 };
 
 // ============================================
@@ -69,7 +69,9 @@ router.use((req, res, next) => {
 
 // Middleware de logging spécifique
 router.use((req, res, next) => {
-  console.log(`📝 [Logs] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur || 'non authentifié'} (${req.user?.role || 'aucun'})`);
+  console.log(
+    `📝 [Logs] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur || 'non authentifié'} (${req.user?.role || 'aucun'})`
+  );
   next();
 });
 
@@ -90,9 +92,10 @@ router.get('/health', LOG_CONFIG.rateLimits.standard, (req, res) => {
     roles_autorises: {
       consultation: 'Administrateur uniquement (redirigé vers journal)',
       actions: 'Administrateur uniquement',
-      export: 'Administrateur uniquement'
+      export: 'Administrateur uniquement',
     },
-    redirection: '⚠️ Ce module est maintenu pour compatibilité. Utilisez /api/journal pour les nouvelles fonctionnalités.',
+    redirection:
+      '⚠️ Ce module est maintenu pour compatibilité. Utilisez /api/journal pour les nouvelles fonctionnalités.',
     endpoints: [
       'GET /api/logs',
       'GET /api/logs/recent',
@@ -106,8 +109,8 @@ router.get('/health', LOG_CONFIG.rateLimits.standard, (req, res) => {
       'GET /api/logs/diagnostic',
       'POST /api/logs',
       'DELETE /api/logs/old',
-      'DELETE /api/logs/all'
-    ]
+      'DELETE /api/logs/all',
+    ],
   });
 });
 
@@ -121,11 +124,12 @@ router.get('/test', (req, res) => {
     version: '3.0.0-lws',
     timestamp: new Date().toISOString(),
     authentifie: !!req.user,
-    redirection: '⚠️ Ce module est maintenu pour compatibilité. Utilisez /api/journal pour les nouvelles fonctionnalités.',
+    redirection:
+      '⚠️ Ce module est maintenu pour compatibilité. Utilisez /api/journal pour les nouvelles fonctionnalités.',
     roles_autorises: {
       consultation: 'Administrateur uniquement',
-      actions: 'Administrateur uniquement'
-    }
+      actions: 'Administrateur uniquement',
+    },
   });
 });
 
@@ -143,32 +147,22 @@ router.use(permission.peutVoirInfosSensibles);
  * GET /api/logs - Récupérer tous les logs
  * Admin uniquement - redirigé vers journal
  */
-router.get(
-  '/', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getAllLogs
-);
+router.get('/', role.peutVoirJournal, LOG_CONFIG.rateLimits.standard, logController.getAllLogs);
 
 /**
  * GET /api/logs/list - Alias pour la liste
  * Admin uniquement - redirigé vers journal
  */
-router.get(
-  '/list', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.getAllLogs
-);
+router.get('/list', role.peutVoirJournal, LOG_CONFIG.rateLimits.standard, logController.getAllLogs);
 
 /**
  * GET /api/logs/recent - Récupérer les logs récents
  * Admin uniquement - redirigé vers journal
  */
 router.get(
-  '/recent', 
+  '/recent',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
+  LOG_CONFIG.rateLimits.standard,
   logController.getRecentLogs
 );
 
@@ -177,9 +171,9 @@ router.get(
  * Admin uniquement - redirigé vers journal
  */
 router.get(
-  '/user/:utilisateur', 
+  '/user/:utilisateur',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
+  LOG_CONFIG.rateLimits.standard,
   logController.getLogsByUser
 );
 
@@ -188,9 +182,9 @@ router.get(
  * Admin uniquement - redirigé vers journal
  */
 router.get(
-  '/date-range', 
+  '/date-range',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
+  LOG_CONFIG.rateLimits.standard,
   logController.getLogsByDateRange
 );
 
@@ -199,9 +193,9 @@ router.get(
  * Admin uniquement - redirigé vers journal
  */
 router.get(
-  '/filtered', 
+  '/filtered',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
+  LOG_CONFIG.rateLimits.standard,
   logController.getFilteredLogs
 );
 
@@ -214,9 +208,9 @@ router.get(
  * Admin uniquement - redirigé vers journal
  */
 router.get(
-  '/search', 
+  '/search',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
+  LOG_CONFIG.rateLimits.standard,
   logController.searchLogs
 );
 
@@ -225,9 +219,9 @@ router.get(
  * Admin uniquement - redirigé vers journal
  */
 router.get(
-  '/stats', 
+  '/stats',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
+  LOG_CONFIG.rateLimits.standard,
   logController.getLogStats
 );
 
@@ -236,9 +230,9 @@ router.get(
  * Admin uniquement
  */
 router.get(
-  '/actions', 
+  '/actions',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
+  LOG_CONFIG.rateLimits.standard,
   logController.getCommonActions
 );
 
@@ -250,12 +244,7 @@ router.get(
  * POST /api/logs - Créer un nouveau log
  * Admin uniquement
  */
-router.post(
-  '/', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
-  logController.createLog
-);
+router.post('/', role.peutVoirJournal, LOG_CONFIG.rateLimits.standard, logController.createLog);
 
 // ============================================
 // ROUTES DE SUPPRESSION (Admin uniquement)
@@ -266,9 +255,9 @@ router.post(
  * Admin uniquement - redirigé vers journal
  */
 router.delete(
-  '/old', 
+  '/old',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.sensitive, 
+  LOG_CONFIG.rateLimits.sensitive,
   logController.deleteOldLogs
 );
 
@@ -277,9 +266,9 @@ router.delete(
  * Admin uniquement - redirigé vers journal
  */
 router.delete(
-  '/all', 
+  '/all',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.sensitive, 
+  LOG_CONFIG.rateLimits.sensitive,
   logController.clearAllLogs
 );
 
@@ -291,12 +280,7 @@ router.delete(
  * GET /api/logs/export - Exporter les logs
  * Admin uniquement - redirigé vers journal
  */
-router.get(
-  '/export', 
-  role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.export, 
-  logController.exportLogs
-);
+router.get('/export', role.peutVoirJournal, LOG_CONFIG.rateLimits.export, logController.exportLogs);
 
 // ============================================
 // ROUTES DE DIAGNOSTIC (Admin uniquement)
@@ -307,9 +291,9 @@ router.get(
  * Admin uniquement - redirigé vers journal
  */
 router.get(
-  '/diagnostic', 
+  '/diagnostic',
   role.peutVoirJournal,
-  LOG_CONFIG.rateLimits.standard, 
+  LOG_CONFIG.rateLimits.standard,
   logController.diagnostic
 );
 
@@ -318,39 +302,42 @@ router.get(
 // ============================================
 
 router.get('/', (req, res) => {
-  const roleInfo = req.user ? 
-    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - ${req.user.role === 'Administrateur' ? '✅ Accès autorisé' : '❌ Accès restreint'}` : 
-    'Non authentifié';
-  
+  const roleInfo = req.user
+    ? `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - ${req.user.role === 'Administrateur' ? '✅ Accès autorisé' : '❌ Accès restreint'}`
+    : 'Non authentifié';
+
   res.json({
-    name: "API Logs GESCARD",
-    description: "Module de journalisation système (maintenu pour compatibilité)",
-    version: "3.0.0-lws",
+    name: 'API Logs GESCARD',
+    description: 'Module de journalisation système (maintenu pour compatibilité)',
+    version: '3.0.0-lws',
     timestamp: new Date().toISOString(),
     authentification: roleInfo,
-    redirection: "⚠️ Ce module est maintenu pour compatibilité ascendante. Pour les nouvelles fonctionnalités (annulation, coordination), utilisez /api/journal",
+    redirection:
+      '⚠️ Ce module est maintenu pour compatibilité ascendante. Pour les nouvelles fonctionnalités (annulation, coordination), utilisez /api/journal',
     roles_autorises: {
-      administrateur: "✅ Accès complet (redirigé vers journal)",
+      administrateur: '✅ Accès complet (redirigé vers journal)',
       gestionnaire: "❌ Non autorisé (pas d'accès aux logs)",
       chef_equipe: "❌ Non autorisé (pas d'accès aux logs)",
-      operateur: "❌ Non autorisé (pas d'accès aux logs)"
+      operateur: "❌ Non autorisé (pas d'accès aux logs)",
     },
     compatibilite: {
-      statut: "✅ Maintenu pour compatibilité ascendante",
-      redirection_vers: "/api/journal",
+      statut: '✅ Maintenu pour compatibilité ascendante',
+      redirection_vers: '/api/journal',
       fonctionnalites_nouvelles: [
         "Annulation d'actions",
-        "Support de la coordination",
-        "Journalisation enrichie (JSON)",
-        "Filtrage avancé"
-      ]
+        'Support de la coordination',
+        'Journalisation enrichie (JSON)',
+        'Filtrage avancé',
+      ],
     },
-    user: req.user ? {
-      id: req.user.id,
-      username: req.user.nomUtilisateur,
-      role: req.user.role,
-      coordination: req.user.coordination
-    } : null,
+    user: req.user
+      ? {
+          id: req.user.id,
+          username: req.user.nomUtilisateur,
+          role: req.user.role,
+          coordination: req.user.coordination,
+        }
+      : null,
     endpoints: {
       consultation: {
         'GET /': 'Liste paginée des logs (Admin)',
@@ -358,55 +345,60 @@ router.get('/', (req, res) => {
         'GET /recent': 'Logs récents (Admin)',
         'GET /user/:utilisateur': 'Logs par utilisateur (Admin)',
         'GET /date-range': 'Logs par plage de dates (Admin)',
-        'GET /filtered': 'Logs avec filtres avancés (Admin)'
+        'GET /filtered': 'Logs avec filtres avancés (Admin)',
       },
       recherche: {
         'GET /search': 'Recherche avancée (Admin)',
         'GET /stats': 'Statistiques (Admin)',
-        'GET /actions': 'Actions fréquentes (Admin)'
+        'GET /actions': 'Actions fréquentes (Admin)',
       },
       creation: {
-        'POST /': 'Créer un log (Admin)'
+        'POST /': 'Créer un log (Admin)',
       },
       suppression: {
         'DELETE /old': 'Supprimer vieux logs (Admin)',
-        'DELETE /all': 'Supprimer tous les logs (Admin)'
+        'DELETE /all': 'Supprimer tous les logs (Admin)',
       },
       export: {
-        'GET /export': 'Exporter les logs (Admin)'
+        'GET /export': 'Exporter les logs (Admin)',
       },
       diagnostic: {
         'GET /diagnostic': 'Diagnostic module (Admin)',
         'GET /health': 'Santé service (public)',
-        'GET /test': 'Test service (public)'
-      }
+        'GET /test': 'Test service (public)',
+      },
     },
     rate_limits: {
       standard: '30 requêtes par minute',
       sensitive: '10 actions par 15 minutes',
-      export: '5 exports par heure'
+      export: '5 exports par heure',
     },
     cache: {
       list: '5 secondes',
       user: '10 secondes',
       recent: '2 secondes',
-      stats: '5 minutes'
+      stats: '5 minutes',
     },
     formats_supportes: {
       import: ['CSV'],
-      export: ['JSON', 'CSV']
+      export: ['JSON', 'CSV'],
     },
     migration: {
-      recommandation: "Pour bénéficier des nouvelles fonctionnalités (annulation, coordination), migrez vers /api/journal",
-      documentation: "/api/journal/ pour plus d'informations"
+      recommandation:
+        'Pour bénéficier des nouvelles fonctionnalités (annulation, coordination), migrez vers /api/journal',
+      documentation: "/api/journal/ pour plus d'informations",
     },
     exemples: {
-      curl_liste: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs?page=1&limit=50"',
-      curl_user: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/user/admin"',
-      curl_search: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/search?q=import&page=1"',
-      curl_export: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/export?format=csv"',
-      curl_stats: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/stats"'
-    }
+      curl_liste:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs?page=1&limit=50"',
+      curl_user:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/user/admin"',
+      curl_search:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/search?q=import&page=1"',
+      curl_export:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/export?format=csv"',
+      curl_stats: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/stats"',
+    },
   });
 });
 
@@ -435,10 +427,10 @@ router.use((req, res) => {
       'GET /api/logs/test',
       'POST /api/logs/',
       'DELETE /api/logs/old',
-      'DELETE /api/logs/all'
+      'DELETE /api/logs/all',
     ],
     redirection: 'Pour les nouvelles fonctionnalités, utilisez /api/journal',
-    code: 'ROUTE_NOT_FOUND'
+    code: 'ROUTE_NOT_FOUND',
   });
 });
 

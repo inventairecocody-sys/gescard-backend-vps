@@ -4,25 +4,25 @@ const annulationService = require('../Services/annulationService');
 // 🔧 CONFIGURATION API EXTERNE - OPTIMISÉE POUR LWS
 const API_CONFIG = {
   // Limites augmentées pour LWS
-  maxResults: 10000,           // Augmenté de 1000 → 10000
+  maxResults: 10000, // Augmenté de 1000 → 10000
   defaultLimit: 100,
-  maxSyncRecords: 5000,        // Augmenté de 500 → 5000
-  maxBatchSize: 1000,          // Nouveau : taille des lots pour traitement
-  exportMaxRows: 100000,       // Nouveau : max pour exports
-  enableCompression: true,     // Nouveau : compression GZIP
-  
+  maxSyncRecords: 5000, // Augmenté de 500 → 5000
+  maxBatchSize: 1000, // Nouveau : taille des lots pour traitement
+  exportMaxRows: 100000, // Nouveau : max pour exports
+  enableCompression: true, // Nouveau : compression GZIP
+
   SITES: [
-    "ADJAME",
-    "CHU D'ANGRE", 
-    "UNIVERSITE DE COCODY",
-    "LYCEE HOTELIER",
-    "BINGERVILLE",
-    "SITE_6",
-    "SITE_7",
-    "SITE_8", 
-    "SITE_9",
-    "SITE_10"
-  ]
+    'ADJAME',
+    "CHU D'ANGRE",
+    'UNIVERSITE DE COCODY',
+    'LYCEE HOTELIER',
+    'BINGERVILLE',
+    'SITE_6',
+    'SITE_7',
+    'SITE_8',
+    'SITE_9',
+    'SITE_10',
+  ],
 };
 
 // ====================================================
@@ -40,18 +40,18 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
 
   // ✅ TOUTES LES COLONNES PRINCIPALES À FUSIONNER
   const colonnesAFusionner = {
-    'LIEU D\'ENROLEMENT': 'texte',
-    'SITE DE RETRAIT': 'texte', 
-    'RANGEMENT': 'texte',
-    'NOM': 'texte',
-    'PRENOMS': 'texte',
+    "LIEU D'ENROLEMENT": 'texte',
+    'SITE DE RETRAIT': 'texte',
+    RANGEMENT: 'texte',
+    NOM: 'texte',
+    PRENOMS: 'texte',
     'LIEU NAISSANCE': 'texte',
-    'CONTACT': 'contact',
+    CONTACT: 'contact',
     'CONTACT DE RETRAIT': 'contact',
-    'DELIVRANCE': 'delivrance',
+    DELIVRANCE: 'delivrance',
     'DATE DE NAISSANCE': 'date',
     'DATE DE DELIVRANCE': 'date',
-    'COORDINATION': 'texte' // ← NOUVEAU
+    COORDINATION: 'texte', // ← NOUVEAU
   };
 
   for (const [colonne, type] of Object.entries(colonnesAFusionner)) {
@@ -59,25 +59,30 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
     const nouvelleValeur = nouvellesDonnees[colonne]?.toString().trim() || '';
 
     switch (type) {
-      
       case 'delivrance':
         const isOuiExistante = valeurExistante.toUpperCase() === 'OUI';
         const isOuiNouvelle = nouvelleValeur.toUpperCase() === 'OUI';
-        
+
         if (isOuiExistante && !isOuiNouvelle && nouvelleValeur) {
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
           updated = true;
           console.log(`  🔄 ${colonne}: "OUI" → "${nouvelleValeur}" (priorité nom)`);
-        }
-        else if (!isOuiExistante && isOuiNouvelle && valeurExistante) {
+        } else if (!isOuiExistante && isOuiNouvelle && valeurExistante) {
           console.log(`  ✅ ${colonne}: "${valeurExistante}" gardé vs "OUI"`);
-        }
-        else if (valeurExistante && nouvelleValeur && valeurExistante !== nouvelleValeur) {
-          await exports.resoudreConflitNom(client, updates, params, colonne, 
-            valeurExistante, nouvelleValeur, carteExistante, nouvellesDonnees, updated);
-        }
-        else if (nouvelleValeur && !valeurExistante) {
+        } else if (valeurExistante && nouvelleValeur && valeurExistante !== nouvelleValeur) {
+          await exports.resoudreConflitNom(
+            client,
+            updates,
+            params,
+            colonne,
+            valeurExistante,
+            nouvelleValeur,
+            carteExistante,
+            nouvellesDonnees,
+            updated
+          );
+        } else if (nouvelleValeur && !valeurExistante) {
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
           updated = true;
@@ -97,7 +102,7 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
       case 'date':
         const dateExistante = valeurExistante ? new Date(valeurExistante) : null;
         const nouvelleDate = nouvelleValeur ? new Date(nouvelleValeur) : null;
-        
+
         if (nouvelleDate && exports.estDatePlusRecente(nouvelleDate, dateExistante, colonne)) {
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleDate);
@@ -130,20 +135,31 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
     `;
 
     await client.query(updateQuery, params);
-    console.log(`✅ Carte ${carteExistante.nom} ${carteExistante.prenoms} mise à jour: ${updates.length - 1} champs`);
+    console.log(
+      `✅ Carte ${carteExistante.nom} ${carteExistante.prenoms} mise à jour: ${updates.length - 1} champs`
+    );
   }
 
   return { updated };
 };
 
 // ✅ Résoudre les conflits entre noms dans DELIVRANCE
-exports.resoudreConflitNom = async (client, updates, params, colonne, 
-  valeurExistante, nouvelleValeur, carteExistante, nouvellesDonnees, updated) => {
-  
-  const dateExistante = carteExistante["DATE DE DELIVRANCE"];
-  const nouvelleDate = nouvellesDonnees["DATE DE DELIVRANCE"] ? 
-    new Date(nouvellesDonnees["DATE DE DELIVRANCE"]) : null;
-  
+exports.resoudreConflitNom = async (
+  client,
+  updates,
+  params,
+  colonne,
+  valeurExistante,
+  nouvelleValeur,
+  carteExistante,
+  nouvellesDonnees,
+  updated
+) => {
+  const dateExistante = carteExistante['DATE DE DELIVRANCE'];
+  const nouvelleDate = nouvellesDonnees['DATE DE DELIVRANCE']
+    ? new Date(nouvellesDonnees['DATE DE DELIVRANCE'])
+    : null;
+
   if (nouvelleDate && (!dateExistante || nouvelleDate > new Date(dateExistante))) {
     updates.push(`"${colonne}" = $${++params.length}`);
     params.push(nouvelleValeur);
@@ -158,25 +174,26 @@ exports.resoudreConflitNom = async (client, updates, params, colonne,
 exports.estContactPlusComplet = (nouveauContact, ancienContact) => {
   if (!nouveauContact) return false;
   if (!ancienContact) return true;
-  
-  const hasIndicatifComplet = (contact) => contact.startsWith('+225') || contact.startsWith('00225');
+
+  const hasIndicatifComplet = (contact) =>
+    contact.startsWith('+225') || contact.startsWith('00225');
   const isNumerique = (contact) => /^[\d+\s\-()]+$/.test(contact);
-  
+
   if (hasIndicatifComplet(nouveauContact) && !hasIndicatifComplet(ancienContact)) return true;
   if (isNumerique(nouveauContact) && !isNumerique(ancienContact)) return true;
   if (nouveauContact.length > ancienContact.length) return true;
-  
+
   return false;
 };
 
 // ✅ Vérifier si une date est plus récente
 exports.estDatePlusRecente = (nouvelleDate, dateExistante, colonne) => {
   if (!dateExistante) return true;
-  
+
   if (colonne === 'DATE DE DELIVRANCE') {
     return nouvelleDate > dateExistante;
   }
-  
+
   return false;
 };
 
@@ -184,7 +201,7 @@ exports.estDatePlusRecente = (nouvelleDate, dateExistante, colonne) => {
 exports.estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
   if (!nouvelleValeur) return false;
   if (!valeurExistante) return true;
-  
+
   switch (colonne) {
     case 'NOM':
     case 'PRENOMS':
@@ -192,19 +209,19 @@ exports.estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
       if (hasAccents(nouvelleValeur) && !hasAccents(valeurExistante)) return true;
       if (nouvelleValeur.length > valeurExistante.length) return true;
       break;
-      
+
     case 'LIEU NAISSANCE':
-    case 'LIEU D\'ENROLEMENT':
+    case "LIEU D'ENROLEMENT":
       const motsNouveaux = nouvelleValeur.split(/\s+/).length;
       const motsExistants = valeurExistante.split(/\s+/).length;
       if (motsNouveaux > motsExistants) return true;
       if (nouvelleValeur.length > valeurExistante.length) return true;
       break;
-      
+
     default:
       if (nouvelleValeur.length > valeurExistante.length) return true;
   }
-  
+
   return false;
 };
 
@@ -218,8 +235,10 @@ exports.estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
  */
 exports.healthCheck = async (req, res) => {
   try {
-    const dbTest = await db.query('SELECT 1 as test, version() as postgres_version, NOW() as server_time');
-    
+    const dbTest = await db.query(
+      'SELECT 1 as test, version() as postgres_version, NOW() as server_time'
+    );
+
     const statsResult = await db.query(`
       SELECT 
         COUNT(*) as total_cartes,
@@ -256,21 +275,21 @@ exports.healthCheck = async (req, res) => {
         uptime: `${hours}h ${minutes}m`,
         memory: {
           used: Math.round(memory.heapUsed / 1024 / 1024) + 'MB',
-          total: Math.round(memory.heapTotal / 1024 / 1024) + 'MB'
+          total: Math.round(memory.heapTotal / 1024 / 1024) + 'MB',
         },
-        environment: process.env.NODE_ENV || 'production'
+        environment: process.env.NODE_ENV || 'production',
       },
       database: {
         status: 'connected',
         version: dbTest.rows[0].postgres_version.split(',')[0],
-        server_time: dbTest.rows[0].server_time
+        server_time: dbTest.rows[0].server_time,
       },
       statistics: {
         total_cartes: parseInt(statsResult.rows[0].total_cartes),
         sites_actifs: parseInt(statsResult.rows[0].sites_actifs),
         beneficiaires_uniques: parseInt(statsResult.rows[0].beneficiaires_uniques),
         imports_24h: parseInt(statsResult.rows[0].imports_24h),
-        coordinations_distinctes: parseInt(statsResult.rows[0].coordinations_distinctes)
+        coordinations_distinctes: parseInt(statsResult.rows[0].coordinations_distinctes),
       },
       sites_configures: API_CONFIG.SITES,
       sites_statistiques: sitesStats.rows,
@@ -281,24 +300,23 @@ exports.healthCheck = async (req, res) => {
         max_sync: API_CONFIG.maxSyncRecords,
         rate_limit: '1000 req/min',
         features: [
-          'fusion_intelligente', 
-          'gestion_conflits', 
+          'fusion_intelligente',
+          'gestion_conflits',
           'synchronisation_multicolonne',
           'compression_gzip',
           'batch_processing',
-          'coordination_support'
-        ]
+          'coordination_support',
+        ],
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error('❌ Erreur API healthCheck:', error);
     res.status(500).json({
       success: false,
       status: 'unhealthy',
       error: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
@@ -310,15 +328,13 @@ exports.healthCheck = async (req, res) => {
 exports.getChanges = async (req, res) => {
   try {
     const { since, limit = API_CONFIG.maxResults } = req.query;
-    
+
     console.log('📡 Récupération des changements depuis:', since);
-    
-    const sinceDate = since 
-      ? new Date(since)
-      : new Date(Date.now() - 24 * 60 * 60 * 1000);
-    
+
+    const sinceDate = since ? new Date(since) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+
     const actualLimit = Math.min(parseInt(limit), API_CONFIG.maxResults);
-    
+
     let query = `
       SELECT 
         id,
@@ -341,37 +357,37 @@ exports.getChanges = async (req, res) => {
       ORDER BY dateimport ASC
       LIMIT $2
     `;
-    
+
     const result = await db.query(query, [sinceDate, actualLimit]);
-    
-    const derniereModification = result.rows.length > 0
-      ? result.rows[result.rows.length - 1].dateimport
-      : sinceDate.toISOString();
-    
+
+    const derniereModification =
+      result.rows.length > 0
+        ? result.rows[result.rows.length - 1].dateimport
+        : sinceDate.toISOString();
+
     // Ajouter en-têtes pour pagination
     res.setHeader('X-Total-Count', result.rows.length);
     res.setHeader('X-Last-Modified', derniereModification);
-    
+
     res.json({
       success: true,
       data: result.rows,
       pagination: {
         total: result.rows.length,
         limit: actualLimit,
-        hasMore: result.rows.length === actualLimit
+        hasMore: result.rows.length === actualLimit,
       },
       derniereModification: derniereModification,
       since: sinceDate.toISOString(),
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-    
   } catch (error) {
     console.error('❌ Erreur getChanges:', error);
     res.status(500).json({
       success: false,
       error: 'Erreur lors de la récupération des changements',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
@@ -383,33 +399,33 @@ exports.getChanges = async (req, res) => {
 exports.syncData = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     const { donnees, source = 'python_app', batch_id } = req.body;
-    
+
     if (!donnees || !Array.isArray(donnees)) {
       await client.query('ROLLBACK');
       client.release();
       return res.status(400).json({
         success: false,
         error: 'Format invalide',
-        message: 'Le champ "donnees" doit être un tableau'
+        message: 'Le champ "donnees" doit être un tableau',
       });
     }
 
     // Vérifier la taille pour LWS
     const totalSize = JSON.stringify(donnees).length;
     const maxSizeBytes = 100 * 1024 * 1024; // 100MB
-    
+
     if (totalSize > maxSizeBytes) {
       await client.query('ROLLBACK');
       client.release();
       return res.status(413).json({
         success: false,
         error: 'Données trop volumineuses',
-        message: `Taille maximum: 100MB, reçu: ${Math.round(totalSize / 1024 / 1024)}MB`
+        message: `Taille maximum: 100MB, reçu: ${Math.round(totalSize / 1024 / 1024)}MB`,
       });
     }
 
@@ -418,12 +434,14 @@ exports.syncData = async (req, res) => {
       client.release();
       return res.status(400).json({
         success: false,
-        error: 'Trop d\'enregistrements',
-        message: `Maximum ${API_CONFIG.maxSyncRecords} enregistrements par requête`
+        error: "Trop d'enregistrements",
+        message: `Maximum ${API_CONFIG.maxSyncRecords} enregistrements par requête`,
       });
     }
 
-    console.log(`🔄 Synchronisation intelligente: ${donnees.length} enregistrements depuis ${source}`);
+    console.log(
+      `🔄 Synchronisation intelligente: ${donnees.length} enregistrements depuis ${source}`
+    );
 
     // Traitement par lots pour optimiser la mémoire
     const BATCH_SIZE = API_CONFIG.maxBatchSize;
@@ -435,15 +453,17 @@ exports.syncData = async (req, res) => {
 
     for (let i = 0; i < donnees.length; i += BATCH_SIZE) {
       const batch = donnees.slice(i, i + BATCH_SIZE);
-      const batchNum = Math.floor(i/BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(donnees.length/BATCH_SIZE);
-      
-      console.log(`📦 Traitement lot ${batchNum}/${totalBatches} (${batch.length} enregistrements)`);
-      
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(donnees.length / BATCH_SIZE);
+
+      console.log(
+        `📦 Traitement lot ${batchNum}/${totalBatches} (${batch.length} enregistrements)`
+      );
+
       for (let j = 0; j < batch.length; j++) {
         const item = batch[j];
         const index = i + j;
-        
+
         try {
           if (!item.NOM || !item.PRENOMS) {
             errors++;
@@ -453,7 +473,7 @@ exports.syncData = async (req, res) => {
 
           const nom = item.NOM.toString().trim();
           const prenoms = item.PRENOMS.toString().trim();
-          const siteRetrait = item["SITE DE RETRAIT"]?.toString().trim() || '';
+          const siteRetrait = item['SITE DE RETRAIT']?.toString().trim() || '';
 
           const existingCarte = await client.query(
             `SELECT * FROM cartes 
@@ -464,10 +484,10 @@ exports.syncData = async (req, res) => {
           if (existingCarte.rows.length > 0) {
             const carteExistante = existingCarte.rows[0];
             const resultUpdate = await exports.mettreAJourCarte(client, carteExistante, item);
-            
+
             if (resultUpdate.updated) {
               updated++;
-              
+
               // 📝 JOURNALISATION DE LA MISE À JOUR
               await annulationService.enregistrerAction(
                 null, // utilisateurId (synchronisation externe)
@@ -488,33 +508,39 @@ exports.syncData = async (req, res) => {
             } else {
               duplicates++;
             }
-            
           } else {
             const insertData = {
               "LIEU D'ENROLEMENT": item["LIEU D'ENROLEMENT"]?.toString().trim() || '',
-              "SITE DE RETRAIT": siteRetrait,
-              "RANGEMENT": item["RANGEMENT"]?.toString().trim() || '',
-              "NOM": nom,
-              "PRENOMS": prenoms,
-              "DATE DE NAISSANCE": item["DATE DE NAISSANCE"] ? new Date(item["DATE DE NAISSANCE"]) : null,
-              "LIEU NAISSANCE": item["LIEU NAISSANCE"]?.toString().trim() || '',
-              "CONTACT": item["CONTACT"]?.toString().trim() || '',
-              "DELIVRANCE": item["DELIVRANCE"]?.toString().trim() || '',
-              "CONTACT DE RETRAIT": item["CONTACT DE RETRAIT"]?.toString().trim() || '',
-              "DATE DE DELIVRANCE": item["DATE DE DELIVRANCE"] ? new Date(item["DATE DE DELIVRANCE"]) : null,
-              "sourceimport": source,
-              "batch_id": batch_id || null,
-              "coordination": item.COORDINATION || null
+              'SITE DE RETRAIT': siteRetrait,
+              RANGEMENT: item['RANGEMENT']?.toString().trim() || '',
+              NOM: nom,
+              PRENOMS: prenoms,
+              'DATE DE NAISSANCE': item['DATE DE NAISSANCE']
+                ? new Date(item['DATE DE NAISSANCE'])
+                : null,
+              'LIEU NAISSANCE': item['LIEU NAISSANCE']?.toString().trim() || '',
+              CONTACT: item['CONTACT']?.toString().trim() || '',
+              DELIVRANCE: item['DELIVRANCE']?.toString().trim() || '',
+              'CONTACT DE RETRAIT': item['CONTACT DE RETRAIT']?.toString().trim() || '',
+              'DATE DE DELIVRANCE': item['DATE DE DELIVRANCE']
+                ? new Date(item['DATE DE DELIVRANCE'])
+                : null,
+              sourceimport: source,
+              batch_id: batch_id || null,
+              coordination: item.COORDINATION || null,
             };
 
-            const insertResult = await client.query(`
+            const insertResult = await client.query(
+              `
               INSERT INTO cartes (
                 "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
                 "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
                 "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", sourceimport, batch_id, coordination
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
               RETURNING id
-            `, Object.values(insertData));
+            `,
+              Object.values(insertData)
+            );
 
             imported++;
 
@@ -536,14 +562,13 @@ exports.syncData = async (req, res) => {
               insertData.coordination
             );
           }
-
         } catch (error) {
           errors++;
           errorDetails.push(`Enregistrement ${index}: ${error.message}`);
           console.error(`❌ Erreur enregistrement ${index}:`, error.message);
         }
       }
-      
+
       // Libérer la mémoire après chaque lot
       if (global.gc) {
         global.gc();
@@ -554,41 +579,41 @@ exports.syncData = async (req, res) => {
     client.release();
 
     const duration = Date.now() - startTime;
-    const successRate = donnees.length > 0 
-      ? Math.round(((imported + updated) / donnees.length) * 100) 
-      : 0;
+    const successRate =
+      donnees.length > 0 ? Math.round(((imported + updated) / donnees.length) * 100) : 0;
 
-    console.log(`✅ Sync UP réussie en ${duration}ms: ${imported} nouvelles, ${updated} mises à jour, ${duplicates} identiques, ${errors} erreurs`);
+    console.log(
+      `✅ Sync UP réussie en ${duration}ms: ${imported} nouvelles, ${updated} mises à jour, ${duplicates} identiques, ${errors} erreurs`
+    );
 
     res.json({
       success: true,
       message: 'Synchronisation avec fusion intelligente réussie',
       stats: {
         imported,
-        updated, 
+        updated,
         duplicates,
         errors,
         totalProcessed: donnees.length,
-        successRate
+        successRate,
       },
       performance: {
         duration_ms: duration,
         records_per_second: Math.round(donnees.length / (duration / 1000)),
         batch_size: BATCH_SIZE,
-        total_batches: Math.ceil(donnees.length / BATCH_SIZE)
+        total_batches: Math.ceil(donnees.length / BATCH_SIZE),
       },
       fusion: {
-        strategy: "intelligente_multicolonnes",
-        colonnes_traitees: Object.keys(exports.getColonnesAFusionner())
+        strategy: 'intelligente_multicolonnes',
+        colonnes_traitees: Object.keys(exports.getColonnesAFusionner()),
       },
       batch_info: {
         batch_id: batch_id || 'N/A',
         source: source,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       },
-      errorDetails: errorDetails.slice(0, 10)
+      errorDetails: errorDetails.slice(0, 10),
     });
-
   } catch (error) {
     await client.query('ROLLBACK');
     client.release();
@@ -597,7 +622,7 @@ exports.syncData = async (req, res) => {
       success: false,
       error: 'Erreur lors de la synchronisation',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
@@ -607,18 +632,18 @@ exports.syncData = async (req, res) => {
  */
 exports.getColonnesAFusionner = () => {
   return {
-    'LIEU D\'ENROLEMENT': 'texte',
-    'SITE DE RETRAIT': 'texte', 
-    'RANGEMENT': 'texte',
-    'NOM': 'texte',
-    'PRENOMS': 'texte',
+    "LIEU D'ENROLEMENT": 'texte',
+    'SITE DE RETRAIT': 'texte',
+    RANGEMENT: 'texte',
+    NOM: 'texte',
+    PRENOMS: 'texte',
     'LIEU NAISSANCE': 'texte',
-    'CONTACT': 'contact',
+    CONTACT: 'contact',
     'CONTACT DE RETRAIT': 'contact',
-    'DELIVRANCE': 'delivrance',
+    DELIVRANCE: 'delivrance',
     'DATE DE NAISSANCE': 'date',
     'DATE DE DELIVRANCE': 'date',
-    'COORDINATION': 'texte'
+    COORDINATION: 'texte',
   };
 };
 
@@ -640,14 +665,15 @@ exports.getCartes = async (req, res) => {
       coordination,
       page = 1,
       limit = API_CONFIG.defaultLimit,
-      export_all = 'false'
+      export_all = 'false',
     } = req.query;
 
     // Pour LWS, on permet des exports plus grands
-    const actualLimit = export_all === 'true' 
-      ? API_CONFIG.exportMaxRows
-      : Math.min(parseInt(limit), API_CONFIG.maxResults);
-    
+    const actualLimit =
+      export_all === 'true'
+        ? API_CONFIG.exportMaxRows
+        : Math.min(parseInt(limit), API_CONFIG.maxResults);
+
     const actualPage = Math.max(1, parseInt(page));
     const offset = (actualPage - 1) * actualLimit;
 
@@ -804,19 +830,18 @@ exports.getCartes = async (req, res) => {
         total: total,
         totalPages: Math.ceil(total / actualLimit),
         hasNext: actualPage < Math.ceil(total / actualLimit),
-        hasPrev: actualPage > 1
+        hasPrev: actualPage > 1,
       },
       filters: req.query,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error('❌ Erreur API getCartes:', error);
     res.status(500).json({
       success: false,
       error: 'Erreur lors de la récupération des cartes',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
@@ -886,16 +911,15 @@ exports.getStats = async (req, res) => {
         global: {
           total_cartes: totalCartes,
           cartes_retirees: cartesRetirees,
-          taux_retrait_global: totalCartes > 0 
-            ? Math.round((cartesRetirees / totalCartes) * 100) 
-            : 0,
+          taux_retrait_global:
+            totalCartes > 0 ? Math.round((cartesRetirees / totalCartes) * 100) : 0,
           sites_actifs: parseInt(global.sites_actifs),
           beneficiaires_uniques: parseInt(global.beneficiaires_uniques),
           coordinations_distinctes: parseInt(global.coordinations_distinctes),
           premiere_importation: global.premiere_importation,
           derniere_importation: global.derniere_importation,
           total_batches: parseInt(global.total_batches || 0),
-          imports_7j: parseInt(global.imports_7j || 0)
+          imports_7j: parseInt(global.imports_7j || 0),
         },
         top_sites: topSites.rows,
         stats_by_coordination: statsByCoordination.rows,
@@ -904,19 +928,18 @@ exports.getStats = async (req, res) => {
         system: {
           max_results: API_CONFIG.maxResults,
           max_sync: API_CONFIG.maxSyncRecords,
-          environment: process.env.NODE_ENV || 'production'
-        }
+          environment: process.env.NODE_ENV || 'production',
+        },
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error('❌ Erreur API getStats:', error);
     res.status(500).json({
       success: false,
       error: 'Erreur lors de la récupération des statistiques',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
@@ -932,7 +955,7 @@ exports.getModifications = async (req, res) => {
     if (!site || !derniereSync) {
       return res.status(400).json({
         success: false,
-        error: 'Paramètres manquants: site et derniereSync requis'
+        error: 'Paramètres manquants: site et derniereSync requis',
       });
     }
 
@@ -940,7 +963,7 @@ exports.getModifications = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Site non reconnu',
-        message: `Sites valides: ${API_CONFIG.SITES.join(', ')}`
+        message: `Sites valides: ${API_CONFIG.SITES.join(', ')}`,
       });
     }
 
@@ -982,16 +1005,15 @@ exports.getModifications = async (req, res) => {
       total: result.rows.length,
       derniereModification: derniereModification,
       site: site,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error('❌ Erreur getModifications:', error);
     res.status(500).json({
       success: false,
       error: 'Erreur lors de la récupération des modifications',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 };
@@ -1013,18 +1035,18 @@ exports.getSites = async (req, res) => {
     res.json({
       success: true,
       sites_configures: API_CONFIG.SITES,
-      sites_actifs: sitesActifs.rows.map(row => row.site),
+      sites_actifs: sitesActifs.rows.map((row) => row.site),
       total_configures: API_CONFIG.SITES.length,
       total_actifs: sitesActifs.rows.length,
-      description: "Sites avec synchronisation intelligente multi-colonnes",
-      timestamp: new Date().toISOString()
+      description: 'Sites avec synchronisation intelligente multi-colonnes',
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('❌ Erreur getSites:', error);
     res.status(500).json({
       success: false,
       error: 'Erreur serveur',
-      details: error.message
+      details: error.message,
     });
   }
 };
@@ -1037,10 +1059,10 @@ exports.diagnostic = async (req, res) => {
   try {
     const memory = process.memoryUsage();
     const uptime = process.uptime();
-    
+
     // Test DB rapide
     const dbTest = await db.query('SELECT 1 as test');
-    
+
     // Compter les données
     const stats = await db.query(`
       SELECT 
@@ -1062,22 +1084,22 @@ exports.diagnostic = async (req, res) => {
         total_cartes: parseInt(stats.rows[0].total),
         sites_actifs: parseInt(stats.rows[0].sites),
         coordinations: parseInt(stats.rows[0].coordinations),
-        dernier_import: stats.rows[0].last_import
+        dernier_import: stats.rows[0].last_import,
       },
       system: {
         uptime: Math.floor(uptime / 3600) + 'h ' + Math.floor((uptime % 3600) / 60) + 'm',
         memory: {
           used: Math.round(memory.heapUsed / 1024 / 1024) + 'MB',
           total: Math.round(memory.heapTotal / 1024 / 1024) + 'MB',
-          rss: Math.round(memory.rss / 1024 / 1024) + 'MB'
+          rss: Math.round(memory.rss / 1024 / 1024) + 'MB',
         },
-        node_version: process.version
+        node_version: process.version,
       },
       config: {
         maxResults: API_CONFIG.maxResults,
         maxSyncRecords: API_CONFIG.maxSyncRecords,
         maxBatchSize: API_CONFIG.maxBatchSize,
-        sites: API_CONFIG.SITES
+        sites: API_CONFIG.SITES,
       },
       endpoints: {
         health: '/api/external/health',
@@ -1087,14 +1109,14 @@ exports.diagnostic = async (req, res) => {
         stats: '/api/external/stats',
         modifications: '/api/external/modifications?site=...&derniereSync=...',
         sites: '/api/external/sites',
-        diagnostic: '/api/external/diagnostic'
-      }
+        diagnostic: '/api/external/diagnostic',
+      },
     });
   } catch (error) {
     console.error('❌ Erreur diagnostic:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 };

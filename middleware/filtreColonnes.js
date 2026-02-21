@@ -21,25 +21,25 @@ const filtrerColonnes = (req, res, next) => {
 
     // Vérifier que l'utilisateur est authentifié
     if (!req.user) {
-      return res.status(401).json({ 
-        erreur: "Non authentifié",
-        message: "Vous devez être connecté pour effectuer cette action"
+      return res.status(401).json({
+        erreur: 'Non authentifié',
+        message: 'Vous devez être connecté pour effectuer cette action',
       });
     }
 
     const role = normaliserRole(req.user?.role);
-    
+
     if (!role) {
-      return res.status(403).json({ 
-        erreur: "Rôle non reconnu",
-        message: "Votre rôle utilisateur n'est pas valide"
+      return res.status(403).json({
+        erreur: 'Rôle non reconnu',
+        message: "Votre rôle utilisateur n'est pas valide",
       });
     }
 
     // Déterminer les colonnes autorisées
     // Priorité à req.colonnesAutorisees (défini par peutModifierCarte)
     let colonnesAutorisees = req.colonnesAutorisees;
-    
+
     // Si non défini, utiliser la configuration du rôle
     if (!colonnesAutorisees) {
       const configRole = CONFIG_ROLES[role];
@@ -50,8 +50,7 @@ const filtrerColonnes = (req, res, next) => {
     if (colonnesAutorisees === 'toutes') {
       // Pour la traçabilité, on peut logger les modifications massives
       if (process.env.NODE_ENV === 'development') {
-        console.log(`[DEBUG] Modification complète par ${role}:`, 
-          Object.keys(req.body).join(', '));
+        console.log(`[DEBUG] Modification complète par ${role}:`, Object.keys(req.body).join(', '));
       }
       return next();
     }
@@ -61,23 +60,23 @@ const filtrerColonnes = (req, res, next) => {
       // Cas spécial: aucune colonne autorisée (Opérateur)
       if (colonnesAutorisees.length === 0) {
         return res.status(403).json({
-          erreur: "Action non autorisée",
-          message: "Votre rôle ne permet pas de modifier des données"
+          erreur: 'Action non autorisée',
+          message: 'Votre rôle ne permet pas de modifier des données',
         });
       }
 
       const corpsFiltre = {};
       const colonnesRejetees = [];
-      
+
       // Normaliser les noms de colonnes pour la comparaison
-      const colonnesAutoriseesNormalisees = colonnesAutorisees.map(col => 
+      const colonnesAutoriseesNormalisees = colonnesAutorisees.map((col) =>
         col.toLowerCase().trim()
       );
 
       // Filtrer les colonnes
-      Object.keys(req.body).forEach(key => {
+      Object.keys(req.body).forEach((key) => {
         const keyNormalisee = key.toLowerCase().trim();
-        
+
         if (colonnesAutoriseesNormalisees.includes(keyNormalisee)) {
           // Garder la clé originale pour préserver la casse si nécessaire
           corpsFiltre[key] = req.body[key];
@@ -99,10 +98,10 @@ const filtrerColonnes = (req, res, next) => {
       if (req.method === 'PUT' || req.method === 'PATCH') {
         if (Object.keys(corpsFiltre).length === 0) {
           return res.status(400).json({
-            erreur: "Aucune modification autorisée",
+            erreur: 'Aucune modification autorisée',
             message: "Vous n'avez pas le droit de modifier ces champs",
             champsAutorises: colonnesAutorisees,
-            champsTentatives: colonnesRejetees
+            champsTentatives: colonnesRejetees,
           });
         }
       }
@@ -116,10 +115,10 @@ const filtrerColonnes = (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error("Erreur dans filtrerColonnes:", error);
+    console.error('Erreur dans filtrerColonnes:', error);
     return res.status(500).json({
-      erreur: "Erreur serveur",
-      message: "Une erreur est survenue lors du filtrage des données"
+      erreur: 'Erreur serveur',
+      message: 'Une erreur est survenue lors du filtrage des données',
     });
   }
 };
@@ -132,24 +131,24 @@ const filtrerColonnesImport = (req, res, next) => {
   try {
     const role = normaliserRole(req.user?.role);
     const configRole = CONFIG_ROLES[role];
-    
+
     // Si l'utilisateur peut tout modifier, pas de filtrage
     if (configRole?.colonnesModifiables === 'toutes') {
       return next();
     }
-    
+
     // Pour les imports, on pourrait avoir une logique spécifique
     // Par exemple, vérifier que les colonnes du fichier correspondent
     // aux droits de l'utilisateur
-    
+
     next();
   } catch (error) {
-    console.error("Erreur dans filtrerColonnesImport:", error);
+    console.error('Erreur dans filtrerColonnesImport:', error);
     next();
   }
 };
 
-module.exports = { 
+module.exports = {
   filtrerColonnes,
-  filtrerColonnesImport 
+  filtrerColonnesImport,
 };

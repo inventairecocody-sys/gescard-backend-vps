@@ -22,8 +22,8 @@ const UPLOAD_CONFIG = {
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'text/csv',
     'application/csv',
-    'application/vnd.oasis.opendocument.spreadsheet'
-  ]
+    'application/vnd.oasis.opendocument.spreadsheet',
+  ],
 };
 
 // Assurer que le dossier uploads existe
@@ -42,16 +42,14 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const timestamp = Date.now();
-    const random = Math.round(Math.random() * 1E9);
-    const safeFileName = file.originalname
-      .replace(/[^a-zA-Z0-9.\-_]/g, '_')
-      .replace(/\s+/g, '_');
-    
+    const random = Math.round(Math.random() * 1e9);
+    const safeFileName = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_').replace(/\s+/g, '_');
+
     // Ajouter l'ID utilisateur et sa coordination pour traçabilité
     const userId = req.user?.id || 'anonymous';
     const coordination = req.user?.coordination || 'no-coordination';
     cb(null, `import-${userId}-${coordination}-${timestamp}-${random}-${safeFileName}`);
-  }
+  },
 });
 
 const fileFilter = (req, file, cb) => {
@@ -62,7 +60,12 @@ const fileFilter = (req, file, cb) => {
   if (isValidExt || isValidMime) {
     cb(null, true);
   } else {
-    cb(new Error(`Format non supporté. Formats acceptés: ${UPLOAD_CONFIG.allowedExtensions.join(', ')}`), false);
+    cb(
+      new Error(
+        `Format non supporté. Formats acceptés: ${UPLOAD_CONFIG.allowedExtensions.join(', ')}`
+      ),
+      false
+    );
   }
 };
 
@@ -71,8 +74,8 @@ const upload = multer({
   fileFilter,
   limits: {
     fileSize: UPLOAD_CONFIG.maxFileSize,
-    files: UPLOAD_CONFIG.maxFiles
-  }
+    files: UPLOAD_CONFIG.maxFiles,
+  },
 });
 
 // ============================================
@@ -84,10 +87,10 @@ const validateFileUpload = (req, res, next) => {
     return res.status(400).json({
       success: false,
       error: 'Aucun fichier uploadé',
-      code: 'NO_FILE'
+      code: 'NO_FILE',
     });
   }
-  
+
   // Vérifier la taille
   if (req.file.size > UPLOAD_CONFIG.maxFileSize) {
     // Supprimer le fichier
@@ -95,10 +98,10 @@ const validateFileUpload = (req, res, next) => {
     return res.status(400).json({
       success: false,
       error: `Fichier trop volumineux. Maximum: ${UPLOAD_CONFIG.maxFileSize / (1024 * 1024)}MB`,
-      code: 'FILE_TOO_LARGE'
+      code: 'FILE_TOO_LARGE',
     });
   }
-  
+
   next();
 };
 
@@ -111,7 +114,9 @@ router.use(verifierToken);
 
 // Middleware de logging spécifique
 router.use((req, res, next) => {
-  console.log(`📦 [ImportExport] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur} (${req.user?.role})`);
+  console.log(
+    `📦 [ImportExport] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur} (${req.user?.role})`
+  );
   next();
 });
 
@@ -136,7 +141,7 @@ router.post(
  * GET /api/import-export/export
  */
 router.get(
-  '/export', 
+  '/export',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.exportExcel
 );
@@ -146,7 +151,7 @@ router.get(
  * GET /api/import-export/export/csv
  */
 router.get(
-  '/export/csv', 
+  '/export/csv',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.exportCSV
 );
@@ -156,7 +161,7 @@ router.get(
  * GET /api/import-export/export/site
  */
 router.get(
-  '/export/site', 
+  '/export/site',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.exportCSVBySite
 );
@@ -166,7 +171,7 @@ router.get(
  * GET /api/import-export/template
  */
 router.get(
-  '/template', 
+  '/template',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.downloadTemplate
 );
@@ -176,7 +181,7 @@ router.get(
  * GET /api/import-export/sites
  */
 router.get(
-  '/sites', 
+  '/sites',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.getSitesList
 );
@@ -186,7 +191,7 @@ router.get(
  * GET /api/import-export/diagnostic
  */
 router.get(
-  '/diagnostic', 
+  '/diagnostic',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.diagnostic
 );
@@ -200,7 +205,7 @@ router.get(
  * GET /api/import-export/export/complete
  */
 router.get(
-  '/export/complete', 
+  '/export/complete',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.exportCompleteExcel
 );
@@ -210,7 +215,7 @@ router.get(
  * GET /api/import-export/export/complete/csv
  */
 router.get(
-  '/export/complete/csv', 
+  '/export/complete/csv',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.exportCompleteCSV
 );
@@ -220,7 +225,7 @@ router.get(
  * GET /api/import-export/export/all
  */
 router.get(
-  '/export/all', 
+  '/export/all',
   role.peutImporterExporter, // Admin et Gestionnaire uniquement
   importExportController.exportAllData
 );
@@ -234,7 +239,7 @@ router.get(
  * POST /api/import-export/import
  */
 router.post(
-  '/import', 
+  '/import',
   role.peutImporterExporter,
   upload.single('file'),
   validateFileUpload,
@@ -246,7 +251,7 @@ router.post(
  * POST /api/import-export/import/smart-sync
  */
 router.post(
-  '/import/smart-sync', 
+  '/import/smart-sync',
   role.peutImporterExporter,
   upload.single('file'),
   validateFileUpload,
@@ -257,38 +262,26 @@ router.post(
  * 📤 EXPORT STREAMING (redirige vers complet)
  * GET /api/import-export/export/stream
  */
-router.get(
-  '/export/stream', 
-  role.peutImporterExporter,
-  importExportController.exportCompleteCSV
-);
+router.get('/export/stream', role.peutImporterExporter, importExportController.exportCompleteCSV);
 
 /**
  * 🎛️ EXPORT FILTRÉ (par site)
  * GET /api/import-export/export/filtered
  */
-router.get(
-  '/export/filtered', 
-  role.peutImporterExporter,
-  importExportController.exportCSVBySite
-);
+router.get('/export/filtered', role.peutImporterExporter, importExportController.exportCSVBySite);
 
 /**
  * 🔍 EXPORT RÉSULTATS (alias)
  * GET /api/import-export/export-resultats
  */
-router.get(
-  '/export-resultats', 
-  role.peutImporterExporter,
-  importExportController.exportCSVBySite
-);
+router.get('/export-resultats', role.peutImporterExporter, importExportController.exportCSVBySite);
 
 /**
  * 📤 EXPORT OPTIMISÉ (redirige vers complet)
  * GET /api/import-export/export/optimized
  */
 router.get(
-  '/export/optimized', 
+  '/export/optimized',
   role.peutImporterExporter,
   importExportController.exportCompleteCSV
 );
@@ -301,21 +294,13 @@ router.get(
  * 📊 STATISTIQUES D'EXPORT
  * GET /api/import-export/stats
  */
-router.get(
-  '/stats', 
-  role.peutImporterExporter,
-  importExportController.getExportStatus
-);
+router.get('/stats', role.peutImporterExporter, importExportController.getExportStatus);
 
 /**
  * 📊 STATUT DES EXPORTS EN COURS
  * GET /api/import-export/status
  */
-router.get(
-  '/status', 
-  role.peutImporterExporter,
-  importExportController.getExportStatus
-);
+router.get('/status', role.peutImporterExporter, importExportController.getExportStatus);
 
 // ============================================
 // ROUTES DE TEST (sans authentification en dev)
@@ -331,10 +316,10 @@ if (process.env.NODE_ENV !== 'production') {
       const db = require('../db/db');
       const result = await db.query('SELECT COUNT(*) as total FROM cartes');
       const totalRows = parseInt(result.rows[0].total);
-      
+
       res.json({
         success: true,
-        message: 'Service d\'export opérationnel',
+        message: "Service d'export opérationnel",
         timestamp: new Date().toISOString(),
         data: {
           total_cartes: totalRows,
@@ -342,34 +327,62 @@ if (process.env.NODE_ENV !== 'production') {
           roles_autorises: ['Administrateur', 'Gestionnaire'],
           endpoints_disponibles: {
             export_limite: [
-              { method: 'GET', path: '/api/import-export/export', description: 'Excel limité (5000 lignes)' },
-              { method: 'GET', path: '/api/import-export/export/csv', description: 'CSV limité (5000 lignes)' },
-              { method: 'GET', path: '/api/import-export/export/site', description: 'CSV par site' }
+              {
+                method: 'GET',
+                path: '/api/import-export/export',
+                description: 'Excel limité (5000 lignes)',
+              },
+              {
+                method: 'GET',
+                path: '/api/import-export/export/csv',
+                description: 'CSV limité (5000 lignes)',
+              },
+              {
+                method: 'GET',
+                path: '/api/import-export/export/site',
+                description: 'CSV par site',
+              },
             ],
             export_complet: [
-              { method: 'GET', path: '/api/import-export/export/complete', description: 'Excel complet (toutes les données)' },
-              { method: 'GET', path: '/api/import-export/export/complete/csv', description: 'CSV complet (toutes les données)' },
-              { method: 'GET', path: '/api/import-export/export/all', description: 'Choix automatique du format' }
+              {
+                method: 'GET',
+                path: '/api/import-export/export/complete',
+                description: 'Excel complet (toutes les données)',
+              },
+              {
+                method: 'GET',
+                path: '/api/import-export/export/complete/csv',
+                description: 'CSV complet (toutes les données)',
+              },
+              {
+                method: 'GET',
+                path: '/api/import-export/export/all',
+                description: 'Choix automatique du format',
+              },
             ],
             import: [
               { method: 'POST', path: '/api/import-export/import/csv', description: 'Import CSV' },
-              { method: 'POST', path: '/api/import-export/import/smart-sync', description: 'Import avec fusion intelligente' }
-            ]
+              {
+                method: 'POST',
+                path: '/api/import-export/import/smart-sync',
+                description: 'Import avec fusion intelligente',
+              },
+            ],
           },
           recommandations: [
-            totalRows > 50000 ? 
-              `📊 ${totalRows.toLocaleString()} cartes: utilisez /export/all` :
-              `✅ ${totalRows.toLocaleString()} cartes: toutes les routes fonctionnent`,
-            totalRows > 20000 ? 
-              '⚡ CSV recommandé pour les gros volumes' :
-              '📈 Excel parfait pour les volumes modérés'
-          ]
-        }
+            totalRows > 50000
+              ? `📊 ${totalRows.toLocaleString()} cartes: utilisez /export/all`
+              : `✅ ${totalRows.toLocaleString()} cartes: toutes les routes fonctionnent`,
+            totalRows > 20000
+              ? '⚡ CSV recommandé pour les gros volumes'
+              : '📈 Excel parfait pour les volumes modérés',
+          ],
+        },
       });
     } catch (error) {
       res.status(500).json({
         success: false,
-        error: error.message
+        error: error.message,
       });
     }
   });
@@ -393,17 +406,17 @@ if (process.env.NODE_ENV !== 'production') {
         '✅ Import CSV avec validation',
         '✅ Import Smart Sync (fusion intelligente)',
         '✅ Export par site',
-        '✅ Template d\'import Excel',
-        '✅ File d\'attente et gestion mémoire',
+        "✅ Template d'import Excel",
+        "✅ File d'attente et gestion mémoire",
         '✅ Monitoring des exports en cours',
-        '✅ Filtrage par coordination pour les gestionnaires'
+        '✅ Filtrage par coordination pour les gestionnaires',
       ],
       config: {
         max_file_size: '100MB',
         max_export_rows: '1,000,000',
         max_batch_size: 10000,
         concurrent_exports: 3,
-        formats_supportes: ['.csv', '.xlsx', '.xls']
+        formats_supportes: ['.csv', '.xlsx', '.xls'],
       },
       quick_start: [
         '1️⃣ Pour exporter TOUT: GET /api/import-export/export/all',
@@ -412,8 +425,8 @@ if (process.env.NODE_ENV !== 'production') {
         '4️⃣ Pour importer: POST /api/import-export/import/csv (multipart/form-data)',
         '5️⃣ Pour le template: GET /api/import-export/template',
         '6️⃣ Pour le diagnostic: GET /api/import-export/diagnostic',
-        '7️⃣ Pour les stats: GET /api/import-export/stats'
-      ]
+        '7️⃣ Pour les stats: GET /api/import-export/stats',
+      ],
     });
   });
 
@@ -423,7 +436,7 @@ if (process.env.NODE_ENV !== 'production') {
    */
   router.get('/health', (req, res) => {
     const controller = importExportController._controller;
-    
+
     res.json({
       status: 'healthy',
       service: 'import-export-complet',
@@ -434,22 +447,22 @@ if (process.env.NODE_ENV !== 'production') {
       stats: {
         exports_actifs: controller?.activeExports?.size || 0,
         imports_actifs: controller?.activeImports?.size || 0,
-        file_attente: controller?.exportQueue?.length || 0
+        file_attente: controller?.exportQueue?.length || 0,
       },
       endpoints: {
         import: {
           csv: 'POST /import/csv',
-          smart: 'POST /import/smart-sync'
+          smart: 'POST /import/smart-sync',
         },
         export_limite: {
           excel: 'GET /export (max 5000)',
           csv: 'GET /export/csv (max 5000)',
-          site: 'GET /export/site'
+          site: 'GET /export/site',
         },
         export_complet: {
           excel: 'GET /export/complete',
           csv: 'GET /export/complete/csv',
-          auto: 'GET /export/all'
+          auto: 'GET /export/all',
         },
         utilitaires: {
           template: 'GET /template',
@@ -457,16 +470,16 @@ if (process.env.NODE_ENV !== 'production') {
           diagnostic: 'GET /diagnostic',
           stats: 'GET /stats',
           status: 'GET /status',
-          test: 'GET /test'
-        }
+          test: 'GET /test',
+        },
       },
       recommandations: [
         '🚀 Utilisez /export/all pour exporter TOUTES vos données',
         '📊 /export/complete pour Excel, /export/complete/csv pour CSV',
         '⚡ CSV recommandé pour plus de 20,000 lignes',
         '💡 /export et /export/csv sont limités à 5000 lignes',
-        '📈 Vérifiez /diagnostic pour voir le volume total'
-      ]
+        '📈 Vérifiez /diagnostic pour voir le volume total',
+      ],
     });
   });
 }
@@ -476,10 +489,10 @@ if (process.env.NODE_ENV !== 'production') {
 // ============================================
 
 router.get('/', (req, res) => {
-  const roleInfo = req.user ? 
-    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role})` : 
-    'Non authentifié';
-  
+  const roleInfo = req.user
+    ? `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role})`
+    : 'Non authentifié';
+
   res.json({
     title: 'API Import/Export COMPLETE pour LWS',
     description: 'Exportez toutes vos données avec des performances optimisées',
@@ -496,27 +509,27 @@ router.get('/', (req, res) => {
             path: '/api/import-export/export/all',
             method: 'GET',
             description: 'Choix intelligent entre Excel et CSV selon le volume',
-            exemple: 'curl -H "Authorization: Bearer <token>" https://api/import-export/export/all'
+            exemple: 'curl -H "Authorization: Bearer <token>" https://api/import-export/export/all',
           },
           excel_complet: {
             path: '/api/import-export/export/complete',
             method: 'GET',
-            description: 'Export COMPLET en Excel avec formatage professionnel'
+            description: 'Export COMPLET en Excel avec formatage professionnel',
           },
           csv_complet: {
             path: '/api/import-export/export/complete/csv',
             method: 'GET',
-            description: 'Export COMPLET en CSV avec streaming optimisé'
-          }
-        }
+            description: 'Export COMPLET en CSV avec streaming optimisé',
+          },
+        },
       },
       export_limite: {
         description: '🟢 Export limité à 5000 lignes (compatibilité)',
         routes: {
           excel: '/api/import-export/export',
           csv: '/api/import-export/export/csv',
-          site: '/api/import-export/export/site?site=ADJAME'
-        }
+          site: '/api/import-export/export/site?site=ADJAME',
+        },
       },
       import: {
         description: '🟡 Importer des données',
@@ -525,14 +538,14 @@ router.get('/', (req, res) => {
             path: '/api/import-export/import/csv',
             method: 'POST',
             description: 'Import CSV avec validation',
-            format: 'multipart/form-data'
+            format: 'multipart/form-data',
           },
           smart: {
             path: '/api/import-export/import/smart-sync',
             method: 'POST',
-            description: 'Import avec fusion intelligente (évite les doublons)'
-          }
-        }
+            description: 'Import avec fusion intelligente (évite les doublons)',
+          },
+        },
       },
       utilitaires: {
         description: '⚪ Outils complémentaires',
@@ -543,35 +556,35 @@ router.get('/', (req, res) => {
           stats: '/api/import-export/stats',
           status: '/api/import-export/status',
           health: '/api/import-export/health',
-          test: '/api/import-export/test'
-        }
-      }
+          test: '/api/import-export/test',
+        },
+      },
     },
     conseils_pratiques: [
       {
         situation: 'Moins de 5,000 cartes',
-        conseil: 'Utilisez /export ou /export/csv'
+        conseil: 'Utilisez /export ou /export/csv',
       },
       {
         situation: 'Entre 5,000 et 50,000 cartes',
-        conseil: 'Utilisez /export/all ou /export/complete/csv'
+        conseil: 'Utilisez /export/all ou /export/complete/csv',
       },
       {
         situation: 'Plus de 50,000 cartes',
-        conseil: 'Utilisez /export/complete/csv (streaming optimisé)'
+        conseil: 'Utilisez /export/complete/csv (streaming optimisé)',
       },
       {
         situation: 'Import avec doublons',
-        conseil: 'Utilisez /import/smart-sync pour la fusion intelligente'
-      }
+        conseil: 'Utilisez /import/smart-sync pour la fusion intelligente',
+      },
     ],
     performance: {
       max_export_rows: '1,000,000',
       max_file_size: '100MB',
       concurrent_exports: 3,
       traitement_par_lots: '10,000 lignes par lot',
-      streaming: 'Oui (CSV)'
-    }
+      streaming: 'Oui (CSV)',
+    },
   });
 });
 

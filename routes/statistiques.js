@@ -1,9 +1,9 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const { query } = require("../db/db");
-const { verifierToken } = require("../middleware/auth");
-const role = require("../middleware/verificationRole");
-const permission = require("../middleware/permission");
+const { query } = require('../db/db');
+const { verifierToken } = require('../middleware/auth');
+const role = require('../middleware/verificationRole');
+const permission = require('../middleware/permission');
 
 // ============================================
 // CONFIGURATION OPTIMISÉE POUR LWS
@@ -13,17 +13,17 @@ const STATS_CONFIG = {
   cache: {
     globales: { data: null, timestamp: null, coordination: null },
     sites: { data: null, timestamp: null, coordination: null },
-    detail: { data: null, timestamp: null, coordination: null }
+    detail: { data: null, timestamp: null, coordination: null },
   },
   cacheTimeout: 5 * 60 * 1000, // 5 minutes en millisecondes
-  
+
   // Rate limiting (sera appliqué via middleware global)
   rateLimits: {
     globales: 30, // 30 req/min
     sites: 30,
     detail: 20,
-    refresh: 5    // 5 req/heure
-  }
+    refresh: 5, // 5 req/heure
+  },
 };
 
 // ============================================
@@ -36,12 +36,12 @@ const STATS_CONFIG = {
 const isCacheValid = (cacheKey, coordination = null) => {
   const cache = STATS_CONFIG.cache[cacheKey];
   if (!cache || !cache.timestamp) return false;
-  
+
   // Si le cache est pour une coordination différente, invalider
   if (cache.coordination !== coordination) return false;
-  
+
   const now = Date.now();
-  return (now - cache.timestamp) < STATS_CONFIG.cacheTimeout;
+  return now - cache.timestamp < STATS_CONFIG.cacheTimeout;
 };
 
 /**
@@ -50,20 +50,20 @@ const isCacheValid = (cacheKey, coordination = null) => {
 const ajouterFiltreCoordination = (req, query, params = []) => {
   const role = req.user?.role;
   const coordination = req.user?.coordination;
-  
+
   // Admin voit tout
   if (role === 'Administrateur') {
     return { query, params };
   }
-  
+
   // Gestionnaire et Chef d'équipe: filtrés par coordination
   if ((role === 'Gestionnaire' || role === "Chef d'équipe") && coordination) {
     return {
       query: query + ` AND coordination = $${params.length + 1}`,
-      params: [...params, coordination]
+      params: [...params, coordination],
     };
   }
-  
+
   return { query, params };
 };
 
@@ -74,23 +74,22 @@ const formatGlobales = (row) => ({
   total: parseInt(row.total) || 0,
   retires: parseInt(row.retires) || 0,
   restants: (parseInt(row.total) || 0) - (parseInt(row.retires) || 0),
-  tauxRetrait: parseInt(row.total) > 0 
-    ? Math.round((parseInt(row.retires) / parseInt(row.total)) * 100) 
-    : 0
+  tauxRetrait:
+    parseInt(row.total) > 0 ? Math.round((parseInt(row.retires) / parseInt(row.total)) * 100) : 0,
 });
 
 /**
  * Formate les statistiques par site
  */
-const formatSites = (rows) => rows.map(row => ({
-  site: row.site,
-  total: parseInt(row.total) || 0,
-  retires: parseInt(row.retires) || 0,
-  restants: (parseInt(row.total) || 0) - (parseInt(row.retires) || 0),
-  tauxRetrait: parseInt(row.total) > 0 
-    ? Math.round((parseInt(row.retires) / parseInt(row.total)) * 100) 
-    : 0
-}));
+const formatSites = (rows) =>
+  rows.map((row) => ({
+    site: row.site,
+    total: parseInt(row.total) || 0,
+    retires: parseInt(row.retires) || 0,
+    restants: (parseInt(row.total) || 0) - (parseInt(row.retires) || 0),
+    tauxRetrait:
+      parseInt(row.total) > 0 ? Math.round((parseInt(row.retires) / parseInt(row.total)) * 100) : 0,
+  }));
 
 // ============================================
 // MIDDLEWARE
@@ -102,7 +101,9 @@ router.use(permission.peutVoirInfosSensibles);
 
 // Middleware de logging
 router.use((req, res, next) => {
-  console.log(`📊 [Statistiques] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur} (${req.user?.role}) - Coordination: ${req.user?.coordination || 'Aucune'}`);
+  console.log(
+    `📊 [Statistiques] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur} (${req.user?.role}) - Coordination: ${req.user?.coordination || 'Aucune'}`
+  );
   next();
 });
 
@@ -120,10 +121,7 @@ router.use((req, res, next) => {
  * 🔹 STATISTIQUES GLOBALES AVEC CACHE ET FILTRAGE PAR COORDINATION
  * GET /api/statistiques/globales
  */
-router.get(
-  "/globales", 
-  permission.peutVoirStatistiques,
-  async (req, res) => {
+router.get('/globales', permission.peutVoirStatistiques, async (req, res) => {
   try {
     const { forceRefresh } = req.query;
     const startTime = Date.now();
@@ -131,23 +129,27 @@ router.get(
 
     // Vérifier le cache
     if (!forceRefresh && isCacheValid('globales', coordination)) {
-      console.log(`📦 Statistiques globales servies depuis le cache pour coordination: ${coordination || 'toutes'}`);
+      console.log(
+        `📦 Statistiques globales servies depuis le cache pour coordination: ${coordination || 'toutes'}`
+      );
       return res.json({
         ...STATS_CONFIG.cache.globales.data,
         cached: true,
         cacheAge: Math.round((Date.now() - STATS_CONFIG.cache.globales.timestamp) / 1000) + 's',
         filtres: {
           role: req.user.role,
-          coordination: coordination || 'toutes'
+          coordination: coordination || 'toutes',
         },
         performance: {
-          queryTime: 0
-        }
+          queryTime: 0,
+        },
       });
     }
 
-    console.log(`📊 Calcul des statistiques globales pour coordination: ${coordination || 'toutes'}...`);
-    
+    console.log(
+      `📊 Calcul des statistiques globales pour coordination: ${coordination || 'toutes'}...`
+    );
+
     // Construire la requête avec filtre de coordination
     let queryText = `
       SELECT 
@@ -165,13 +167,13 @@ router.get(
       FROM cartes
       WHERE 1=1
     `;
-    
+
     const { query: finalQuery, params } = ajouterFiltreCoordination(req, queryText, []);
-    
+
     const result = await query(finalQuery, params);
 
     const stats = formatGlobales(result.rows[0]);
-    
+
     // Enrichir avec des métadonnées
     const response = {
       ...stats,
@@ -179,19 +181,19 @@ router.get(
         premiere_importation: result.rows[0].premiere_importation,
         derniere_importation: result.rows[0].derniere_importation,
         sites_actifs: parseInt(result.rows[0].sites_actifs) || 0,
-        beneficiaires_uniques: parseInt(result.rows[0].beneficiaires_uniques) || 0
+        beneficiaires_uniques: parseInt(result.rows[0].beneficiaires_uniques) || 0,
       },
       filtres: {
         role: req.user.role,
-        coordination: coordination || 'toutes'
-      }
+        coordination: coordination || 'toutes',
+      },
     };
 
     // Mettre en cache
     STATS_CONFIG.cache.globales = {
       data: response,
       timestamp: Date.now(),
-      coordination: coordination
+      coordination: coordination,
     };
 
     const duration = Date.now() - startTime;
@@ -201,18 +203,17 @@ router.get(
       ...response,
       cached: false,
       performance: {
-        queryTime: duration
+        queryTime: duration,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-    
   } catch (error) {
-    console.error("❌ Erreur statistiques globales:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur statistiques globales:', error);
+    res.status(500).json({
       success: false,
-      error: "Erreur lors du calcul des statistiques globales",
+      error: 'Erreur lors du calcul des statistiques globales',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 });
@@ -221,10 +222,7 @@ router.get(
  * 🔹 STATISTIQUES PAR SITE AVEC CACHE ET FILTRAGE PAR COORDINATION
  * GET /api/statistiques/sites
  */
-router.get(
-  "/sites", 
-  permission.peutVoirStatistiques,
-  async (req, res) => {
+router.get('/sites', permission.peutVoirStatistiques, async (req, res) => {
   try {
     const { forceRefresh, limit = 50 } = req.query;
     const startTime = Date.now();
@@ -233,23 +231,27 @@ router.get(
 
     // Vérifier le cache
     if (!forceRefresh && isCacheValid('sites', coordination)) {
-      console.log(`📦 Statistiques par site servies depuis le cache pour coordination: ${coordination || 'toutes'}`);
+      console.log(
+        `📦 Statistiques par site servies depuis le cache pour coordination: ${coordination || 'toutes'}`
+      );
       return res.json({
         sites: STATS_CONFIG.cache.sites.data,
         cached: true,
         cacheAge: Math.round((Date.now() - STATS_CONFIG.cache.sites.timestamp) / 1000) + 's',
         filtres: {
           role: req.user.role,
-          coordination: coordination || 'toutes'
+          coordination: coordination || 'toutes',
         },
         performance: {
-          queryTime: 0
-        }
+          queryTime: 0,
+        },
       });
     }
 
-    console.log(`🏢 Calcul des statistiques par site pour coordination: ${coordination || 'toutes'}...`);
-    
+    console.log(
+      `🏢 Calcul des statistiques par site pour coordination: ${coordination || 'toutes'}...`
+    );
+
     // Construire la requête avec filtre de coordination
     let queryText = `
       SELECT 
@@ -268,47 +270,50 @@ router.get(
       WHERE "SITE DE RETRAIT" IS NOT NULL 
       AND TRIM(COALESCE("SITE DE RETRAIT", '')) != ''
     `;
-    
+
     const { query: finalQuery, params } = ajouterFiltreCoordination(req, queryText, []);
-    
+
     // Ajouter GROUP BY et ORDER BY après le filtre
-    const finalQueryWithGroup = finalQuery + `
+    const finalQueryWithGroup =
+      finalQuery +
+      `
       GROUP BY "SITE DE RETRAIT"
       ORDER BY total DESC
       LIMIT $${params.length + 1}
     `;
-    
+
     const result = await query(finalQueryWithGroup, [...params, actualLimit]);
 
     const stats = formatSites(result.rows);
-    
+
     // Ajouter des totaux
-    const totals = stats.reduce((acc, site) => ({
-      total: acc.total + site.total,
-      retires: acc.retires + site.retires,
-      restants: acc.restants + site.restants
-    }), { total: 0, retires: 0, restants: 0 });
+    const totals = stats.reduce(
+      (acc, site) => ({
+        total: acc.total + site.total,
+        retires: acc.retires + site.retires,
+        restants: acc.restants + site.restants,
+      }),
+      { total: 0, retires: 0, restants: 0 }
+    );
 
     const response = {
       sites: stats,
       totals: {
         ...totals,
-        tauxRetraitGlobal: totals.total > 0 
-          ? Math.round((totals.retires / totals.total) * 100) 
-          : 0
+        tauxRetraitGlobal: totals.total > 0 ? Math.round((totals.retires / totals.total) * 100) : 0,
       },
       count: stats.length,
       filtres: {
         role: req.user.role,
-        coordination: coordination || 'toutes'
-      }
+        coordination: coordination || 'toutes',
+      },
     };
 
     // Mettre en cache
     STATS_CONFIG.cache.sites = {
       data: response,
       timestamp: Date.now(),
-      coordination: coordination
+      coordination: coordination,
     };
 
     const duration = Date.now() - startTime;
@@ -318,18 +323,17 @@ router.get(
       ...response,
       cached: false,
       performance: {
-        queryTime: duration
+        queryTime: duration,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-    
   } catch (error) {
-    console.error("❌ Erreur statistiques sites:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur statistiques sites:', error);
+    res.status(500).json({
       success: false,
-      error: "Erreur lors du calcul des statistiques par site",
+      error: 'Erreur lors du calcul des statistiques par site',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 });
@@ -338,10 +342,7 @@ router.get(
  * 🔹 STATISTIQUES DÉTAILLÉES (tout en un) AVEC FILTRAGE
  * GET /api/statistiques/detail
  */
-router.get(
-  "/detail", 
-  permission.peutVoirStatistiques,
-  async (req, res) => {
+router.get('/detail', permission.peutVoirStatistiques, async (req, res) => {
   try {
     const { forceRefresh } = req.query;
     const startTime = Date.now();
@@ -349,18 +350,20 @@ router.get(
 
     // Vérifier le cache
     if (!forceRefresh && isCacheValid('detail', coordination)) {
-      console.log(`📦 Statistiques détaillées servies depuis le cache pour coordination: ${coordination || 'toutes'}`);
+      console.log(
+        `📦 Statistiques détaillées servies depuis le cache pour coordination: ${coordination || 'toutes'}`
+      );
       return res.json({
         ...STATS_CONFIG.cache.detail.data,
         cached: true,
         cacheAge: Math.round((Date.now() - STATS_CONFIG.cache.detail.timestamp) / 1000) + 's',
         filtres: {
           role: req.user.role,
-          coordination: coordination || 'toutes'
+          coordination: coordination || 'toutes',
         },
         performance: {
-          queryTime: 0
-        }
+          queryTime: 0,
+        },
       });
     }
 
@@ -381,7 +384,7 @@ router.get(
       FROM cartes
       WHERE 1=1
     `;
-    
+
     let sitesQuery = `
       SELECT 
         "SITE DE RETRAIT" as site,
@@ -396,7 +399,7 @@ router.get(
       WHERE "SITE DE RETRAIT" IS NOT NULL 
       AND TRIM(COALESCE("SITE DE RETRAIT", '')) != ''
     `;
-    
+
     let evolutionQuery = `
       SELECT 
         DATE_TRUNC('day', dateimport) as jour,
@@ -407,24 +410,37 @@ router.get(
     `;
 
     // Appliquer les filtres de coordination
-    const { query: finalGlobales, params: globalesParams } = ajouterFiltreCoordination(req, globalesQuery, []);
-    const { query: finalSites, params: sitesParams } = ajouterFiltreCoordination(req, sitesQuery, []);
-    const { query: finalEvolution, params: evolutionParams } = ajouterFiltreCoordination(req, evolutionQuery, []);
+    const { query: finalGlobales, params: globalesParams } = ajouterFiltreCoordination(
+      req,
+      globalesQuery,
+      []
+    );
+    const { query: finalSites, params: sitesParams } = ajouterFiltreCoordination(
+      req,
+      sitesQuery,
+      []
+    );
+    const { query: finalEvolution, params: evolutionParams } = ajouterFiltreCoordination(
+      req,
+      evolutionQuery,
+      []
+    );
 
     // Ajouter GROUP BY pour les requêtes qui en ont besoin
     const finalSitesWithGroup = finalSites + ` GROUP BY "SITE DE RETRAIT" ORDER BY total DESC`;
-    const finalEvolutionWithGroup = finalEvolution + ` GROUP BY DATE_TRUNC('day', dateimport) ORDER BY jour DESC`;
+    const finalEvolutionWithGroup =
+      finalEvolution + ` GROUP BY DATE_TRUNC('day', dateimport) ORDER BY jour DESC`;
 
     // Exécuter les requêtes en parallèle
     const [globalesResult, sitesResult, evolutionResult] = await Promise.all([
       query(finalGlobales, globalesParams),
       query(finalSitesWithGroup, sitesParams),
-      query(finalEvolutionWithGroup, evolutionParams)
+      query(finalEvolutionWithGroup, evolutionParams),
     ]);
 
     const globales = formatGlobales(globalesResult.rows[0]);
     const sites = formatSites(sitesResult.rows);
-    
+
     const response = {
       globales: {
         ...globales,
@@ -432,33 +448,40 @@ router.get(
           premiere_importation: globalesResult.rows[0].premiere_importation,
           derniere_importation: globalesResult.rows[0].derniere_importation,
           sites_actifs: parseInt(globalesResult.rows[0].sites_actifs) || 0,
-          beneficiaires_uniques: parseInt(globalesResult.rows[0].beneficiaires_uniques) || 0
-        }
+          beneficiaires_uniques: parseInt(globalesResult.rows[0].beneficiaires_uniques) || 0,
+        },
       },
       sites: sites,
-      evolution: evolutionResult.rows.map(row => ({
+      evolution: evolutionResult.rows.map((row) => ({
         jour: row.jour,
         imports: parseInt(row.imports),
-        sites_concernes: parseInt(row.sites_concernes)
+        sites_concernes: parseInt(row.sites_concernes),
       })),
       resume: {
         total_sites: sites.length,
-        total_imports_30j: evolutionResult.rows.reduce((acc, row) => acc + parseInt(row.imports), 0),
-        moyenne_quotidienne: evolutionResult.rows.length > 0 
-          ? Math.round(evolutionResult.rows.reduce((acc, row) => acc + parseInt(row.imports), 0) / evolutionResult.rows.length)
-          : 0
+        total_imports_30j: evolutionResult.rows.reduce(
+          (acc, row) => acc + parseInt(row.imports),
+          0
+        ),
+        moyenne_quotidienne:
+          evolutionResult.rows.length > 0
+            ? Math.round(
+                evolutionResult.rows.reduce((acc, row) => acc + parseInt(row.imports), 0) /
+                  evolutionResult.rows.length
+              )
+            : 0,
       },
       filtres: {
         role: req.user.role,
-        coordination: coordination || 'toutes'
-      }
+        coordination: coordination || 'toutes',
+      },
     };
 
     // Mettre en cache
     STATS_CONFIG.cache.detail = {
       data: response,
       timestamp: Date.now(),
-      coordination: coordination
+      coordination: coordination,
     };
 
     const duration = Date.now() - startTime;
@@ -468,18 +491,17 @@ router.get(
       ...response,
       cached: false,
       performance: {
-        queryTime: duration
+        queryTime: duration,
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-    
   } catch (error) {
-    console.error("❌ Erreur statistiques détail:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur statistiques détail:', error);
+    res.status(500).json({
       success: false,
-      error: "Erreur lors du calcul des statistiques détaillées",
+      error: 'Erreur lors du calcul des statistiques détaillées',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 });
@@ -488,31 +510,27 @@ router.get(
  * 🔥 FORCER LE REFRESH DU CACHE
  * POST /api/statistiques/refresh
  */
-router.post(
-  "/refresh", 
-  permission.peutVoirStatistiques,
-  async (req, res) => {
+router.post('/refresh', permission.peutVoirStatistiques, async (req, res) => {
   try {
-    console.log("🔄 Forçage du recalcul des statistiques...");
-    
+    console.log('🔄 Forçage du recalcul des statistiques...');
+
     // Vider le cache
     STATS_CONFIG.cache.globales = { data: null, timestamp: null, coordination: null };
     STATS_CONFIG.cache.sites = { data: null, timestamp: null, coordination: null };
     STATS_CONFIG.cache.detail = { data: null, timestamp: null, coordination: null };
-    
-    res.json({ 
+
+    res.json({
       success: true,
-      message: "Cache des statistiques vidé avec succès",
-      timestamp: new Date().toISOString()
+      message: 'Cache des statistiques vidé avec succès',
+      timestamp: new Date().toISOString(),
     });
-    
   } catch (error) {
-    console.error("❌ Erreur refresh statistiques:", error);
-    res.status(500).json({ 
+    console.error('❌ Erreur refresh statistiques:', error);
+    res.status(500).json({
       success: false,
-      error: "Erreur lors du refresh des statistiques",
+      error: 'Erreur lors du refresh des statistiques',
       details: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   }
 });
@@ -521,20 +539,24 @@ router.post(
  * 🔹 STATISTIQUES TEMPORELLES AVEC FILTRAGE
  * GET /api/statistiques/evolution?periode=30
  */
-router.get(
-  "/evolution", 
-  permission.peutVoirStatistiques,
-  async (req, res) => {
+router.get('/evolution', permission.peutVoirStatistiques, async (req, res) => {
   try {
     const { periode = 30, interval = 'day' } = req.query;
     const jours = Math.min(parseInt(periode), 365);
-    
+
     let intervalSql;
-    switch(interval) {
-      case 'hour': intervalSql = 'hour'; break;
-      case 'week': intervalSql = 'week'; break;
-      case 'month': intervalSql = 'month'; break;
-      default: intervalSql = 'day';
+    switch (interval) {
+      case 'hour':
+        intervalSql = 'hour';
+        break;
+      case 'week':
+        intervalSql = 'week';
+        break;
+      case 'month':
+        intervalSql = 'month';
+        break;
+      default:
+        intervalSql = 'day';
     }
 
     // Construire la requête avec filtre
@@ -547,10 +569,12 @@ router.get(
       FROM cartes
       WHERE dateimport > NOW() - INTERVAL '${jours} days'
     `;
-    
+
     const { query: finalQuery, params } = ajouterFiltreCoordination(req, queryText, [intervalSql]);
 
-    const finalQueryWithGroup = finalQuery + `
+    const finalQueryWithGroup =
+      finalQuery +
+      `
       GROUP BY DATE_TRUNC($1, dateimport)
       ORDER BY periode DESC
     `;
@@ -559,11 +583,11 @@ router.get(
 
     res.json({
       success: true,
-      evolution: result.rows.map(row => ({
+      evolution: result.rows.map((row) => ({
         periode: row.periode,
         imports: parseInt(row.total_imports),
         sites_actifs: parseInt(row.sites_actifs),
-        batches: parseInt(row.batches)
+        batches: parseInt(row.batches),
       })),
       parametres: {
         periode_jours: jours,
@@ -571,17 +595,16 @@ router.get(
         points: result.rows.length,
         filtres: {
           role: req.user.role,
-          coordination: req.user.coordination || 'toutes'
-        }
+          coordination: req.user.coordination || 'toutes',
+        },
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur statistiques évolution:", error);
+    console.error('❌ Erreur statistiques évolution:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -590,10 +613,7 @@ router.get(
  * 🔹 STATISTIQUES RAPIDES (pour tableaux de bord)
  * GET /api/statistiques/quick
  */
-router.get(
-  "/quick", 
-  permission.peutVoirStatistiques,
-  async (req, res) => {
+router.get('/quick', permission.peutVoirStatistiques, async (req, res) => {
   try {
     // Construire la requête avec filtre
     let queryText = `
@@ -614,13 +634,13 @@ router.get(
       FROM cartes
       WHERE 1=1
     `;
-    
+
     const { query: finalQuery, params } = ajouterFiltreCoordination(req, queryText, []);
-    
+
     const result = await query(finalQuery, params);
 
     const stats = result.rows[0];
-    
+
     res.json({
       success: true,
       stats: {
@@ -628,20 +648,19 @@ router.get(
         retires: parseInt(stats.retires) || 0,
         restants: (parseInt(stats.total) || 0) - (parseInt(stats.retires) || 0),
         imports_24h: parseInt(stats.imports_24h) || 0,
-        imports_7j: parseInt(stats.imports_7j) || 0
+        imports_7j: parseInt(stats.imports_7j) || 0,
       },
       filtres: {
         role: req.user.role,
-        coordination: req.user.coordination || 'toutes'
+        coordination: req.user.coordination || 'toutes',
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur stats rapides:", error);
+    console.error('❌ Erreur stats rapides:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -650,10 +669,7 @@ router.get(
  * 🔹 STATISTIQUES PAR LOT D'IMPORT AVEC FILTRAGE
  * GET /api/statistiques/imports
  */
-router.get(
-  "/imports", 
-  permission.peutVoirStatistiques,
-  async (req, res) => {
+router.get('/imports', permission.peutVoirStatistiques, async (req, res) => {
   try {
     const { limit = 10 } = req.query;
     const actualLimit = Math.min(parseInt(limit), 50);
@@ -676,10 +692,12 @@ router.get(
       FROM cartes
       WHERE importbatchid IS NOT NULL
     `;
-    
+
     const { query: finalQuery, params } = ajouterFiltreCoordination(req, queryText, []);
 
-    const finalQueryWithGroup = finalQuery + `
+    const finalQueryWithGroup =
+      finalQuery +
+      `
       GROUP BY importbatchid
       ORDER BY date_debut DESC
       LIMIT $${params.length + 1}
@@ -689,33 +707,32 @@ router.get(
 
     res.json({
       success: true,
-      imports: result.rows.map(row => ({
+      imports: result.rows.map((row) => ({
         batch_id: row.importbatchid,
         total_cartes: parseInt(row.total_cartes),
         cartes_retirees: parseInt(row.cartes_retirees),
-        taux_retrait: row.total_cartes > 0 
-          ? Math.round((row.cartes_retirees / row.total_cartes) * 100) 
-          : 0,
+        taux_retrait:
+          row.total_cartes > 0 ? Math.round((row.cartes_retirees / row.total_cartes) * 100) : 0,
         date_debut: row.date_debut,
         date_fin: row.date_fin,
         sites_concernes: parseInt(row.sites_concernes),
         coordination: row.coordination,
-        duree_minutes: row.date_debut && row.date_fin 
-          ? Math.round((new Date(row.date_fin) - new Date(row.date_debut)) / 60000) 
-          : 0
+        duree_minutes:
+          row.date_debut && row.date_fin
+            ? Math.round((new Date(row.date_fin) - new Date(row.date_debut)) / 60000)
+            : 0,
       })),
       filtres: {
         role: req.user.role,
-        coordination: req.user.coordination || 'toutes'
+        coordination: req.user.coordination || 'toutes',
       },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
-    console.error("❌ Erreur stats imports:", error);
+    console.error('❌ Erreur stats imports:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -724,10 +741,7 @@ router.get(
  * 🔹 DIAGNOSTIC DES STATISTIQUES
  * GET /api/statistiques/diagnostic
  */
-router.get(
-  "/diagnostic", 
-  role.peutAccederPage('statistiques'),
-  async (req, res) => {
+router.get('/diagnostic', role.peutAccederPage('statistiques'), async (req, res) => {
   try {
     const startTime = Date.now();
 
@@ -752,7 +766,7 @@ router.get(
       service: 'statistiques',
       utilisateur: {
         role: req.user.role,
-        coordination: req.user.coordination
+        coordination: req.user.coordination,
       },
       statistiques: {
         total_cartes: parseInt(stats.total_cartes),
@@ -760,23 +774,23 @@ router.get(
         batches_distincts: parseInt(stats.batches_distincts),
         coordinations_distinctes: parseInt(stats.coordinations_distinctes),
         premiere_carte: stats.premiere_carte,
-        derniere_carte: stats.derniere_carte
+        derniere_carte: stats.derniere_carte,
       },
       stockage: {
         taille_table: stats.table_size_pretty,
-        taille_bytes: parseInt(stats.table_size)
+        taille_bytes: parseInt(stats.table_size),
       },
       cache: {
         globales: STATS_CONFIG.cache.globales.timestamp ? 'actif' : 'inactif',
         sites: STATS_CONFIG.cache.sites.timestamp ? 'actif' : 'inactif',
         detail: STATS_CONFIG.cache.detail.timestamp ? 'actif' : 'inactif',
-        age_globales: STATS_CONFIG.cache.globales.timestamp 
-          ? Math.round((Date.now() - STATS_CONFIG.cache.globales.timestamp) / 1000) + 's' 
+        age_globales: STATS_CONFIG.cache.globales.timestamp
+          ? Math.round((Date.now() - STATS_CONFIG.cache.globales.timestamp) / 1000) + 's'
           : null,
-        coordination_courante: STATS_CONFIG.cache.globales.coordination || 'toutes'
+        coordination_courante: STATS_CONFIG.cache.globales.coordination || 'toutes',
       },
       performance: {
-        queryTime: Date.now() - startTime
+        queryTime: Date.now() - startTime,
       },
       endpoints: [
         '/api/statistiques/globales',
@@ -786,15 +800,14 @@ router.get(
         '/api/statistiques/quick',
         '/api/statistiques/imports',
         '/api/statistiques/refresh',
-        '/api/statistiques/diagnostic'
-      ]
+        '/api/statistiques/diagnostic',
+      ],
     });
-
   } catch (error) {
-    console.error("❌ Erreur diagnostic:", error);
+    console.error('❌ Erreur diagnostic:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -803,73 +816,77 @@ router.get(
  * 🔹 ROUTE D'ACCUEIL
  * GET /api/statistiques
  */
-router.get("/", (req, res) => {
-  const roleInfo = req.user ? 
-    `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - Coordination: ${req.user.coordination || 'toutes'}` : 
-    'Non authentifié';
-  
+router.get('/', (req, res) => {
+  const roleInfo = req.user
+    ? `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - Coordination: ${req.user.coordination || 'toutes'}`
+    : 'Non authentifié';
+
   res.json({
-    name: "API Statistiques GESCARD",
-    description: "Module de statistiques et analytics",
-    version: "2.0.0-lws",
+    name: 'API Statistiques GESCARD',
+    description: 'Module de statistiques et analytics',
+    version: '2.0.0-lws',
     timestamp: new Date().toISOString(),
     authentification: roleInfo,
     roles_autorises: {
-      administrateur: "✅ Accès à toutes les statistiques (non filtrées)",
-      gestionnaire: "✅ Accès aux statistiques de sa coordination",
-      chef_equipe: "✅ Accès aux statistiques de sa coordination",
-      operateur: "✅ Accès aux statistiques de sa coordination"
+      administrateur: '✅ Accès à toutes les statistiques (non filtrées)',
+      gestionnaire: '✅ Accès aux statistiques de sa coordination',
+      chef_equipe: '✅ Accès aux statistiques de sa coordination',
+      operateur: '✅ Accès aux statistiques de sa coordination',
     },
     cache: {
-      duree: "5 minutes",
-      methodes: ["globales", "sites", "detail"],
-      refresh: "POST /api/statistiques/refresh"
+      duree: '5 minutes',
+      methodes: ['globales', 'sites', 'detail'],
+      refresh: 'POST /api/statistiques/refresh',
     },
     endpoints: {
       globales: {
-        path: "/api/statistiques/globales",
-        description: "Statistiques globales (total, retirés, restants) - filtrées par rôle",
-        params: "?forceRefresh=true"
+        path: '/api/statistiques/globales',
+        description: 'Statistiques globales (total, retirés, restants) - filtrées par rôle',
+        params: '?forceRefresh=true',
       },
       sites: {
-        path: "/api/statistiques/sites",
-        description: "Statistiques détaillées par site - filtrées par rôle",
-        params: "?limit=50&forceRefresh=true"
+        path: '/api/statistiques/sites',
+        description: 'Statistiques détaillées par site - filtrées par rôle',
+        params: '?limit=50&forceRefresh=true',
       },
       detail: {
-        path: "/api/statistiques/detail",
-        description: "Statistiques complètes (globales + sites + évolution) - filtrées"
+        path: '/api/statistiques/detail',
+        description: 'Statistiques complètes (globales + sites + évolution) - filtrées',
       },
       evolution: {
-        path: "/api/statistiques/evolution",
-        description: "Évolution temporelle - filtrée",
-        params: "?periode=30&interval=day"
+        path: '/api/statistiques/evolution',
+        description: 'Évolution temporelle - filtrée',
+        params: '?periode=30&interval=day',
       },
       quick: {
-        path: "/api/statistiques/quick",
-        description: "Statistiques rapides pour tableaux de bord - filtrées"
+        path: '/api/statistiques/quick',
+        description: 'Statistiques rapides pour tableaux de bord - filtrées',
       },
       imports: {
-        path: "/api/statistiques/imports",
+        path: '/api/statistiques/imports',
         description: "Statistiques par lot d'import - filtrées",
-        params: "?limit=10"
+        params: '?limit=10',
       },
       refresh: {
-        path: "/api/statistiques/refresh",
-        method: "POST",
-        description: "Forcer le rafraîchissement du cache"
+        path: '/api/statistiques/refresh',
+        method: 'POST',
+        description: 'Forcer le rafraîchissement du cache',
       },
       diagnostic: {
-        path: "/api/statistiques/diagnostic",
-        description: "Diagnostic du module"
-      }
+        path: '/api/statistiques/diagnostic',
+        description: 'Diagnostic du module',
+      },
     },
     exemples: {
-      curl_globales: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/statistiques/globales"',
-      curl_sites: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/statistiques/sites?limit=10"',
-      curl_detail: 'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/statistiques/detail"',
-      curl_refresh: 'curl -X POST -H "Authorization: Bearer <token>" "http://localhost:3000/api/statistiques/refresh"'
-    }
+      curl_globales:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/statistiques/globales"',
+      curl_sites:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/statistiques/sites?limit=10"',
+      curl_detail:
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/statistiques/detail"',
+      curl_refresh:
+        'curl -X POST -H "Authorization: Bearer <token>" "http://localhost:3000/api/statistiques/refresh"',
+    },
   });
 });
 
