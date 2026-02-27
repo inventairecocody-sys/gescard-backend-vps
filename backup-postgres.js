@@ -434,7 +434,7 @@ class PostgreSQLBackup {
   // ============================================
 
   async listBackups(options = {}) {
-    const { limit = 50, includeSizes = true } = options;
+    const { limit = 50 } = options; // includeSizes supprimé car non utilisé
 
     await this.authenticate();
     await this.getOrCreateBackupFolder();

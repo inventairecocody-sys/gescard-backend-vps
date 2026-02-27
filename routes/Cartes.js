@@ -351,7 +351,7 @@ router.get('/modifications', async (req, res) => {
 });
 
 /**
- * Récupérer les cartes avec filtres
+ * Récupérer les cartes avec filtres (version simplifiée pour API externe)
  * GET /api/cartes
  */
 router.get('/', async (req, res) => {
@@ -414,16 +414,107 @@ router.get('/', async (req, res) => {
 // ============================================
 
 /**
- * Récupérer toutes les cartes (avec pagination) - PROTÉGÉ PAR RÔLE
- * GET /api/cartes/all
+ * Récupérer toutes les cartes (avec pagination avancée) - PROTÉGÉ PAR RÔLE
+ * GET /api/cartes/list
  */
-router.get('/all', role.peutAccederPage('inventaire'), cartesController.getToutesCartes);
+router.get('/list', role.peutAccederPage('inventaire'), async (req, res) => {
+  try {
+    const { page = 1, limit = 50, recherche = '' } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+
+    let query = 'SELECT * FROM cartes WHERE 1=1';
+    const params = [];
+
+    if (recherche) {
+      params.push(`%${recherche}%`);
+      query += ` AND (nom ILIKE $1 OR prenoms ILIKE $1)`;
+    }
+
+    // Appliquer filtre de coordination selon le rôle
+    if (req.user?.role === 'Gestionnaire' && req.user?.coordination) {
+      params.push(req.user.coordination);
+      const paramIndex = recherche ? params.length : 1;
+      query += ` AND coordination = $${paramIndex}`;
+    }
+
+    // Compter le total
+    const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE 1=1${query.split('WHERE')[1]}`;
+    const countResult = await db.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].total);
+
+    // Pagination
+    query += ` ORDER BY nom, prenoms LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limitNum, offset);
+
+    const result = await db.query(query, params);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('❌ Erreur getCartesList:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 
 /**
  * Statistiques globales - PROTÉGÉ PAR RÔLE
- * GET /api/cartes/statistiques/total
+ * GET /api/cartes/statistiques
  */
-router.get('/statistiques/total', permission.peutVoirStatistiques, cartesController.getStats);
+router.get('/statistiques', permission.peutVoirStatistiques, async (req, res) => {
+  try {
+    const role = req.user?.role;
+    const coordination = req.user?.coordination;
+
+    let query = `
+      SELECT 
+        COUNT(*) as total_cartes,
+        COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as cartes_retirees,
+        COUNT(DISTINCT "SITE DE RETRAIT") as sites_actifs
+      FROM cartes
+      WHERE 1=1
+    `;
+
+    const params = [];
+
+    if (role === 'Gestionnaire' && coordination) {
+      params.push(coordination);
+      query += ` AND coordination = $1`;
+    }
+
+    const result = await db.query(query, params);
+
+    const stats = result.rows[0];
+    stats.taux_retrait =
+      stats.total_cartes > 0 ? Math.round((stats.cartes_retirees / stats.total_cartes) * 100) : 0;
+
+    res.json({
+      success: true,
+      data: stats,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('❌ Erreur statistiques:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 
 /**
  * Récupérer une carte par ID - PROTÉGÉ PAR RÔLE

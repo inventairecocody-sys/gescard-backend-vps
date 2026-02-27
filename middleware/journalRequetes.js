@@ -13,31 +13,71 @@ const crypto = require('crypto');
 const LOGS_DIR = path.join(__dirname, '../../logs');
 const REQUETES_LOG_FILE = path.join(LOGS_DIR, 'requetes.log');
 const ERREURS_LOG_FILE = path.join(LOGS_DIR, 'erreurs.log');
+const PERFORMANCES_LOG_FILE = path.join(LOGS_DIR, 'performances-lentes.log');
 
 // Créer le dossier logs s'il n'existe pas
 if (!fs.existsSync(LOGS_DIR)) {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
+  console.log(`📁 Dossier de logs créé: ${LOGS_DIR}`);
 }
 
-// Fonction pour générer un ID unique
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
+/**
+ * Génère un ID unique pour chaque requête
+ */
 const genererIdUnique = () => {
   return crypto.randomBytes(8).toString('hex');
 };
 
-// Fonction pour formater la date
+/**
+ * Formate la date au format ISO
+ */
 const formaterDate = (date = new Date()) => {
   return date.toISOString();
 };
 
-// Fonction pour écrire dans un fichier de log
+/**
+ * Écrit un message dans un fichier de log (asynchrone)
+ */
 const ecrireLog = (fichier, message) => {
   const ligne = `[${formaterDate()}] ${message}\n`;
   fs.appendFile(fichier, ligne, (err) => {
-    if (err) console.error('Erreur écriture log:', err);
+    if (err) console.error('❌ Erreur écriture log:', err.message);
   });
 };
 
-// Middleware principal
+/**
+ * Nettoie les objets sensibles (mots de passe)
+ */
+const nettoyerObjetsSensibles = (obj) => {
+  if (!obj || typeof obj !== 'object') return obj;
+
+  const nettoye = { ...obj };
+  const champsSensibles = [
+    'motDePasse',
+    'confirmationMotDePasse',
+    'password',
+    'currentPassword',
+    'newPassword',
+  ];
+
+  champsSensibles.forEach((champ) => {
+    if (nettoye[champ]) nettoye[champ] = '[MASQUÉ]';
+  });
+
+  return nettoye;
+};
+
+// ============================================
+// MIDDLEWARE PRINCIPAL
+// ============================================
+
+/**
+ * Middleware de journalisation des requêtes
+ */
 const journalRequetes = (req, res, next) => {
   const debut = Date.now();
   const idRequete = genererIdUnique();
@@ -50,7 +90,11 @@ const journalRequetes = (req, res, next) => {
 
   // Capturer l'IP réelle (derrière proxy)
   const ipReelle =
-    req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.ip || '0.0.0.0';
+    req.headers['x-forwarded-for'] ||
+    req.headers['x-real-ip'] ||
+    req.connection?.remoteAddress ||
+    req.ip ||
+    '0.0.0.0';
 
   // Informations de base sur la requête
   const infosRequete = {
@@ -60,11 +104,12 @@ const journalRequetes = (req, res, next) => {
     url: req.originalUrl || req.url,
     ip: ipReelle,
     userAgent: req.headers['user-agent'] || 'inconnu',
+    referer: req.headers['referer'] || req.headers['referrer'] || null,
     utilisateur: req.user
       ? {
           id: req.user.id,
-          nom: req.user.nomUtilisateur,
-          role: req.user.role,
+          nom: req.user.nomUtilisateur || req.user.NomUtilisateur,
+          role: req.user.role || req.user.Role,
           coordination: req.user.coordination,
         }
       : 'non authentifié',
@@ -73,7 +118,7 @@ const journalRequetes = (req, res, next) => {
   // Log entrant dans la console
   console.log(`\n📥 [${idRequete}] ${req.method} ${req.url}`);
   console.log(
-    `   👤 Utilisateur: ${infosRequete.utilisateur.nom || 'anonyme'} (${infosRequete.utilisateur.role || 'aucun'})`
+    `   👤 Utilisateur: ${typeof infosRequete.utilisateur === 'object' ? infosRequete.utilisateur.nom || 'anonyme' : 'anonyme'} (${typeof infosRequete.utilisateur === 'object' ? infosRequete.utilisateur.role || 'aucun' : 'aucun'})`
   );
   console.log(`   🌐 IP: ${ipReelle}`);
 
@@ -82,10 +127,7 @@ const journalRequetes = (req, res, next) => {
 
   // Capturer le corps de la requête pour les logs (sans mots de passe)
   if (req.body && Object.keys(req.body).length > 0) {
-    const corpsLog = { ...req.body };
-    if (corpsLog.motDePasse) corpsLog.motDePasse = '[MASQUÉ]';
-    if (corpsLog.confirmationMotDePasse) corpsLog.confirmationMotDePasse = '[MASQUÉ]';
-
+    const corpsLog = nettoyerObjetsSensibles(req.body);
     console.log(`   📦 Corps:`, corpsLog);
     req.corpsLog = corpsLog; // Stocker pour la réponse
   }
@@ -116,7 +158,7 @@ const journalRequetes = (req, res, next) => {
     if (statusCode >= 400) {
       console.log(`   📋 Détails erreur:`, {
         message: donnees.erreur || donnees.message || 'Erreur inconnue',
-        details: donnees,
+        code: donnees.code,
       });
 
       // Log d'erreur dans fichier séparé
@@ -144,6 +186,9 @@ const journalRequetes = (req, res, next) => {
     return jsonOriginal.call(this, donnees);
   };
 
+  // Marquer que nous avons intercepté
+  res._jsonIntercepte = true;
+
   // Gérer les erreurs de la requête
   res.on('finish', () => {
     // Si la réponse n'a pas utilisé res.json (ex: res.send, res.end)
@@ -163,13 +208,17 @@ const journalRequetes = (req, res, next) => {
     }
   });
 
-  // Marquer que nous avons intercepté
-  res._jsonIntercepte = true;
-
   next();
 };
 
-// Middleware pour logger les performances (à utiliser sur des routes spécifiques)
+// ============================================
+// MIDDLEWARE SPÉCIFIQUES
+// ============================================
+
+/**
+ * Middleware pour logger les performances (à utiliser sur des routes spécifiques)
+ * @param {number} seuil - Durée en ms au-delà de laquelle la requête est considérée lente
+ */
 const loggerPerformance = (seuil = 1000) => {
   return (req, res, next) => {
     const debut = Date.now();
@@ -181,13 +230,14 @@ const loggerPerformance = (seuil = 1000) => {
 
         // Log des requêtes lentes dans un fichier spécifique
         ecrireLog(
-          path.join(LOGS_DIR, 'performances-lentes.log'),
+          PERFORMANCES_LOG_FILE,
           JSON.stringify({
             timestamp: formaterDate(),
             duree,
             methode: req.method,
             url: req.url,
             utilisateur: req.user?.nomUtilisateur || 'anonyme',
+            ip: req.headers['x-forwarded-for'] || req.ip,
           })
         );
       }
@@ -197,30 +247,59 @@ const loggerPerformance = (seuil = 1000) => {
   };
 };
 
-// Middleware pour nettoyer les vieux logs (à exécuter périodiquement)
+// ============================================
+// FONCTIONS DE MAINTENANCE
+// ============================================
+
+/**
+ * Nettoie les vieux logs (archive)
+ * @param {number} jours - Nombre de jours de conservation
+ */
 const nettoyerVieuxLogs = (jours = 30) => {
   try {
     const maintenant = Date.now();
     const limite = maintenant - jours * 24 * 60 * 60 * 1000;
+    let fichiersTraites = 0;
 
-    [REQUETES_LOG_FILE, ERREURS_LOG_FILE].forEach((fichier) => {
+    [REQUETES_LOG_FILE, ERREURS_LOG_FILE, PERFORMANCES_LOG_FILE].forEach((fichier) => {
       if (fs.existsSync(fichier)) {
         const stats = fs.statSync(fichier);
         if (stats.mtimeMs < limite) {
-          // Archiver ou supprimer
-          const archive = `${fichier}.${formaterDate().split('T')[0]}.old`;
-          fs.renameSync(fichier, archive);
+          // Archiver
+          const dateStr = formaterDate().split('T')[0];
+          const archive = `${fichier}.${dateStr}.old`;
+
+          // Si l'archive existe déjà, ajouter un timestamp
+          if (fs.existsSync(archive)) {
+            const timestamp = Date.now();
+            fs.renameSync(fichier, `${fichier}.${timestamp}.old`);
+          } else {
+            fs.renameSync(fichier, archive);
+          }
+
           console.log(`📦 Log archivé: ${path.basename(archive)}`);
+          fichiersTraites++;
         }
       }
     });
+
+    if (fichiersTraites > 0) {
+      console.log(`✅ ${fichiersTraites} fichier(s) de log archivé(s)`);
+    }
   } catch (error) {
-    console.error('Erreur nettoyage logs:', error);
+    console.error('❌ Erreur nettoyage logs:', error.message);
   }
 };
 
 // Exécuter le nettoyage une fois au démarrage
 nettoyerVieuxLogs(30);
+
+// Nettoyage périodique (tous les jours)
+setInterval(() => nettoyerVieuxLogs(30), 24 * 60 * 60 * 1000);
+
+// ============================================
+// EXPORTS
+// ============================================
 
 module.exports = journalRequetes;
 module.exports.loggerPerformance = loggerPerformance;

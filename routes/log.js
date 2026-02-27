@@ -144,16 +144,16 @@ router.use(permission.peutVoirInfosSensibles);
 // ============================================
 
 /**
- * GET /api/logs - Récupérer tous les logs
- * Admin uniquement - redirigé vers journal
- */
-router.get('/', role.peutVoirJournal, LOG_CONFIG.rateLimits.standard, logController.getAllLogs);
-
-/**
- * GET /api/logs/list - Alias pour la liste
+ * GET /api/logs/list - Récupérer tous les logs
  * Admin uniquement - redirigé vers journal
  */
 router.get('/list', role.peutVoirJournal, LOG_CONFIG.rateLimits.standard, logController.getAllLogs);
+
+/**
+ * GET /api/logs - Alias pour la liste
+ * Admin uniquement - redirigé vers journal
+ */
+router.get('/', role.peutVoirJournal, LOG_CONFIG.rateLimits.standard, logController.getAllLogs);
 
 /**
  * GET /api/logs/recent - Récupérer les logs récents
@@ -301,7 +301,10 @@ router.get(
 // ROUTE D'ACCUEIL
 // ============================================
 
-router.get('/', (req, res) => {
+/**
+ * GET /api/logs/home - Page d'accueil documentée
+ */
+router.get('/home', (req, res) => {
   const roleInfo = req.user
     ? `Connecté en tant que: ${req.user.nomUtilisateur} (${req.user.role}) - ${req.user.role === 'Administrateur' ? '✅ Accès autorisé' : '❌ Accès restreint'}`
     : 'Non authentifié';
@@ -340,8 +343,8 @@ router.get('/', (req, res) => {
       : null,
     endpoints: {
       consultation: {
-        'GET /': 'Liste paginée des logs (Admin)',
-        'GET /list': 'Liste (alias - Admin)',
+        'GET /list': 'Liste paginée des logs (Admin)',
+        'GET /': 'Liste (alias - Admin)',
         'GET /recent': 'Logs récents (Admin)',
         'GET /user/:utilisateur': 'Logs par utilisateur (Admin)',
         'GET /date-range': 'Logs par plage de dates (Admin)',
@@ -366,6 +369,7 @@ router.get('/', (req, res) => {
         'GET /diagnostic': 'Diagnostic module (Admin)',
         'GET /health': 'Santé service (public)',
         'GET /test': 'Test service (public)',
+        'GET /home': 'Cette page',
       },
     },
     rate_limits: {
@@ -390,7 +394,7 @@ router.get('/', (req, res) => {
     },
     exemples: {
       curl_liste:
-        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs?page=1&limit=50"',
+        'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/list?page=1&limit=50"',
       curl_user:
         'curl -H "Authorization: Bearer <token>" "http://localhost:3000/api/logs/user/admin"',
       curl_search:
@@ -412,8 +416,11 @@ router.use((req, res) => {
     error: 'Route non trouvée',
     message: `La route ${req.method} ${req.path} n'existe pas dans l'API logs`,
     available_routes: [
-      'GET /api/logs/',
+      'GET /api/logs/home',
+      'GET /api/logs/health',
+      'GET /api/logs/test',
       'GET /api/logs/list',
+      'GET /api/logs/',
       'GET /api/logs/recent',
       'GET /api/logs/user/:utilisateur',
       'GET /api/logs/date-range',
@@ -423,8 +430,6 @@ router.use((req, res) => {
       'GET /api/logs/actions',
       'GET /api/logs/export',
       'GET /api/logs/diagnostic',
-      'GET /api/logs/health',
-      'GET /api/logs/test',
       'POST /api/logs/',
       'DELETE /api/logs/old',
       'DELETE /api/logs/all',

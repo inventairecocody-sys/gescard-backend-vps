@@ -53,21 +53,6 @@ const peutAccederLogs = (req) => {
   };
 };
 
-/**
- * Ajoute le filtre de coordination à une requête SQL
- */
-const ajouterFiltreCoordination = (req, query, params, colonne = 'coordination') => {
-  const role = req.user?.role;
-  const coordination = req.user?.coordination;
-
-  // Admin voit tout
-  if (role === 'Administrateur') {
-    return { query, params };
-  }
-
-  return { query, params };
-};
-
 // ============================================
 // CONTROLEUR LOG OPTIMISÉ POUR LWS
 // ============================================
@@ -432,9 +417,8 @@ exports.exportLogs = async (req, res) => {
     // Rediriger vers le journal avec export_all
     req.query.export_all = 'true';
 
-    // Pour le format CSV, on pourrait avoir besoin d'une logique spécifique
-    // mais on utilise d'abord getJournal
-    const result = await journalController.getJournal(req, res);
+    // Appeler getJournal et capturer le résultat
+    await journalController.getJournal(req, res);
 
     // Si format CSV, on pourrait convertir ici, mais pour l'instant on garde JSON
     if (format === 'csv' && !res.headersSent) {

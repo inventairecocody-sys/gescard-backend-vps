@@ -64,12 +64,14 @@ const normaliserRole = (role) => {
     gestionnaire: 'Gestionnaire',
     superviseur: 'Gestionnaire', // Ancien rôle mappé vers Gestionnaire
     "chef d'équipe": "Chef d'équipe",
+    "chef d'equipe": "Chef d'équipe",
     chef: "Chef d'équipe",
     operateur: 'Opérateur',
     opérateur: 'Opérateur',
+    operator: 'Opérateur',
   };
 
-  const roleMin = role.toLowerCase().trim();
+  const roleMin = role.toString().toLowerCase().trim();
   return correspondances[roleMin] || role;
 };
 
@@ -166,9 +168,9 @@ const peutModifierCarte = async (req, res, next) => {
       const db = require('../db/db');
 
       try {
-        const carte = await db.requete('SELECT coordination FROM cartes WHERE id = $1', [carteId]);
+        const carte = await db.query('SELECT coordination FROM cartes WHERE id = $1', [carteId]);
 
-        if (carte.lignes.length === 0) {
+        if (carte.rows.length === 0) {
           return res.status(404).json({
             erreur: 'Carte non trouvée',
             message: 'Aucune carte trouvée avec cet ID',
@@ -176,7 +178,7 @@ const peutModifierCarte = async (req, res, next) => {
         }
 
         // Vérifier la coordination
-        if (carte.lignes[0].coordination === req.user.coordination) {
+        if (carte.rows[0].coordination === req.user.coordination) {
           // Ajouter les colonnes autorisées à la requête
           req.colonnesAutorisees = configRole.colonnesModifiables;
           return next();
@@ -187,7 +189,7 @@ const peutModifierCarte = async (req, res, next) => {
           message: 'Vous ne pouvez modifier que les cartes de votre coordination',
         });
       } catch (dbError) {
-        console.error('Erreur base de données dans peutModifierCarte:', dbError);
+        console.error('❌ Erreur base de données dans peutModifierCarte:', dbError);
         return res.status(500).json({
           erreur: 'Erreur serveur',
           message: 'Impossible de vérifier les droits sur cette carte',
@@ -199,7 +201,7 @@ const peutModifierCarte = async (req, res, next) => {
     req.colonnesAutorisees = configRole.colonnesModifiables;
     next();
   } catch (error) {
-    console.error('Erreur dans peutModifierCarte:', error);
+    console.error('❌ Erreur dans peutModifierCarte:', error);
     return res.status(500).json({
       erreur: 'Erreur serveur',
       message: 'Une erreur est survenue lors de la vérification des droits',

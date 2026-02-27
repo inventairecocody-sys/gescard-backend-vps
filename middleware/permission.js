@@ -59,7 +59,7 @@ const peutVoirStatistiques = (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error('Erreur dans peutVoirStatistiques:', error);
+    console.error('❌ Erreur dans peutVoirStatistiques:', error);
     return res.status(500).json({
       erreur: 'Erreur serveur',
       message: 'Une erreur est survenue lors de la vérification des droits',
@@ -153,11 +153,23 @@ const peutVoirInfosSensibles = (req, res, next) => {
     // Ajouter le rôle pour référence
     req.optionsMasquage.role = role;
 
+    // Log en développement
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`🔒 Masquage configuré pour ${role}:`, req.optionsMasquage);
+    }
+
     next();
   } catch (error) {
-    console.error('Erreur dans peutVoirInfosSensibles:', error);
+    console.error('❌ Erreur dans peutVoirInfosSensibles:', error);
     // En cas d'erreur, on masque tout par sécurité
-    req.optionsMasquage = { ip: true, anciennesValeurs: true, toutes: true };
+    req.optionsMasquage = {
+      ip: true,
+      anciennesValeurs: true,
+      nouvellesValeurs: true,
+      informationsPersonnelles: true,
+      detailsConnexion: true,
+      toutes: true,
+    };
     next();
   }
 };
@@ -182,20 +194,49 @@ const filtrerDonneesSensibles = (donnees, optionsMasquage) => {
     if (optionsMasquage.ip && donneesFiltrees.ip) {
       donneesFiltrees.ip = '***.***.***.***';
     }
+    if (optionsMasquage.ip && donneesFiltrees.ipUtilisateur) {
+      donneesFiltrees.ipUtilisateur = '***.***.***.***';
+    }
+    if (optionsMasquage.ip && donneesFiltrees.iputilisateur) {
+      donneesFiltrees.iputilisateur = '***.***.***.***';
+    }
 
     // Masquer les anciennes valeurs
     if (optionsMasquage.anciennesValeurs && donneesFiltrees.anciennes_valeurs) {
       donneesFiltrees.anciennes_valeurs = '[MASQUÉ]';
+    }
+    if (optionsMasquage.anciennesValeurs && donneesFiltrees.oldvalue) {
+      donneesFiltrees.oldvalue = '[MASQUÉ]';
+    }
+    if (optionsMasquage.anciennesValeurs && donneesFiltrees.oldValue) {
+      donneesFiltrees.oldValue = '[MASQUÉ]';
     }
 
     // Masquer les nouvelles valeurs
     if (optionsMasquage.nouvellesValeurs && donneesFiltrees.nouvelles_valeurs) {
       donneesFiltrees.nouvelles_valeurs = '[MASQUÉ]';
     }
+    if (optionsMasquage.nouvellesValeurs && donneesFiltrees.newvalue) {
+      donneesFiltrees.newvalue = '[MASQUÉ]';
+    }
+    if (optionsMasquage.nouvellesValeurs && donneesFiltrees.newValue) {
+      donneesFiltrees.newValue = '[MASQUÉ]';
+    }
 
     // Masquer les informations personnelles
     if (optionsMasquage.informationsPersonnelles) {
-      const champsPersonnels = ['email', 'telephone', 'adresse', 'dateNaissance'];
+      const champsPersonnels = [
+        'email',
+        'Email',
+        'telephone',
+        'contact',
+        'CONTACT',
+        'adresse',
+        'dateNaissance',
+        'DATE_DE_NAISSANCE',
+        'nom',
+        'prenom',
+      ];
       champsPersonnels.forEach((champ) => {
         if (donneesFiltrees[champ]) {
           donneesFiltrees[champ] = '[MASQUÉ]';
@@ -217,7 +258,10 @@ const aRole = (rolesAutorises) => {
     const role = normaliserRole(req.user?.role);
 
     if (!role) {
-      return res.status(401).json({ erreur: 'Non authentifié' });
+      return res.status(401).json({
+        erreur: 'Non authentifié',
+        message: 'Vous devez être connecté',
+      });
     }
 
     const rolesList = Array.isArray(rolesAutorises) ? rolesAutorises : [rolesAutorises];
@@ -263,6 +307,8 @@ const estDansCoordination = (paramCoordination) => {
     return res.status(403).json({
       erreur: 'Accès refusé',
       message: "Vous ne pouvez accéder qu'aux données de votre coordination",
+      votreCoordination: coordinationUtilisateur,
+      coordinationRequise: coordinationCible,
     });
   };
 };

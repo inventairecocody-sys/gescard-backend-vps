@@ -364,7 +364,6 @@ exports.logAPIAccess = (req, res, next) => {
 
     // Ne logger que si le logging est activé
     if (API_CONFIG.enableLogging) {
-      const logLevel = statusCode >= 400 ? 'warn' : 'info';
       const logMessage = statusCode >= 400 ? '⚠️' : '📊';
 
       console.log(`${logMessage} Accès API externe:`, {
@@ -511,7 +510,7 @@ exports.securityHeaders = (req, res, next) => {
 // MIDDLEWARE DE GESTION DES ERREURS API
 // ============================================
 
-exports.errorHandler = (err, req, res, next) => {
+exports.errorHandler = (err, req, res) => {
   console.error('❌ Erreur API:', err);
 
   // Journaliser l'erreur

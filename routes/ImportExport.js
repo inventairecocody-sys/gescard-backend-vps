@@ -6,8 +6,6 @@ const fs = require('fs');
 const path = require('path');
 const { verifierToken } = require('../middleware/auth');
 const role = require('../middleware/verificationRole');
-const permission = require('../middleware/permission');
-const journalRequetes = require('../middleware/journalRequetes');
 
 // ============================================
 // CONFIGURATION OPTIMISÉE POUR LWS
@@ -291,12 +289,6 @@ router.get(
 // ============================================
 
 /**
- * 📊 STATISTIQUES D'EXPORT
- * GET /api/import-export/stats
- */
-router.get('/stats', role.peutImporterExporter, importExportController.getExportStatus);
-
-/**
  * 📊 STATUT DES EXPORTS EN COURS
  * GET /api/import-export/status
  */
@@ -425,7 +417,7 @@ if (process.env.NODE_ENV !== 'production') {
         '4️⃣ Pour importer: POST /api/import-export/import/csv (multipart/form-data)',
         '5️⃣ Pour le template: GET /api/import-export/template',
         '6️⃣ Pour le diagnostic: GET /api/import-export/diagnostic',
-        '7️⃣ Pour les stats: GET /api/import-export/stats',
+        '7️⃣ Pour les stats: GET /api/import-export/status',
       ],
     });
   });
@@ -468,7 +460,6 @@ if (process.env.NODE_ENV !== 'production') {
           template: 'GET /template',
           sites: 'GET /sites',
           diagnostic: 'GET /diagnostic',
-          stats: 'GET /stats',
           status: 'GET /status',
           test: 'GET /test',
         },
@@ -553,7 +544,6 @@ router.get('/', (req, res) => {
           sites: '/api/import-export/sites',
           template: '/api/import-export/template',
           diagnostic: '/api/import-export/diagnostic',
-          stats: '/api/import-export/stats',
           status: '/api/import-export/status',
           health: '/api/import-export/health',
           test: '/api/import-export/test',

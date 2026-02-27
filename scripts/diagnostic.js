@@ -25,7 +25,7 @@ async function runDiagnostic() {
     console.log('1️⃣ Test API de base...');
     try {
       const baseRes = await axios.get(`${API_BASE}/api`);
-      console.log(`✅ API de base: ${baseRes.data.message}`);
+      console.log(`✅ API de base: ${baseRes.data.message || 'OK'}`);
       successCount++;
     } catch (error) {
       console.log(`❌ Échec API de base: ${error.message}`);
@@ -56,16 +56,16 @@ async function runDiagnostic() {
       console.log(`❌ Échec CORS: ${error.message}`);
     }
 
-    // Test 4: API externe publique (si elle existe encore)
+    // Test 4: API externe publique (health)
     totalTests++;
-    console.log('\n4️⃣ Test API externe (publique)...');
+    console.log('\n4️⃣ Test API externe (health)...');
     try {
       const extHealth = await axios.get(`${API_BASE}/api/external/health`);
-      console.log(`✅ API externe health: ${extHealth.data.status}`);
+      console.log(`✅ API externe health: ${extHealth.data.status || 'OK'}`);
       successCount++;
     } catch (error) {
       if (error.response && error.response.status === 404) {
-        console.log(`ℹ️ API externe non trouvée (peut-être désactivée) - OK`);
+        console.log(`ℹ️ API externe health non trouvée - OK`);
       } else {
         console.log(`❌ Échec API externe: ${error.message}`);
       }
@@ -76,7 +76,7 @@ async function runDiagnostic() {
     console.log('\n5️⃣ Test API changes (publique)...');
     try {
       const changesRes = await axios.get(`${API_BASE}/api/external/changes`);
-      console.log(`✅ API changes: ${changesRes.data.total || 0} modifications`);
+      console.log(`✅ API changes: ${changesRes.data.data?.length || 0} modifications`);
       if (changesRes.data.derniereModification) {
         console.log(`📅 Dernière modif: ${changesRes.data.derniereModification}`);
       }
@@ -89,18 +89,21 @@ async function runDiagnostic() {
       }
     }
 
-    // Test 6: Debug external (si elle existe)
+    // Test 6: API stats (publique)
     totalTests++;
-    console.log('\n6️⃣ Test debug external...');
+    console.log('\n6️⃣ Test API stats...');
     try {
-      const debugRes = await axios.get(`${API_BASE}/api/debug/external`);
-      console.log(`✅ Debug external: ${debugRes.data.status || 'OK'}`);
+      const statsRes = await axios.get(`${API_BASE}/api/external/stats`);
+      console.log(`✅ API stats accessible`);
+      if (statsRes.data.data && statsRes.data.data.global) {
+        console.log(`📊 Total: ${statsRes.data.data.global.total_cartes} cartes`);
+      }
       successCount++;
     } catch (error) {
       if (error.response && error.response.status === 404) {
-        console.log(`ℹ️ Debug external non trouvé - OK`);
+        console.log(`ℹ️ API stats non trouvée - OK`);
       } else {
-        console.log(`❌ Échec debug: ${error.message}`);
+        console.log(`❌ Échec API stats: ${error.message}`);
       }
     }
 
@@ -126,6 +129,7 @@ async function runDiagnostic() {
     try {
       const protectedRes = await axios.get(`${API_BASE}/api/external/cartes`, {
         headers: { 'X-API-Token': API_TOKEN },
+        params: { limit: 5 }, // Limiter pour éviter de charger trop de données
       });
       console.log(`✅ API protégée accessible avec token`);
       if (protectedRes.data.data) {
@@ -140,7 +144,7 @@ async function runDiagnostic() {
       }
     }
 
-    // Test 9: Connexion directe à la BDD (optionnel)
+    // Test 9: Route protégée JWT (sans token)
     totalTests++;
     console.log('\n9️⃣ Test route protégée JWT (sans token - devrait échouer)...');
     try {
@@ -156,6 +160,37 @@ async function runDiagnostic() {
       }
     }
 
+    // Test 10: Route d'accueil des statistiques
+    totalTests++;
+    console.log('\n🔟 Test route statistiques...');
+    try {
+      const statsHomeRes = await axios.get(`${API_BASE}/api/statistiques`);
+      console.log(`✅ Route statistiques accessible - ${statsHomeRes.data.name || 'OK'}`);
+      successCount++;
+    } catch (error) {
+      if (error.response && error.response.status === 404) {
+        console.log(`ℹ️ Route statistiques non trouvée - OK`);
+      } else {
+        console.log(`❌ Erreur statistiques: ${error.message}`);
+      }
+    }
+
+    // Test 11: Synchronisation sites (sans token)
+    totalTests++;
+    console.log('\n1️⃣1️⃣ Test synchronisation (sans token)...');
+    try {
+      await axios.get(`${API_BASE}/api/site/health`);
+      console.log(`✅ Route sync accessible`);
+      successCount++;
+    } catch (error) {
+      if (error.response && error.response.status === 404) {
+        console.log(`ℹ️ Route sync non trouvée - OK`);
+      } else {
+        console.log(`✅ Route sync protégée: ${error.response?.status || 'OK'}`);
+        successCount++;
+      }
+    }
+
     console.log('\n🎯 RÉSULTATS DU DIAGNOSTIC');
     console.log('========================');
     console.log(`✅ Tests réussis: ${successCount}/${totalTests}`);
@@ -164,7 +199,15 @@ async function runDiagnostic() {
     if (successCount === totalTests) {
       console.log('\n🎉 Tous les tests ont réussi ! API prête pour la production.');
     } else {
-      console.log('\n⚠️ Certains tests ont échoué. Vérifie les routes manquantes.');
+      const pourcentage = Math.round((successCount / totalTests) * 100);
+      console.log(`\n⚠️ ${pourcentage}% des tests ont réussi. Vérifie les routes manquantes.`);
+      console.log('📝 Routes à vérifier:');
+      console.log('   - /api/external/health');
+      console.log('   - /api/external/changes');
+      console.log('   - /api/external/stats');
+      console.log('   - /api/external/cartes');
+      console.log('   - /api/statistiques');
+      console.log('   - /api/site/health');
     }
   } catch (error) {
     console.error('\n❌ Diagnostic échoué - Erreur générale:');
@@ -173,6 +216,8 @@ async function runDiagnostic() {
       console.error("💡 Le serveur n'est pas accessible. Vérifie que ton backend tourne bien.");
     } else if (error.code === 'ENOTFOUND') {
       console.error("💡 L'URL n'est pas valide. Vérifie API_BASE.");
+    } else if (error.code === 'ETIMEDOUT') {
+      console.error('💡 Timeout - Le serveur répond trop lentement ou ne répond pas.');
     }
     process.exit(1);
   }

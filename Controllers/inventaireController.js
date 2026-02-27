@@ -41,13 +41,6 @@ const ajouterFiltreCoordination = (req, query, params, colonne = 'coordination')
 };
 
 /**
- * Vérifie si l'utilisateur peut voir les informations sensibles
- */
-const peutVoirInfosSensibles = (req) => {
-  return req.user?.role === 'Administrateur';
-};
-
-/**
  * Masque les informations sensibles selon le rôle
  */
 const masquerInfosSensibles = (req, carte) => {
@@ -862,15 +855,9 @@ const inventaireController = {
       CONFIG.statsCache = null;
       CONFIG.statsCacheTime = null;
 
-      // Recalculer les stats
-      const stats = await inventaireController.getStatistiques(
-        { query: { forceRefresh: true }, user: req.user },
-        { json: (data) => data }
-      );
-
       res.json({
         success: true,
-        message: 'Cache rafraîchi avec succès',
+        message: 'Cache vidé avec succès',
         timestamp: new Date().toISOString(),
       });
     } catch (error) {

@@ -98,7 +98,7 @@ class ServiceAnnulation {
       RETURNING journalid
     `;
 
-    const resultat = await db.requete(requete, [
+    const resultat = await db.query(requete, [
       utilisateurId,
       nomUtilisateur,
       nomComplet || nomUtilisateur,
@@ -121,11 +121,11 @@ class ServiceAnnulation {
       coordination, // Nouvelle colonne coordination
     ]);
 
-    if (!resultat.lignes || resultat.lignes.length === 0) {
+    if (!resultat.rows || resultat.rows.length === 0) {
       throw new Error("Échec de l'enregistrement dans le journal");
     }
 
-    return resultat.lignes[0].journalid;
+    return resultat.rows[0].journalid;
   }
 
   /**
@@ -143,18 +143,18 @@ class ServiceAnnulation {
     }
 
     // Récupérer l'action originale avec verrouillage pour éviter les doubles annulations
-    const action = await db.requete(
+    const action = await db.query(
       `SELECT * FROM journalactivite 
        WHERE journalid = $1 AND annulee = false 
        FOR UPDATE`, // Verrouillage ligne
       [idJournal]
     );
 
-    if (action.lignes.length === 0) {
+    if (action.rows.length === 0) {
       throw new Error('Action non trouvée ou déjà annulée');
     }
 
-    const entree = action.lignes[0];
+    const entree = action.rows[0];
 
     // Récupérer les anciennes valeurs depuis le JSON
     let anciennesValeurs = {};
@@ -169,7 +169,7 @@ class ServiceAnnulation {
           typeof entree.oldvalue === 'string' ? JSON.parse(entree.oldvalue) : entree.oldvalue;
       }
     } catch (e) {
-      console.warn(`Erreur parsing anciennes valeurs pour journal ${idJournal}:`, e);
+      console.warn(`⚠️ Erreur parsing anciennes valeurs pour journal ${idJournal}:`, e.message);
       anciennesValeurs = {};
     }
 
@@ -293,7 +293,7 @@ class ServiceAnnulation {
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error("Erreur lors de l'annulation:", error);
+      console.error("❌ Erreur lors de l'annulation:", error);
       throw new Error(`Échec de l'annulation: ${error.message}`);
     } finally {
       client.release();
@@ -375,9 +375,9 @@ class ServiceAnnulation {
     requete += ` ORDER BY j.dateaction DESC LIMIT $${index}`;
     valeurs.push(limite);
 
-    const resultat = await db.requete(requete, valeurs);
+    const resultat = await db.query(requete, valeurs);
 
-    return resultat.lignes;
+    return resultat.rows;
   }
 
   /**
@@ -386,7 +386,7 @@ class ServiceAnnulation {
    * @returns {Promise<Object>} - Statut de l'action
    */
   async peutEtreAnnulee(idJournal) {
-    const resultat = await db.requete(
+    const resultat = await db.query(
       `SELECT 
         annulee,
         dateaction,
@@ -397,11 +397,11 @@ class ServiceAnnulation {
       [idJournal]
     );
 
-    if (resultat.lignes.length === 0) {
+    if (resultat.rows.length === 0) {
       return { peutAnnuler: false, raison: 'Action non trouvée' };
     }
 
-    const action = resultat.lignes[0];
+    const action = resultat.rows[0];
 
     if (action.annulee) {
       return { peutAnnuler: false, raison: 'Action déjà annulée' };

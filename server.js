@@ -25,10 +25,11 @@ const journalRoutes = require('./routes/journal');
 const logRoutes = require('./routes/log');
 const utilisateursRoutes = require('./routes/utilisateurs');
 const profilRoutes = require('./routes/profils');
-const inventaireRoutes = require('./routes/inventaire');
+const inventaireRoutes = require('./routes/Inventaire');
 const statistiquesRoutes = require('./routes/statistiques');
 const externalApiRoutes = require('./routes/externalApi');
 const backupRoutes = require('./routes/backupRoutes');
+const syncRoutes = require('./routes/syncRoutes'); // ✅ AJOUTÉ - Routes de synchronisation des sites
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,10 +57,8 @@ async function setupBackupSystem() {
 
   try {
     const PostgreSQLBackup = require('./backup-postgres');
-    // const PostgreSQLRestorer = require('./restore-postgres'); // Commenté car non utilisé
 
     const backupService = new PostgreSQLBackup();
-    // const restoreService = new PostgreSQLRestorer(); // Supprimé car non utilisé
 
     // Vérifier si la base est vide (nouvelle installation)
     const { Client } = require('pg');
@@ -201,7 +200,6 @@ const accessLogStream = fs.createWriteStream(path.join(__dirname, 'logs', 'acces
   flags: 'a',
 });
 
-// CORRECTION ICI : Remplacer (req, res) par (req) puisque 'res' n'est pas utilisé
 app.use(
   morgan(morganFormat, {
     stream: accessLogStream,
@@ -314,6 +312,7 @@ app.use('/api/profil', profilRoutes);
 app.use('/api/statistiques', statistiquesRoutes);
 app.use('/api/external', externalApiRoutes);
 app.use('/api/backup', backupRoutes);
+app.use('/api/sync', syncRoutes); // ✅ AJOUTÉ - Routes de synchronisation des sites
 
 // ========== ROUTE RACINE ==========
 app.get('/', (req, res) => {
@@ -338,6 +337,16 @@ app.get('/', (req, res) => {
       annulation_actions: true,
       filtrage_coordination: true,
       journal_amelioré: true,
+      sync_sites: true, // ✅ AJOUTÉ - Indique que la synchronisation des sites est disponible
+    },
+    sync_endpoints: {
+      // ✅ AJOUTÉ - Documentation des endpoints de synchronisation
+      login: 'POST /api/sync/login',
+      test: 'GET /api/sync/test',
+      upload: 'POST /api/sync/upload',
+      download: 'GET /api/sync/download',
+      confirm: 'POST /api/sync/confirm',
+      status: 'GET /api/sync/status',
     },
   });
 });
@@ -448,7 +457,8 @@ const server = app.listen(PORT, async () => {
   console.log('• Backups: /backups/ (local) + Google Drive');
   console.log('• Connexions DB max: 50');
   console.log("• Rôles supportés: Administrateur, Gestionnaire, Chef d'équipe, Opérateur");
-  console.log("• Nouveautés: Annulation d'actions, Filtrage par coordination\n");
+  console.log('• Synchronisation sites: ✅ ACTIVE (12 endpoints)');
+  console.log("• Nouveautés: Annulation d'actions, Filtrage par coordination, Sync sites\n");
 });
 
 // Configuration des timeouts (augmentés pour VPS)

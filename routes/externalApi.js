@@ -58,6 +58,8 @@ const API_CONFIG = {
     stats: 'private, max-age=300',
     sites: 'public, max-age=3600',
     changes: 'private, max-age=60',
+    'columns-config': 'public, max-age=3600',
+    diagnostic: 'no-cache',
   },
 };
 
@@ -165,7 +167,7 @@ router.get('/cartes', API_CONFIG.rateLimits.sensitive, validateApiParams, async 
  * 📊 Statistiques
  * GET /api/external/stats
  */
-router.get('/stats', API_CONFIG.rateLimits.public, async (req, res) => {
+router.get('/stats', API_CONFIG.rateLimits.public, validateApiParams, async (req, res) => {
   try {
     await apiController.getStats(req, res);
   } catch (error) {
@@ -210,7 +212,7 @@ router.get('/changes', API_CONFIG.rateLimits.sync, validateApiParams, async (req
  * 🔄 Synchronisation avec fusion intelligente
  * POST /api/external/sync
  */
-router.post('/sync', API_CONFIG.rateLimits.sync, async (req, res) => {
+router.post('/sync', API_CONFIG.rateLimits.sync, validateApiParams, async (req, res) => {
   try {
     // Validation basique du payload
     if (!req.body || typeof req.body !== 'object') {
@@ -292,7 +294,7 @@ router.get(
  * 🔧 Diagnostic complet de l'API
  * GET /api/external/diagnostic
  */
-router.get('/diagnostic', API_CONFIG.rateLimits.public, async (req, res) => {
+router.get('/diagnostic', API_CONFIG.rateLimits.public, validateApiParams, async (req, res) => {
   try {
     await apiController.diagnostic(req, res);
   } catch (error) {
@@ -309,7 +311,7 @@ router.get('/diagnostic', API_CONFIG.rateLimits.public, async (req, res) => {
  * 📋 Configuration des colonnes
  * GET /api/external/columns-config
  */
-router.get('/columns-config', API_CONFIG.rateLimits.public, (req, res) => {
+router.get('/columns-config', API_CONFIG.rateLimits.public, validateApiParams, (req, res) => {
   try {
     const config = apiController.getColonnesAFusionner();
     res.json({

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { query } = require('../db/db');
+const db = require('../db/db'); // Renommé pour éviter le shadowing
 const { verifierToken } = require('../middleware/auth');
 const role = require('../middleware/verificationRole');
 const permission = require('../middleware/permission');
@@ -47,24 +47,24 @@ const isCacheValid = (cacheKey, coordination = null) => {
 /**
  * Ajoute un filtre de coordination à une requête SQL
  */
-const ajouterFiltreCoordination = (req, query, params = []) => {
-  const role = req.user?.role;
+const ajouterFiltreCoordination = (req, sqlQuery, params = []) => {
+  const userRole = req.user?.role;
   const coordination = req.user?.coordination;
 
   // Admin voit tout
-  if (role === 'Administrateur') {
-    return { query, params };
+  if (userRole === 'Administrateur') {
+    return { query: sqlQuery, params };
   }
 
   // Gestionnaire et Chef d'équipe: filtrés par coordination
-  if ((role === 'Gestionnaire' || role === "Chef d'équipe") && coordination) {
+  if ((userRole === 'Gestionnaire' || userRole === "Chef d'équipe") && coordination) {
     return {
-      query: query + ` AND coordination = $${params.length + 1}`,
+      query: sqlQuery + ` AND coordination = $${params.length + 1}`,
       params: [...params, coordination],
     };
   }
 
-  return { query, params };
+  return { query: sqlQuery, params };
 };
 
 /**
@@ -170,7 +170,7 @@ router.get('/globales', permission.peutVoirStatistiques, async (req, res) => {
 
     const { query: finalQuery, params } = ajouterFiltreCoordination(req, queryText, []);
 
-    const result = await query(finalQuery, params);
+    const result = await db.query(finalQuery, params);
 
     const stats = formatGlobales(result.rows[0]);
 
@@ -282,7 +282,7 @@ router.get('/sites', permission.peutVoirStatistiques, async (req, res) => {
       LIMIT $${params.length + 1}
     `;
 
-    const result = await query(finalQueryWithGroup, [...params, actualLimit]);
+    const result = await db.query(finalQueryWithGroup, [...params, actualLimit]);
 
     const stats = formatSites(result.rows);
 
@@ -433,9 +433,9 @@ router.get('/detail', permission.peutVoirStatistiques, async (req, res) => {
 
     // Exécuter les requêtes en parallèle
     const [globalesResult, sitesResult, evolutionResult] = await Promise.all([
-      query(finalGlobales, globalesParams),
-      query(finalSitesWithGroup, sitesParams),
-      query(finalEvolutionWithGroup, evolutionParams),
+      db.query(finalGlobales, globalesParams),
+      db.query(finalSitesWithGroup, sitesParams),
+      db.query(finalEvolutionWithGroup, evolutionParams),
     ]);
 
     const globales = formatGlobales(globalesResult.rows[0]);
@@ -579,7 +579,7 @@ router.get('/evolution', permission.peutVoirStatistiques, async (req, res) => {
       ORDER BY periode DESC
     `;
 
-    const result = await query(finalQueryWithGroup, params);
+    const result = await db.query(finalQueryWithGroup, params);
 
     res.json({
       success: true,
@@ -637,7 +637,7 @@ router.get('/quick', permission.peutVoirStatistiques, async (req, res) => {
 
     const { query: finalQuery, params } = ajouterFiltreCoordination(req, queryText, []);
 
-    const result = await query(finalQuery, params);
+    const result = await db.query(finalQuery, params);
 
     const stats = result.rows[0];
 
@@ -703,7 +703,7 @@ router.get('/imports', permission.peutVoirStatistiques, async (req, res) => {
       LIMIT $${params.length + 1}
     `;
 
-    const result = await query(finalQueryWithGroup, [...params, actualLimit]);
+    const result = await db.query(finalQueryWithGroup, [...params, actualLimit]);
 
     res.json({
       success: true,
@@ -745,7 +745,7 @@ router.get('/diagnostic', role.peutAccederPage('statistiques'), async (req, res)
   try {
     const startTime = Date.now();
 
-    const result = await query(`
+    const result = await db.query(`
       SELECT 
         COUNT(*) as total_cartes,
         COUNT(DISTINCT "SITE DE RETRAIT") as sites_distincts,

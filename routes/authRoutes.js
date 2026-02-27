@@ -1,3 +1,4 @@
+// routes/authRoutes.js
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
@@ -6,13 +7,11 @@ const rateLimit = require('express-rate-limit');
 // IMPORT DU CONTROLLER
 const authController = require('../Controllers/authController');
 
-// IMPORT DU MIDDLEWARE - CORRECTION ICI !
+// IMPORT DU MIDDLEWARE
 const { verifyToken } = require('../middleware/auth');
-// Renommer pour garder la compatibilité avec le reste du code
-const verifierToken = verifyToken;
 
 // Vérification du middleware
-if (typeof verifierToken !== 'function') {
+if (typeof verifyToken !== 'function') {
   console.error("❌ ERREUR: verifyToken n'est pas une fonction!");
   console.error('Vérifiez que le middleware/auth.js exporte bien verifyToken');
   process.exit(1);
@@ -47,6 +46,7 @@ const controllerFunctions = {
   forgotPassword,
   resetPassword,
 };
+
 Object.entries(controllerFunctions).forEach(([name, func]) => {
   if (typeof func !== 'function') {
     console.error(`❌ ERREUR: ${name} n'est pas une fonction!`);
@@ -56,10 +56,11 @@ Object.entries(controllerFunctions).forEach(([name, func]) => {
   }
 });
 
+// Configuration
 const AUTH_CONFIG = {
   loginLimiter: rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // 10 tentatives max
     skipSuccessfulRequests: true,
     message: {
       success: false,
@@ -89,6 +90,7 @@ const AUTH_CONFIG = {
   },
 };
 
+// Middleware de validation
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -107,7 +109,14 @@ const validate = (req, res, next) => {
 
 console.log('🚀 Définition des routes...');
 
-// Route POST /login
+// ============================================
+// ROUTES PUBLIQUES
+// ============================================
+
+/**
+ * Connexion utilisateur
+ * POST /api/auth/login
+ */
 console.log('   → Définition POST /login');
 router.post(
   '/login',
@@ -134,52 +143,10 @@ router.post(
   }
 );
 
-// Route POST /logout
-console.log('   → Définition POST /logout');
-router.post('/logout', verifierToken, async (req, res) => {
-  try {
-    await logoutUser(req, res);
-  } catch (error) {
-    console.error('❌ Erreur route logout:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Erreur serveur',
-      code: 'SERVER_ERROR',
-    });
-  }
-});
-
-// Route GET /verify
-console.log('   → Définition GET /verify');
-router.get('/verify', verifierToken, async (req, res) => {
-  try {
-    await verifyTokenController(req, res);
-  } catch (error) {
-    console.error('❌ Erreur route verify:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Erreur serveur',
-      code: 'SERVER_ERROR',
-    });
-  }
-});
-
-// Route POST /refresh
-console.log('   → Définition POST /refresh');
-router.post('/refresh', verifierToken, async (req, res) => {
-  try {
-    await refreshToken(req, res);
-  } catch (error) {
-    console.error('❌ Erreur route refresh:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Erreur serveur',
-      code: 'SERVER_ERROR',
-    });
-  }
-});
-
-// Route POST /forgot-password
+/**
+ * Mot de passe oublié
+ * POST /api/auth/forgot-password
+ */
 console.log('   → Définition POST /forgot-password');
 router.post('/forgot-password', async (req, res) => {
   try {
@@ -194,7 +161,10 @@ router.post('/forgot-password', async (req, res) => {
   }
 });
 
-// Route POST /reset-password
+/**
+ * Réinitialisation mot de passe
+ * POST /api/auth/reset-password
+ */
 console.log('   → Définition POST /reset-password');
 router.post('/reset-password', async (req, res) => {
   try {
@@ -209,7 +179,67 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-// Routes de diagnostic (dev)
+// ============================================
+// ROUTES PROTÉGÉES (NÉCESSITENT UN TOKEN)
+// ============================================
+
+/**
+ * Déconnexion
+ * POST /api/auth/logout
+ */
+console.log('   → Définition POST /logout');
+router.post('/logout', verifyToken, async (req, res) => {
+  try {
+    await logoutUser(req, res);
+  } catch (error) {
+    console.error('❌ Erreur route logout:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur',
+      code: 'SERVER_ERROR',
+    });
+  }
+});
+
+/**
+ * Vérification du token
+ * GET /api/auth/verify
+ */
+console.log('   → Définition GET /verify');
+router.get('/verify', verifyToken, async (req, res) => {
+  try {
+    await verifyTokenController(req, res);
+  } catch (error) {
+    console.error('❌ Erreur route verify:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur',
+      code: 'SERVER_ERROR',
+    });
+  }
+});
+
+/**
+ * Rafraîchissement du token
+ * POST /api/auth/refresh
+ */
+console.log('   → Définition POST /refresh');
+router.post('/refresh', verifyToken, async (req, res) => {
+  try {
+    await refreshToken(req, res);
+  } catch (error) {
+    console.error('❌ Erreur route refresh:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur',
+      code: 'SERVER_ERROR',
+    });
+  }
+});
+
+// ============================================
+// ROUTES DE DIAGNOSTIC (mode développement uniquement)
+// ============================================
 if (process.env.NODE_ENV !== 'production') {
   console.log('   → Définition GET /test (mode dev)');
   router.get('/test', (req, res) => {
@@ -231,7 +261,9 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-// Gestion 404
+// ============================================
+// GESTION 404
+// ============================================
 console.log('   → Définition middleware 404');
 router.use((req, res) => {
   res.status(404).json({

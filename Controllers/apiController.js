@@ -59,7 +59,7 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
     const nouvelleValeur = nouvellesDonnees[colonne]?.toString().trim() || '';
 
     switch (type) {
-      case 'delivrance':
+      case 'delivrance': {
         const isOuiExistante = valeurExistante.toUpperCase() === 'OUI';
         const isOuiNouvelle = nouvelleValeur.toUpperCase() === 'OUI';
 
@@ -71,7 +71,8 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
         } else if (!isOuiExistante && isOuiNouvelle && valeurExistante) {
           console.log(`  ✅ ${colonne}: "${valeurExistante}" gardé vs "OUI"`);
         } else if (valeurExistante && nouvelleValeur && valeurExistante !== nouvelleValeur) {
-          await exports.resoudreConflitNom(
+          // Appel à resoudreConflitNom qui retourne un boolean pour updated
+          const conflitResolu = await exports.resoudreConflitNom(
             client,
             updates,
             params,
@@ -79,9 +80,11 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
             valeurExistante,
             nouvelleValeur,
             carteExistante,
-            nouvellesDonnees,
-            updated
+            nouvellesDonnees
           );
+          if (conflitResolu) {
+            updated = true;
+          }
         } else if (nouvelleValeur && !valeurExistante) {
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
@@ -89,8 +92,9 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
           console.log(`  🔄 ${colonne}: "" → "${nouvelleValeur}" (ajout)`);
         }
         break;
+      }
 
-      case 'contact':
+      case 'contact': {
         if (exports.estContactPlusComplet(nouvelleValeur, valeurExistante)) {
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
@@ -98,8 +102,9 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
           console.log(`  🔄 ${colonne}: "${valeurExistante}" → "${nouvelleValeur}" (plus complet)`);
         }
         break;
+      }
 
-      case 'date':
+      case 'date': {
         const dateExistante = valeurExistante ? new Date(valeurExistante) : null;
         const nouvelleDate = nouvelleValeur ? new Date(nouvelleValeur) : null;
 
@@ -110,9 +115,10 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
           console.log(`  🔄 ${colonne}: ${valeurExistante} → ${nouvelleValeur} (plus récente)`);
         }
         break;
+      }
 
       case 'texte':
-      default:
+      default: {
         if (exports.estValeurPlusComplete(nouvelleValeur, valeurExistante, colonne)) {
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
@@ -120,6 +126,7 @@ exports.mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
           console.log(`  🔄 ${colonne}: "${valeurExistante}" → "${nouvelleValeur}" (plus complet)`);
         }
         break;
+      }
     }
   }
 
@@ -152,8 +159,7 @@ exports.resoudreConflitNom = async (
   valeurExistante,
   nouvelleValeur,
   carteExistante,
-  nouvellesDonnees,
-  updated
+  nouvellesDonnees
 ) => {
   const dateExistante = carteExistante['DATE DE DELIVRANCE'];
   const nouvelleDate = nouvellesDonnees['DATE DE DELIVRANCE']
@@ -163,10 +169,11 @@ exports.resoudreConflitNom = async (
   if (nouvelleDate && (!dateExistante || nouvelleDate > new Date(dateExistante))) {
     updates.push(`"${colonne}" = $${++params.length}`);
     params.push(nouvelleValeur);
-    updated = true;
     console.log(`  🔄 ${colonne}: "${valeurExistante}" → "${nouvelleValeur}" (date plus récente)`);
+    return true; // Retourne true si mise à jour effectuée
   } else {
     console.log(`  ✅ ${colonne}: "${valeurExistante}" gardé (date plus récente ou égale)`);
+    return false; // Retourne false si pas de mise à jour
   }
 };
 
@@ -204,19 +211,21 @@ exports.estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
 
   switch (colonne) {
     case 'NOM':
-    case 'PRENOMS':
+    case 'PRENOMS': {
       const hasAccents = (texte) => /[àâäéèêëîïôöùûüÿçñ]/i.test(texte);
       if (hasAccents(nouvelleValeur) && !hasAccents(valeurExistante)) return true;
       if (nouvelleValeur.length > valeurExistante.length) return true;
       break;
+    }
 
     case 'LIEU NAISSANCE':
-    case "LIEU D'ENROLEMENT":
+    case "LIEU D'ENROLEMENT": {
       const motsNouveaux = nouvelleValeur.split(/\s+/).length;
       const motsExistants = valeurExistante.split(/\s+/).length;
       if (motsNouveaux > motsExistants) return true;
       if (nouvelleValeur.length > valeurExistante.length) return true;
       break;
+    }
 
     default:
       if (nouvelleValeur.length > valeurExistante.length) return true;
@@ -335,7 +344,7 @@ exports.getChanges = async (req, res) => {
 
     const actualLimit = Math.min(parseInt(limit), API_CONFIG.maxResults);
 
-    let query = `
+    const query = `
       SELECT 
         id,
         "LIEU D'ENROLEMENT",
@@ -969,7 +978,7 @@ exports.getModifications = async (req, res) => {
 
     const actualLimit = Math.min(parseInt(limit), API_CONFIG.maxResults);
 
-    let query = `
+    const query = `
       SELECT 
         id,
         "LIEU D'ENROLEMENT",

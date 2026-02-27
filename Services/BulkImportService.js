@@ -1,4 +1,3 @@
-const { Transform } = require('stream');
 const EventEmitter = require('events');
 const db = require('../db/db');
 const fs = require('fs').promises;
@@ -147,11 +146,7 @@ class BulkImportServiceCSV extends EventEmitter {
 
       // 3. TRAITEMENT PAR LOTS AVEC STREAMING
       console.log(`🎯 Début du traitement CSV: ${this.stats.totalRows} lignes...`);
-      const importResult = await this.processCSVWithOptimizedStreaming(
-        filePath,
-        finalImportBatchId,
-        userId
-      );
+      await this.processCSVWithOptimizedStreaming(filePath, finalImportBatchId, userId);
 
       // 4. FINALISATION
       this.stats.endTime = new Date();
@@ -440,9 +435,10 @@ class BulkImportServiceCSV extends EventEmitter {
 
     Object.keys(this.headerMapping).forEach((standardHeader) => {
       const index = this.headerMapping[standardHeader];
-      const values = Object.values(csvRow);
 
-      if (index !== undefined && index < values.length) {
+      if (index !== undefined) {
+        // Accès direct par index dans l'objet csvRow
+        const values = Object.values(csvRow);
         mappedData[standardHeader] = values[index] || '';
       } else {
         mappedData[standardHeader] = '';
@@ -543,7 +539,7 @@ class BulkImportServiceCSV extends EventEmitter {
 
       for (const item of batch) {
         try {
-          const { rowNumber, data } = item;
+          const { data } = item;
 
           // Validation des champs requis
           if (!this.validateCSVRequiredFields(data)) {
@@ -810,7 +806,10 @@ class BulkImportServiceCSV extends EventEmitter {
         ]
       );
     } catch (error) {
-      // Ignorer les erreurs de journalisation
+      // Logger en mode debug seulement
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('⚠️ Erreur journalisation batch (non critique):', error.message);
+      }
     }
   }
 

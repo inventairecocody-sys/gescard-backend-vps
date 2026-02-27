@@ -3,7 +3,6 @@ const router = express.Router();
 const inventaireController = require('../Controllers/inventaireController');
 const { verifierToken } = require('../middleware/auth');
 const role = require('../middleware/verificationRole');
-const permission = require('../middleware/permission');
 const rateLimit = require('express-rate-limit');
 
 // ============================================
@@ -43,6 +42,16 @@ const INVENTAIRE_CONFIG = {
         code: 'EXPORT_RATE_LIMIT',
       },
     }),
+
+    admin: rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 10, // 10 requêtes admin par minute
+      message: {
+        success: false,
+        error: 'Trop de requêtes admin',
+        code: 'ADMIN_RATE_LIMIT',
+      },
+    }),
   },
 
   // Cache control
@@ -51,6 +60,7 @@ const INVENTAIRE_CONFIG = {
     stats: 'private, max-age=300', // 5 minutes
     sites: 'public, max-age=3600', // 1 heure
     export: 'private, no-cache',
+    diagnostic: 'private, no-cache',
   },
 };
 
@@ -79,6 +89,20 @@ router.use((req, res, next) => {
   );
   next();
 });
+
+/**
+ * Middleware pour vérifier que l'utilisateur est administrateur
+ */
+const requireAdmin = (req, res, next) => {
+  if (req.user?.role !== 'Administrateur') {
+    return res.status(403).json({
+      success: false,
+      error: 'Accès réservé aux administrateurs',
+      code: 'ADMIN_ONLY',
+    });
+  }
+  next();
+};
 
 // ============================================
 // ROUTES DE RECHERCHE
@@ -119,19 +143,7 @@ router.get(
  */
 router.get(
   '/stats',
-  permission.peutVoirStatistiques,
-  INVENTAIRE_CONFIG.rateLimits.stats,
-  inventaireController.getStatistiques
-);
-
-/**
- * 📊 Statistiques détaillées (avec cache)
- * GET /api/inventaire/statistiques
- * Accessible selon le rôle
- */
-router.get(
-  '/statistiques',
-  permission.peutVoirStatistiques,
+  role.peutAccederPage('inventaire'), // Le contrôleur applique le filtre
   INVENTAIRE_CONFIG.rateLimits.stats,
   inventaireController.getStatistiques
 );
@@ -143,8 +155,8 @@ router.get(
  */
 router.post(
   '/cache/refresh',
-  role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.stats,
+  requireAdmin,
+  INVENTAIRE_CONFIG.rateLimits.admin,
   inventaireController.refreshCache
 );
 
@@ -183,7 +195,7 @@ router.get(
  */
 router.get(
   '/site/:site/stats',
-  permission.peutVoirStatistiques,
+  role.peutAccederPage('inventaire'),
   INVENTAIRE_CONFIG.rateLimits.stats,
   inventaireController.getSiteStats
 );
@@ -228,8 +240,8 @@ router.get(
  */
 router.get(
   '/diagnostic',
-  role.peutAccederPage('inventaire'),
-  INVENTAIRE_CONFIG.rateLimits.search,
+  requireAdmin,
+  INVENTAIRE_CONFIG.rateLimits.admin,
   inventaireController.diagnostic
 );
 
@@ -307,13 +319,12 @@ router.get('/', (req, res) => {
       },
       statistiques: {
         'GET /stats': 'Statistiques globales (filtrées par rôle)',
-        'GET /statistiques': 'Statistiques détaillées (filtrées par rôle)',
-        'GET /site/:site/stats': 'Statistiques par site (filtrées par rôle)',
         'POST /cache/refresh': 'Rafraîchir le cache des stats (Admin)',
       },
       sites: {
         'GET /sites': 'Liste des sites (filtrée par rôle)',
         'GET /site/:site': 'Cartes par site avec pagination (filtrée par rôle)',
+        'GET /site/:site/stats': 'Statistiques détaillées par site',
       },
       utilitaires: {
         'GET /diagnostic': 'Diagnostic du module (Admin)',
@@ -341,6 +352,7 @@ router.get('/', (req, res) => {
       recherche: '30 requêtes par minute',
       stats: '20 requêtes par minute',
       export: '10 exports par 15 minutes',
+      admin: '10 requêtes admin par minute',
     },
     exemples: {
       curl_recherche:
@@ -367,7 +379,6 @@ router.use((req, res) => {
       'GET /api/inventaire/recherche',
       'GET /api/inventaire/recherche-rapide',
       'GET /api/inventaire/stats',
-      'GET /api/inventaire/statistiques',
       'GET /api/inventaire/sites',
       'GET /api/inventaire/site/:site',
       'GET /api/inventaire/site/:site/stats',

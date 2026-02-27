@@ -43,6 +43,11 @@ const JOURNAL_CONFIG = {
   },
 };
 
+// ============================================
+// MIDDLEWARE
+// ============================================
+
+// Middleware de cache-control dynamique
 router.use((req, res, next) => {
   const path = req.path.split('/').pop();
   const cacheControl = JOURNAL_CONFIG.cacheControl[path] || 'private, no-cache';
@@ -50,6 +55,7 @@ router.use((req, res, next) => {
   next();
 });
 
+// Middleware de logging
 router.use((req, res, next) => {
   console.log(
     `📋 [Journal] ${req.method} ${req.url} - User: ${req.user?.nomUtilisateur || 'non authentifié'} (${req.user?.role || 'aucun'})`
@@ -57,7 +63,14 @@ router.use((req, res, next) => {
   next();
 });
 
-// Routes publiques
+// ============================================
+// ROUTES PUBLIQUES
+// ============================================
+
+/**
+ * 🩺 Vérification de santé
+ * GET /api/journal/health
+ */
 router.get('/health', JOURNAL_CONFIG.rateLimits.standard, (req, res) => {
   res.json({
     success: true,
@@ -71,6 +84,7 @@ router.get('/health', JOURNAL_CONFIG.rateLimits.standard, (req, res) => {
       'GET /api/journal/stats',
       'GET /api/journal/actions/annulables',
       'POST /api/journal/:id/annuler',
+      'POST /api/journal/annuler-import',
       'POST /api/journal/nettoyer',
       'GET /api/journal/export',
       'GET /api/journal/diagnostic',
@@ -78,6 +92,10 @@ router.get('/health', JOURNAL_CONFIG.rateLimits.standard, (req, res) => {
   });
 });
 
+/**
+ * 🧪 Test du service
+ * GET /api/journal/test
+ */
 router.get('/test', (req, res) => {
   res.json({
     success: true,
@@ -86,47 +104,88 @@ router.get('/test', (req, res) => {
   });
 });
 
-// Authentification requise
+// ============================================
+// AUTHENTIFICATION
+// ============================================
+
+// Authentification requise pour toutes les routes suivantes
 router.use(verifierToken);
 router.use(permission.peutVoirInfosSensibles);
 
-// Routes principales (Admin uniquement)
+// ============================================
+// ROUTES DE CONSULTATION (Admin uniquement)
+// ============================================
+
+/**
+ * 📋 Liste paginée du journal
+ * GET /api/journal
+ */
 router.get(
   '/',
   role.peutVoirJournal,
   JOURNAL_CONFIG.rateLimits.standard,
   journalController.getJournal
 );
+
+/**
+ * 📋 Liste paginée (alias)
+ * GET /api/journal/list
+ */
 router.get(
   '/list',
   role.peutVoirJournal,
   JOURNAL_CONFIG.rateLimits.standard,
   journalController.getJournal
 );
+
+/**
+ * 🔍 Détail d'une entrée
+ * GET /api/journal/:id
+ */
 router.get(
   '/:id',
   role.peutVoirJournal,
   JOURNAL_CONFIG.rateLimits.standard,
   journalController.getJournalById
 );
+
+/**
+ * 📦 Liste des imports
+ * GET /api/journal/imports
+ */
 router.get(
   '/imports',
   role.peutVoirJournal,
   JOURNAL_CONFIG.rateLimits.standard,
   journalController.getImports
 );
+
+/**
+ * 📦 Détail d'un import
+ * GET /api/journal/imports/:batchId
+ */
 router.get(
   '/imports/:batchId',
   role.peutVoirJournal,
   JOURNAL_CONFIG.rateLimits.standard,
   journalController.getImportDetails
 );
+
+/**
+ * 📊 Statistiques du journal
+ * GET /api/journal/stats
+ */
 router.get(
   '/stats',
   role.peutVoirJournal,
   JOURNAL_CONFIG.rateLimits.standard,
   journalController.getStats
 );
+
+/**
+ * 🔄 Actions pouvant être annulées
+ * GET /api/journal/actions/annulables
+ */
 router.get(
   '/actions/annulables',
   role.peutAnnulerAction,
@@ -134,19 +193,36 @@ router.get(
   journalController.getActionsAnnulables
 );
 
-// Routes d'action
+// ============================================
+// ROUTES D'ACTION (Admin uniquement - rate limiting strict)
+// ============================================
+
+/**
+ * ❌ Annuler une action
+ * POST /api/journal/:id/annuler
+ */
 router.post(
   '/:id/annuler',
   role.peutAnnulerAction,
   JOURNAL_CONFIG.rateLimits.sensitive,
   journalController.annulerAction
 );
+
+/**
+ * ❌ Annuler un import
+ * POST /api/journal/annuler-import
+ */
 router.post(
   '/annuler-import',
   role.peutAnnulerAction,
   JOURNAL_CONFIG.rateLimits.sensitive,
   journalController.annulerImportation
 );
+
+/**
+ * 🧹 Nettoyer les vieux logs
+ * POST /api/journal/nettoyer
+ */
 router.post(
   '/nettoyer',
   role.peutAnnulerAction,
@@ -154,11 +230,23 @@ router.post(
   journalController.nettoyerJournal
 );
 
-// Routes d'export et diagnostic
+// ============================================
+// ROUTES D'EXPORT ET DIAGNOSTIC
+// ============================================
+
+/**
+ * 📤 Exporter le journal
+ * GET /api/journal/export
+ */
 router.get('/export', role.peutVoirJournal, JOURNAL_CONFIG.rateLimits.export, async (req, res) => {
   req.query.export_all = 'true';
   await journalController.getJournal(req, res);
 });
+
+/**
+ * 🔧 Diagnostic complet
+ * GET /api/journal/diagnostic
+ */
 router.get(
   '/diagnostic',
   role.peutVoirJournal,
@@ -166,16 +254,25 @@ router.get(
   journalController.diagnostic
 );
 
-// Route d'accueil
-router.get('/', (req, res) => {
+// ============================================
+// ROUTE D'ACCUEIL
+// ============================================
+
+/**
+ * 🏠 Page d'accueil de l'API journal
+ * GET /api/journal/home
+ */
+router.get('/home', (req, res) => {
   res.json({
     name: 'API Journal GESCARD',
     version: '3.0.0',
     timestamp: new Date().toISOString(),
     authentifie: !!req.user,
+    documentation: '/api/journal/health',
     endpoints: {
       consultation: {
         'GET /': 'Liste paginée (Admin)',
+        'GET /list': 'Liste paginée (alias)',
         'GET /imports': 'Liste des imports (Admin)',
         'GET /imports/:batchId': 'Détails import (Admin)',
         'GET /stats': 'Statistiques (Admin)',
@@ -189,10 +286,22 @@ router.get('/', (req, res) => {
       utilitaires: {
         'GET /export': 'Exporter (Admin)',
         'GET /diagnostic': 'Diagnostic (Admin)',
+        'GET /health': 'Santé du service (public)',
+        'GET /test': 'Test (public)',
+        'GET /home': 'Cette page',
       },
+    },
+    rate_limits: {
+      standard: '30 requêtes par minute',
+      sensitive: '10 actions sensibles par 15 minutes',
+      export: '5 exports par heure',
     },
   });
 });
+
+// ============================================
+// GESTION DES ERREURS 404
+// ============================================
 
 router.use((req, res) => {
   res.status(404).json({
@@ -200,7 +309,11 @@ router.use((req, res) => {
     error: 'Route non trouvée',
     message: `La route ${req.method} ${req.path} n'existe pas`,
     available_routes: [
+      'GET /api/journal/home',
+      'GET /api/journal/health',
+      'GET /api/journal/test',
       'GET /api/journal',
+      'GET /api/journal/list',
       'GET /api/journal/:id',
       'GET /api/journal/imports',
       'GET /api/journal/imports/:batchId',
@@ -211,8 +324,6 @@ router.use((req, res) => {
       'POST /api/journal/nettoyer',
       'GET /api/journal/export',
       'GET /api/journal/diagnostic',
-      'GET /api/journal/health',
-      'GET /api/journal/test',
     ],
     code: 'ROUTE_NOT_FOUND',
   });

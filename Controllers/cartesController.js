@@ -44,7 +44,6 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
 
   // ✅ TOUTES LES COLONNES PRINCIPALES À FUSIONNER
   const colonnesAFusionner = {
-    // Colonnes texte avec priorité aux valeurs les plus complètes
     "LIEU D'ENROLEMENT": 'texte',
     'SITE DE RETRAIT': 'texte',
     RANGEMENT: 'texte',
@@ -54,7 +53,6 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
     CONTACT: 'contact',
     'CONTACT DE RETRAIT': 'contact',
     DELIVRANCE: 'delivrance', // Gestion spéciale
-    // Colonnes dates avec priorité aux plus récentes
     'DATE DE NAISSANCE': 'date',
     'DATE DE DELIVRANCE': 'date',
   };
@@ -63,25 +61,19 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
     const valeurExistante = carteExistante[colonne] || '';
     const nouvelleValeur = nouvellesDonnees[colonne]?.toString().trim() || '';
 
-    // 🔄 FUSION INTELLIGENTE PAR TYPE DE COLONNE
     switch (type) {
-      case 'delivrance':
-        // ✅ LOGIQUE SPÉCIALE POUR DELIVRANCE
+      case 'delivrance': {
         const isOuiExistante = valeurExistante.toUpperCase() === 'OUI';
         const isOuiNouvelle = nouvelleValeur.toUpperCase() === 'OUI';
 
-        // PRIORITÉ AUX NOMS SUR "OUI"
         if (isOuiExistante && !isOuiNouvelle && nouvelleValeur) {
-          // "OUI" → Nom : METTRE À JOUR
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
           updated = true;
           console.log(`  🔄 ${colonne}: "OUI" → "${nouvelleValeur}" (priorité nom)`);
         } else if (!isOuiExistante && isOuiNouvelle && valeurExistante) {
-          // Nom → "OUI" : GARDER le nom
           console.log(`  ✅ ${colonne}: "${valeurExistante}" gardé vs "OUI"`);
         } else if (valeurExistante && nouvelleValeur && valeurExistante !== nouvelleValeur) {
-          // Conflit entre deux noms → priorité date récente
           const dateExistante = carteExistante['DATE DE DELIVRANCE'];
           const nouvelleDate = nouvellesDonnees['DATE DE DELIVRANCE']
             ? new Date(nouvellesDonnees['DATE DE DELIVRANCE'])
@@ -98,16 +90,15 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
             console.log(`  ✅ ${colonne}: "${valeurExistante}" gardé (date plus récente ou égale)`);
           }
         } else if (nouvelleValeur && !valeurExistante) {
-          // Vide → Valeur : AJOUTER
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
           updated = true;
           console.log(`  🔄 ${colonne}: "" → "${nouvelleValeur}" (ajout)`);
         }
         break;
+      }
 
-      case 'contact':
-        // ✅ CONTACTS : Priorité aux numéros les plus complets
+      case 'contact': {
         if (estContactPlusComplet(nouvelleValeur, valeurExistante)) {
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
@@ -115,9 +106,9 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
           console.log(`  🔄 ${colonne}: "${valeurExistante}" → "${nouvelleValeur}" (plus complet)`);
         }
         break;
+      }
 
-      case 'date':
-        // ✅ DATES : Priorité aux dates les plus récentes
+      case 'date': {
         const dateExistante = valeurExistante ? new Date(valeurExistante) : null;
         const nouvelleDate = nouvelleValeur ? new Date(nouvelleValeur) : null;
 
@@ -128,10 +119,10 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
           console.log(`  🔄 ${colonne}: ${valeurExistante} → ${nouvelleValeur} (plus récente)`);
         }
         break;
+      }
 
       case 'texte':
-      default:
-        // ✅ TEXTE : Priorité aux valeurs les plus complètes
+      default: {
         if (estValeurPlusComplete(nouvelleValeur, valeurExistante, colonne)) {
           updates.push(`"${colonne}" = $${++paramCount}`);
           params.push(nouvelleValeur);
@@ -139,10 +130,10 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
           console.log(`  🔄 ${colonne}: "${valeurExistante}" → "${nouvelleValeur}" (plus complet)`);
         }
         break;
+      }
     }
   }
 
-  // Application des mises à jour
   if (updated && updates.length > 0) {
     updates.push(`dateimport = $${++paramCount}`);
     params.push(new Date());
@@ -164,47 +155,16 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
 };
 
 /**
- * Résout les conflits entre noms dans DELIVRANCE
- */
-const resoudreConflitNom = async (
-  client,
-  updates,
-  params,
-  colonne,
-  valeurExistante,
-  nouvelleValeur,
-  carteExistante,
-  nouvellesDonnees,
-  updated
-) => {
-  const dateExistante = carteExistante['DATE DE DELIVRANCE'];
-  const nouvelleDate = nouvellesDonnees['DATE DE DELIVRANCE']
-    ? new Date(nouvellesDonnees['DATE DE DELIVRANCE'])
-    : null;
-
-  if (nouvelleDate && (!dateExistante || nouvelleDate > new Date(dateExistante))) {
-    updates.push(`"${colonne}" = $${++params.length}`);
-    params.push(nouvelleValeur);
-    updated = true;
-    console.log(`  🔄 ${colonne}: "${valeurExistante}" → "${nouvelleValeur}" (date plus récente)`);
-  } else {
-    console.log(`  ✅ ${colonne}: "${valeurExistante}" gardé (date plus récente ou égale)`);
-  }
-};
-
-/**
  * Vérifie si un contact est plus complet (indicatif, longueur, format)
  */
 const estContactPlusComplet = (nouveauContact, ancienContact) => {
   if (!nouveauContact) return false;
   if (!ancienContact) return true;
 
-  // Priorité aux numéros avec indicatif complet
   const hasIndicatifComplet = (contact) =>
     contact.startsWith('+225') || contact.startsWith('00225');
   const isNumerique = (contact) => /^[\d+\s\-()]+$/.test(contact);
 
-  // Règles de priorité
   if (hasIndicatifComplet(nouveauContact) && !hasIndicatifComplet(ancienContact)) return true;
   if (isNumerique(nouveauContact) && !isNumerique(ancienContact)) return true;
   if (nouveauContact.length > ancienContact.length) return true;
@@ -218,13 +178,11 @@ const estContactPlusComplet = (nouveauContact, ancienContact) => {
 const estDatePlusRecente = (nouvelleDate, dateExistante, colonne) => {
   if (!dateExistante) return true;
 
-  // Pour DATE DE DELIVRANCE, priorité absolue à la plus récente
   if (colonne === 'DATE DE DELIVRANCE') {
     return nouvelleDate > dateExistante;
   }
 
-  // Pour DATE DE NAISSANCE, on garde celle qui est renseignée (pas de priorité de récence)
-  return false; // On ne change pas la date de naissance existante
+  return false;
 };
 
 /**
@@ -234,27 +192,25 @@ const estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
   if (!nouvelleValeur) return false;
   if (!valeurExistante) return true;
 
-  // Règles spécifiques par colonne
   switch (colonne) {
     case 'NOM':
-    case 'PRENOMS':
-      // Pour les noms, priorité aux versions avec accents/caractères complets
+    case 'PRENOMS': {
       const hasAccents = (texte) => /[àâäéèêëîïôöùûüÿçñ]/i.test(texte);
       if (hasAccents(nouvelleValeur) && !hasAccents(valeurExistante)) return true;
       if (nouvelleValeur.length > valeurExistante.length) return true;
       break;
+    }
 
     case 'LIEU NAISSANCE':
-    case "LIEU D'ENROLEMENT":
-      // Pour les lieux, priorité aux noms complets
+    case "LIEU D'ENROLEMENT": {
       const motsNouveaux = nouvelleValeur.split(/\s+/).length;
       const motsExistants = valeurExistante.split(/\s+/).length;
       if (motsNouveaux > motsExistants) return true;
       if (nouvelleValeur.length > valeurExistante.length) return true;
       break;
+    }
 
     default:
-      // Règle générale : priorité aux valeurs plus longues
       if (nouvelleValeur.length > valeurExistante.length) return true;
   }
 
@@ -299,7 +255,7 @@ const getToutesCartes = async (req, res) => {
     let paramCount = 0;
 
     // Filtre par coordination si l'utilisateur n'est pas admin
-    if (req.infosRole?.peutVoirStatistiques === 'coordination' && req.user.coordination) {
+    if (req.infosRole?.peutVoirStatistiques === 'coordination' && req.user?.coordination) {
       paramCount++;
       query += ` WHERE coordination = $${paramCount}`;
       params.push(req.user.coordination);
@@ -318,18 +274,18 @@ const getToutesCartes = async (req, res) => {
       .replace(/SELECT.*FROM/, 'SELECT COUNT(*) as total FROM')
       .split(' ORDER BY')[0];
 
-    const countResult = await db.requete(countQuery, params);
-    const total = parseInt(countResult.lignes[0].total);
+    const countResult = await db.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].total);
 
     // Ajouter pagination et tri
     query += ` ORDER BY id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
     params.push(limit, offset);
 
-    const result = await db.requete(query, params);
+    const result = await db.query(query, params);
 
     res.json({
       success: true,
-      data: result.lignes,
+      data: result.rows,
       pagination: {
         page,
         limit,
@@ -355,7 +311,7 @@ const getCarteParId = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const result = await db.requete(
+    const result = await db.query(
       `SELECT 
         id,
         "LIEU D'ENROLEMENT",
@@ -375,7 +331,7 @@ const getCarteParId = async (req, res) => {
       [id]
     );
 
-    if (result.lignes.length === 0) {
+    if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         erreur: 'Carte non trouvée',
@@ -385,7 +341,7 @@ const getCarteParId = async (req, res) => {
     // Vérifier la coordination pour les chefs d'équipe
     if (
       req.infosRole?.role === "Chef d'équipe" &&
-      result.lignes[0].coordination !== req.user.coordination
+      result.rows[0].coordination !== req.user?.coordination
     ) {
       return res.status(403).json({
         success: false,
@@ -395,7 +351,7 @@ const getCarteParId = async (req, res) => {
 
     res.json({
       success: true,
-      data: result.lignes[0],
+      data: result.rows[0],
     });
   } catch (error) {
     console.error('❌ Erreur getCarteParId:', error);
@@ -441,8 +397,17 @@ const createCarte = async (req, res) => {
       });
     }
 
+    if (nom.length > 255 || prenoms.length > 255) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(400).json({
+        success: false,
+        erreur: 'Nom ou prénoms trop longs (max 255 caractères)',
+      });
+    }
+
     // Ajouter la coordination depuis l'utilisateur connecté
-    const coordination = req.user.coordination || null;
+    const coordination = req.user?.coordination || null;
 
     const insertQuery = `
       INSERT INTO cartes (
@@ -470,21 +435,20 @@ const createCarte = async (req, res) => {
 
     const newId = result.rows[0].id;
 
-    // 📝 ENREGISTRER DANS LE JOURNAL
     await annulationService.enregistrerAction(
-      req.user.id,
-      req.user.nomUtilisateur,
-      req.user.nomComplet || req.user.nomUtilisateur,
-      req.user.role,
-      req.user.agence || '',
+      req.user?.id || null,
+      req.user?.nomUtilisateur || 'SYSTEM',
+      req.user?.nomComplet || req.user?.nomUtilisateur || 'Système',
+      req.user?.role || 'SYSTEM',
+      req.user?.agence || '',
       `Création de la carte pour ${nom} ${prenoms}`,
       'INSERT',
       'cartes',
       newId,
-      null, // Pas d'anciennes valeurs
-      req.body, // Nouvelles valeurs
+      null,
+      req.body,
       req.ip,
-      null, // importBatchId
+      null,
       coordination
     );
 
@@ -537,7 +501,6 @@ const updateCarte = async (req, res) => {
     // 🔍 FILTRER LES COLONNES SELON LE RÔLE
     let donneesAModifier = { ...req.body };
 
-    // Si colonnesAutorisees est un tableau (Chef d'équipe), ne garder que ces colonnes
     if (Array.isArray(req.colonnesAutorisees) && req.colonnesAutorisees.length > 0) {
       donneesAModifier = {};
       req.colonnesAutorisees.forEach((col) => {
@@ -546,7 +509,6 @@ const updateCarte = async (req, res) => {
         }
       });
 
-      // Vérifier qu'il y a au moins une modification
       if (Object.keys(donneesAModifier).length === 0) {
         await client.query('ROLLBACK');
         client.release();
@@ -569,12 +531,10 @@ const updateCarte = async (req, res) => {
       params.push(value);
     }
 
-    // Toujours mettre à jour dateimport
     paramCount++;
     updates.push(`dateimport = $${paramCount}`);
     params.push(new Date());
 
-    // Ajouter l'ID à la fin
     params.push(id);
 
     const updateQuery = `
@@ -585,25 +545,24 @@ const updateCarte = async (req, res) => {
 
     await client.query(updateQuery, params);
 
-    // Récupérer la carte modifiée pour le journal
+    // Récupérer la carte modifiée
     const carteModifiee = await client.query('SELECT * FROM cartes WHERE id = $1', [id]);
 
-    // 📝 ENREGISTRER DANS LE JOURNAL
     await annulationService.enregistrerAction(
-      req.user.id,
-      req.user.nomUtilisateur,
-      req.user.nomComplet || req.user.nomUtilisateur,
-      req.user.role,
-      req.user.agence || '',
+      req.user?.id || null,
+      req.user?.nomUtilisateur || 'SYSTEM',
+      req.user?.nomComplet || req.user?.nomUtilisateur || 'Système',
+      req.user?.role || 'SYSTEM',
+      req.user?.agence || '',
       `Modification de la carte #${id}`,
       'UPDATE',
       'cartes',
       id,
-      ancienneCarte, // Anciennes valeurs complètes
-      carteModifiee.rows[0], // Nouvelles valeurs complètes
+      ancienneCarte,
+      carteModifiee.rows[0],
       req.ip,
       null,
-      ancienneCarte.coordination || req.user.coordination
+      ancienneCarte.coordination || req.user?.coordination
     );
 
     await client.query('COMMIT');
@@ -650,10 +609,9 @@ const deleteCarte = async (req, res) => {
       });
     }
 
-    // Vérifier la coordination pour les chefs d'équipe (normalement déjà fait par middleware)
     if (
       req.infosRole?.role === "Chef d'équipe" &&
-      carteASupprimer.rows[0].coordination !== req.user.coordination
+      carteASupprimer.rows[0].coordination !== req.user?.coordination
     ) {
       await client.query('ROLLBACK');
       client.release();
@@ -663,22 +621,20 @@ const deleteCarte = async (req, res) => {
       });
     }
 
-    // Supprimer la carte
     await client.query('DELETE FROM cartes WHERE id = $1', [id]);
 
-    // 📝 ENREGISTRER DANS LE JOURNAL
     await annulationService.enregistrerAction(
-      req.user.id,
-      req.user.nomUtilisateur,
-      req.user.nomComplet || req.user.nomUtilisateur,
-      req.user.role,
-      req.user.agence || '',
+      req.user?.id || null,
+      req.user?.nomUtilisateur || 'SYSTEM',
+      req.user?.nomComplet || req.user?.nomUtilisateur || 'Système',
+      req.user?.role || 'SYSTEM',
+      req.user?.agence || '',
       `Suppression de la carte #${id}`,
       'DELETE',
       'cartes',
       id,
-      carteASupprimer.rows[0], // Anciennes valeurs pour restauration
-      null, // Pas de nouvelles valeurs
+      carteASupprimer.rows[0],
+      null,
       req.ip,
       null,
       carteASupprimer.rows[0].coordination
@@ -704,7 +660,7 @@ const deleteCarte = async (req, res) => {
 };
 
 // ====================================================
-// 🔹 ROUTES API PUBLIQUES (existantes)
+// 🔹 ROUTES API PUBLIQUES
 // ====================================================
 
 /**
@@ -735,7 +691,6 @@ const healthCheck = async (req, res) => {
       ORDER BY total_cartes DESC
     `);
 
-    // Infos système pour LWS
     const memory = process.memoryUsage();
     const uptime = process.uptime();
     const hours = Math.floor(uptime / 3600);
@@ -808,10 +763,9 @@ const getChanges = async (req, res) => {
 
     console.log('📡 Récupération des changements depuis:', since);
 
-    // Si since n'est pas fourni, utiliser 24h
-    const sinceDate = since ? new Date(since) : new Date(Date.now() - 24 * 60 * 60 * 1000); // 24h par défaut
+    const sinceDate = since ? new Date(since) : new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    let query = `
+    const query = `
       SELECT 
         id,
         "LIEU D'ENROLEMENT",
@@ -848,7 +802,6 @@ const getChanges = async (req, res) => {
       derniereModification: derniereModification,
       since: sinceDate.toISOString(),
       timestamp: new Date().toISOString(),
-      note: 'Utilisez le paramètre ?since=YYYY-MM-DDTHH:mm:ss pour la synchronisation incrémentielle',
     });
   } catch (error) {
     console.error('❌ Erreur getChanges:', error);
@@ -862,7 +815,7 @@ const getChanges = async (req, res) => {
 };
 
 /**
- * Synchronisation avec fusion intelligente (optimisé pour LWS)
+ * Synchronisation avec fusion intelligente
  * POST /api/external/sync
  */
 const syncData = async (req, res) => {
@@ -883,9 +836,8 @@ const syncData = async (req, res) => {
       });
     }
 
-    // Vérifier la taille pour LWS
     const totalSize = JSON.stringify(donnees).length;
-    const maxSizeBytes = 100 * 1024 * 1024; // 100MB
+    const maxSizeBytes = 100 * 1024 * 1024;
 
     if (totalSize > maxSizeBytes) {
       await client.query('ROLLBACK');
@@ -911,7 +863,6 @@ const syncData = async (req, res) => {
       `🔄 Synchronisation intelligente: ${donnees.length} enregistrements depuis ${source}`
     );
 
-    // Traitement par lots pour optimiser la mémoire
     const BATCH_SIZE = API_CONFIG.maxBatchSize;
     let imported = 0;
     let updated = 0;
@@ -934,7 +885,6 @@ const syncData = async (req, res) => {
         const index = i + j;
 
         try {
-          // Validation des champs obligatoires
           if (!item.NOM || !item.PRENOMS) {
             errors++;
             errorDetails.push(`Enregistrement ${index}: NOM et PRENOMS obligatoires`);
@@ -945,7 +895,6 @@ const syncData = async (req, res) => {
           const prenoms = item.PRENOMS.toString().trim();
           const siteRetrait = item['SITE DE RETRAIT']?.toString().trim() || '';
 
-          // ✅ Vérifier si la carte existe
           const existingCarte = await client.query(
             `SELECT * FROM cartes 
              WHERE nom = $1 AND prenoms = $2 AND "SITE DE RETRAIT" = $3`,
@@ -953,16 +902,14 @@ const syncData = async (req, res) => {
           );
 
           if (existingCarte.rows.length > 0) {
-            // ✅ CARTE EXISTANTE - FUSION INTELLIGENTE
             const carteExistante = existingCarte.rows[0];
             const resultUpdate = await mettreAJourCarte(client, carteExistante, item);
 
             if (resultUpdate.updated) {
               updated++;
 
-              // 📝 ENREGISTRER DANS LE JOURNAL POUR LA MISE À JOUR
               await annulationService.enregistrerAction(
-                null, // utilisateurId (synchronisation externe)
+                null,
                 'SYSTEM',
                 'Synchronisation externe',
                 source,
@@ -981,7 +928,6 @@ const syncData = async (req, res) => {
               duplicates++;
             }
           } else {
-            // ✅ NOUVELLE CARTE - INSÉRER
             const insertData = {
               "LIEU D'ENROLEMENT": item["LIEU D'ENROLEMENT"]?.toString().trim() || '',
               'SITE DE RETRAIT': siteRetrait,
@@ -1017,9 +963,8 @@ const syncData = async (req, res) => {
 
             imported++;
 
-            // 📝 ENREGISTRER DANS LE JOURNAL POUR L'INSERTION
             await annulationService.enregistrerAction(
-              null, // utilisateurId (synchronisation externe)
+              null,
               'SYSTEM',
               'Synchronisation externe',
               source,
@@ -1042,7 +987,6 @@ const syncData = async (req, res) => {
         }
       }
 
-      // Libérer la mémoire après chaque lot (si disponible)
       if (global.gc) {
         global.gc();
       }
@@ -1072,14 +1016,6 @@ const syncData = async (req, res) => {
       },
       fusion: {
         strategy: 'intelligente_multicolonnes',
-        rules: [
-          "DELIVRANCE: noms prioritaires sur 'OUI' + dates récentes",
-          'CONTACTS: numéros complets avec indicatif prioritaire',
-          'NOMS/PRENOMS: versions avec accents et caractères complets',
-          'LIEUX: noms géographiques complets',
-          'DATES: plus récentes pour délivrance, conservation pour naissance',
-          'TEXTES: valeurs les plus longues et complètes',
-        ],
         colonnes_traitees: Object.keys(getColonnesAFusionner()),
       },
       performance: {
@@ -1094,7 +1030,7 @@ const syncData = async (req, res) => {
         source: source,
         timestamp: new Date().toISOString(),
       },
-      errorDetails: errorDetails.slice(0, 10), // Limiter à 10 erreurs
+      errorDetails: errorDetails.slice(0, 10),
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1111,26 +1047,23 @@ const syncData = async (req, res) => {
 
 /**
  * Retourne la configuration des colonnes à fusionner
- * GET /api/external/columns-config
  */
-const getColonnesAFusionner = () => {
-  return {
-    "LIEU D'ENROLEMENT": 'texte',
-    'SITE DE RETRAIT': 'texte',
-    RANGEMENT: 'texte',
-    NOM: 'texte',
-    PRENOMS: 'texte',
-    'LIEU NAISSANCE': 'texte',
-    CONTACT: 'contact',
-    'CONTACT DE RETRAIT': 'contact',
-    DELIVRANCE: 'delivrance',
-    'DATE DE NAISSANCE': 'date',
-    'DATE DE DELIVRANCE': 'date',
-  };
-};
+const getColonnesAFusionner = () => ({
+  "LIEU D'ENROLEMENT": 'texte',
+  'SITE DE RETRAIT': 'texte',
+  RANGEMENT: 'texte',
+  NOM: 'texte',
+  PRENOMS: 'texte',
+  'LIEU NAISSANCE': 'texte',
+  CONTACT: 'contact',
+  'CONTACT DE RETRAIT': 'contact',
+  DELIVRANCE: 'delivrance',
+  'DATE DE NAISSANCE': 'date',
+  'DATE DE DELIVRANCE': 'date',
+});
 
 /**
- * Récupère les cartes avec filtres (optimisé pour LWS)
+ * Récupère les cartes avec filtres
  * GET /api/external/cartes
  */
 const getCartes = async (req, res) => {
@@ -1146,10 +1079,9 @@ const getCartes = async (req, res) => {
       delivrance,
       page = 1,
       limit = API_CONFIG.defaultLimit,
-      export_all = 'false', // Pour les exports complets
+      export_all = 'false',
     } = req.query;
 
-    // Pour LWS, on permet des exports plus grands
     const actualLimit =
       export_all === 'true'
         ? API_CONFIG.exportMaxRows
@@ -1181,7 +1113,6 @@ const getCartes = async (req, res) => {
     const params = [];
     let paramCount = 0;
 
-    // Appliquer les filtres
     if (nom) {
       paramCount++;
       query += ` AND nom ILIKE $${paramCount}`;
@@ -1230,13 +1161,11 @@ const getCartes = async (req, res) => {
       params.push(`%${delivrance}%`);
     }
 
-    // Pagination
     query += ` ORDER BY id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
     params.push(actualLimit, offset);
 
     const result = await db.query(query, params);
 
-    // Compter le total
     let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
     const countParams = [];
 
@@ -1285,11 +1214,9 @@ const getCartes = async (req, res) => {
     const countResult = await db.query(countQuery, countParams);
     const total = parseInt(countResult.rows[0].total);
 
-    // Headers pour les exports
     if (export_all === 'true') {
       res.setHeader('X-Total-Rows', total);
       res.setHeader('X-Export-Type', 'complete');
-      res.setHeader('Content-Type', 'application/json');
     }
 
     res.json({
@@ -1327,7 +1254,7 @@ const getCartes = async (req, res) => {
 };
 
 /**
- * Statistiques détaillées (enrichies pour LWS)
+ * Statistiques détaillées
  * GET /api/external/stats
  */
 const getStats = async (req, res) => {
@@ -1340,8 +1267,7 @@ const getStats = async (req, res) => {
         COUNT(DISTINCT nom) as beneficiaires_uniques,
         MIN(dateimport) as premiere_importation,
         MAX(dateimport) as derniere_importation,
-        COUNT(DISTINCT batch_id) as total_batches,
-        AVG(EXTRACT(EPOCH FROM (dateimport - LAG(dateimport) OVER (ORDER BY dateimport)))) as avg_import_interval
+        COUNT(DISTINCT batch_id) as total_batches
       FROM cartes
     `);
 
@@ -1432,15 +1358,32 @@ const getModifications = async (req, res) => {
       });
     }
 
-    let query = `
-      SELECT * FROM cartes 
+    const actualLimit = Math.min(parseInt(limit), API_CONFIG.maxResults);
+
+    const query = `
+      SELECT 
+        id,
+        "LIEU D'ENROLEMENT",
+        "SITE DE RETRAIT",
+        rangement,
+        nom,
+        prenoms,
+        "DATE DE NAISSANCE",
+        "LIEU NAISSANCE",
+        contact,
+        delivrance,
+        "CONTACT DE RETRAIT",
+        "DATE DE DELIVRANCE",
+        coordination,
+        dateimport
+      FROM cartes 
       WHERE "SITE DE RETRAIT" = $1 
       AND dateimport > $2
       ORDER BY dateimport ASC
       LIMIT $3
     `;
 
-    const result = await db.query(query, [site, new Date(derniereSync), limit]);
+    const result = await db.query(query, [site, new Date(derniereSync), actualLimit]);
 
     let derniereModification = derniereSync;
     if (result.rows.length > 0) {
@@ -1489,7 +1432,9 @@ const getSites = async (req, res) => {
   }
 };
 
-// Export des fonctions
+// ====================================================
+// EXPORT DES FONCTIONS
+// ====================================================
 module.exports = {
   // Nouvelles fonctions internes
   getToutesCartes,
@@ -1498,9 +1443,8 @@ module.exports = {
   updateCarte,
   deleteCarte,
 
-  // Fonctions de fusion (exportées pour tests)
+  // Fonctions de fusion
   mettreAJourCarte,
-  resoudreConflitNom,
   estContactPlusComplet,
   estDatePlusRecente,
   estValeurPlusComplete,

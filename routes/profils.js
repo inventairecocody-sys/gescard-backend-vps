@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const profilController = require('../Controllers/profilController'); // ✅ CORRECT
+const profilController = require('../Controllers/profilController');
 const { verifierToken } = require('../middleware/auth');
 const role = require('../middleware/verificationRole');
-const permission = require('../middleware/permission');
 const rateLimit = require('express-rate-limit');
 
 // ============================================
@@ -45,9 +44,13 @@ const PROFIL_CONFIG = {
 
   // Cache control
   cacheControl: {
-    profile: 'private, max-age=60', // 1 minute
-    stats: 'private, max-age=300', // 5 minutes
+    profil: 'private, max-age=60', // 1 minute
     activity: 'private, max-age=30', // 30 secondes
+    stats: 'private, max-age=300', // 5 minutes
+    sessions: 'private, max-age=10', // 10 secondes
+    health: 'no-cache',
+    test: 'no-cache',
+    diagnostic: 'no-cache',
   },
 };
 
@@ -57,7 +60,7 @@ const PROFIL_CONFIG = {
 
 // Middleware de cache-control dynamique
 router.use((req, res, next) => {
-  const path = req.path.split('/')[1]; // profile, activity, stats, etc.
+  const path = req.path.split('/').pop(); // Dernier segment de l'URL
   const cacheControl = PROFIL_CONFIG.cacheControl[path] || 'private, no-cache';
   res.setHeader('Cache-Control', cacheControl);
   next();
@@ -86,7 +89,7 @@ router.get('/health', PROFIL_CONFIG.rateLimits.standard, (req, res) => {
     timestamp: new Date().toISOString(),
     version: '2.0.0-lws',
     endpoints: [
-      'GET /api/profil',
+      'GET /api/profil/me',
       'GET /api/profil/:userId',
       'POST /api/profil/change-password',
       'GET /api/profil/activity',
@@ -128,14 +131,14 @@ router.use(verifierToken);
 // ============================================
 
 /**
- * GET /api/profil - Récupérer le profil de l'utilisateur connecté
+ * GET /api/profil/me - Récupérer le profil de l'utilisateur connecté
  */
-router.get('/', PROFIL_CONFIG.rateLimits.standard, profilController.getProfile);
+router.get('/me', PROFIL_CONFIG.rateLimits.standard, profilController.getProfile);
 
 /**
- * PUT /api/profil - Mettre à jour le profil
+ * PUT /api/profil/me - Mettre à jour le profil
  */
-router.put('/', PROFIL_CONFIG.rateLimits.standard, profilController.updateProfile);
+router.put('/me', PROFIL_CONFIG.rateLimits.standard, profilController.updateProfile);
 
 /**
  * POST /api/profil/change-password - Changer le mot de passe
@@ -243,7 +246,10 @@ router.get(
 // ROUTE D'ACCUEIL
 // ============================================
 
-router.get('/', (req, res) => {
+/**
+ * GET /api/profil/home - Page d'accueil documentée
+ */
+router.get('/home', (req, res) => {
   res.json({
     name: 'API Profil GESCARD',
     description: 'Module de gestion des profils utilisateurs',
@@ -252,11 +258,24 @@ router.get('/', (req, res) => {
     authentifie: !!req.user,
     documentation: {
       mon_profil: '/api/profil/me - Mon profil',
-      modifier: '/api/profil - PUT - Modifier mon profil',
+      modifier: '/api/profil/me - PUT - Modifier mon profil',
       mot_de_passe: '/api/profil/change-password - POST - Changer mot de passe',
       activite: '/api/profil/activity - Mon activité',
       statistiques: '/api/profil/stats - Mes statistiques',
       exporter: '/api/profil/export - Exporter mes données',
+      sessions: '/api/profil/sessions - Sessions actives',
+      username: '/api/profil/username - PUT - Changer nom utilisateur',
+    },
+    rate_limits: {
+      standard: '30 requêtes par minute',
+      sensitive: '10 actions sensibles par 15 minutes',
+      password: '3 tentatives par heure',
+    },
+    exemples: {
+      curl_profil: 'curl -H "Authorization: Bearer <token>" http://localhost:3000/api/profil/me',
+      curl_activity:
+        'curl -H "Authorization: Bearer <token>" http://localhost:3000/api/profil/activity',
+      curl_stats: 'curl -H "Authorization: Bearer <token>" http://localhost:3000/api/profil/stats',
     },
   });
 });
@@ -271,7 +290,10 @@ router.use((req, res) => {
     error: 'Route non trouvée',
     message: `La route ${req.method} ${req.path} n'existe pas dans l'API profil`,
     available_routes: [
-      'GET /api/profil',
+      'GET /api/profil/home',
+      'GET /api/profil/health',
+      'GET /api/profil/test',
+      'GET /api/profil/me',
       'GET /api/profil/:userId',
       'GET /api/profil/activity',
       'GET /api/profil/:userId/activity',
@@ -280,9 +302,7 @@ router.use((req, res) => {
       'GET /api/profil/export',
       'GET /api/profil/sessions',
       'GET /api/profil/diagnostic',
-      'GET /api/profil/health',
-      'GET /api/profil/test',
-      'PUT /api/profil',
+      'PUT /api/profil/me',
       'PUT /api/profil/username',
       'POST /api/profil/change-password',
       'POST /api/profil/deactivate',

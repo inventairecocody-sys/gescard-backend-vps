@@ -1,15 +1,9 @@
 const db = require('../db/db');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
-const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const csv = require('csv-parser');
-const { Parser } = require('json2csv');
-const journalController = require('./journalController');
 const annulationService = require('../Services/annulationService');
-const stream = require('stream');
-const util = require('util');
-const pipeline = util.promisify(stream.pipeline);
 
 // ============================================
 // CONFIGURATION GLOBALE OPTIMISÉE POUR LWS
@@ -32,23 +26,23 @@ const CONFIG = {
     'DELIVRANCE',
     'CONTACT DE RETRAIT',
     'DATE DE DELIVRANCE',
-    'COORDINATION', // ✅ NOUVELLE COLONNE COORDINATION
+    'COORDINATION',
   ],
 
   // Contrôles
   requiredHeaders: ['NOM', 'PRENOMS'],
-  isLWS: true, // Indicateur pour LWS
+  isLWS: true,
 
-  // ✅ CONFIGURATION EXPORT COMPLET POUR LWS
-  maxExportRows: 1000000, // 1 million de lignes max
-  maxExportRowsRecommended: 500000, // Recommandé pour performance
-  exportTimeout: 600000, // 10 minutes pour les exports complets
-  importTimeout: 300000, // 5 minutes pour l'import
-  chunkSize: 10000, // Taille des chunks pour le streaming (augmenté pour LWS)
-  memoryLimitMB: 512, // Limite mémoire LWS
-  batchSize: 2000, // Taille des lots pour traitement DB
-  maxConcurrent: 3, // Exports concurrents max
-  compressionLevel: 6, // Niveau compression GZIP
+  // Configuration export
+  maxExportRows: 1000000,
+  maxExportRowsRecommended: 500000,
+  exportTimeout: 600000,
+  importTimeout: 300000,
+  chunkSize: 10000,
+  memoryLimitMB: 512,
+  batchSize: 2000,
+  maxConcurrent: 3,
+  compressionLevel: 6,
 };
 
 // ============================================
@@ -89,32 +83,13 @@ class OptimizedImportExportController {
     this.processingQueue = false;
   }
 
-  queueExport(exportFn) {
-    return new Promise((resolve, reject) => {
-      this.exportQueue.push(async () => {
-        try {
-          const result = await exportFn();
-          resolve(result);
-        } catch (error) {
-          reject(error);
-        }
-      });
-
-      this.processExportQueue();
-    });
-  }
-
   // ============================================
   // FONCTIONS DE VÉRIFICATION DES DROITS
   // ============================================
 
-  /**
-   * Vérifie si l'utilisateur peut importer/exporter
-   */
   verifierDroitsImportExport(req) {
     const role = req.user?.role;
 
-    // Admin et Gestionnaire peuvent importer/exporter
     if (role === 'Administrateur' || role === 'Gestionnaire') {
       return { autorise: true };
     }
@@ -125,38 +100,25 @@ class OptimizedImportExportController {
     };
   }
 
-  /**
-   * Ajoute le filtre de coordination à une requête SQL
-   */
   ajouterFiltreCoordination(req, query, params, colonne = 'coordination') {
     const role = req.user?.role;
     const coordination = req.user?.coordination;
+    const newParams = [...params];
 
-    if (role === 'Gestionnaire' && coordination) {
-      // Gestionnaire: ne voit que sa coordination
+    if ((role === 'Gestionnaire' || role === "Chef d'équipe") && coordination) {
       return {
         query: query + ` AND ${colonne} = $${params.length + 1}`,
         params: [...params, coordination],
       };
     }
 
-    if (role === "Chef d'équipe" && coordination) {
-      // Chef d'équipe: ne voit que sa coordination
-      return {
-        query: query + ` AND ${colonne} = $${params.length + 1}`,
-        params: [...params, coordination],
-      };
-    }
-
-    // Admin: voit tout
-    return { query, params };
+    return { query, params: newParams };
   }
 
   // ============================================
-  // EXPORT EXCEL OPTIMISÉ (EXPORT LIMITÉ)
+  // EXPORT EXCEL LIMITÉ
   // ============================================
   async exportExcel(req, res) {
-    // ✅ VÉRIFICATION DES DROITS
     const droits = this.verifierDroitsImportExport(req);
     if (!droits.autorise) {
       return res.status(403).json({
@@ -169,7 +131,7 @@ class OptimizedImportExportController {
     const startTime = Date.now();
 
     console.log(
-      `📤 Export Excel limité demandé (ID: ${exportId}) par ${req.user.nomUtilisateur} (${req.user.role})`
+      `📤 Export Excel limité demandé (ID: ${exportId}) par ${req.user?.nomUtilisateur} (${req.user?.role})`
     );
 
     const isTest = req.query.test === 'true' || req.query.limit === '5';
@@ -178,34 +140,39 @@ class OptimizedImportExportController {
     let client;
 
     try {
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'DEBUT_EXPORT_EXCEL_LIMITE',
-        tableName: 'Cartes',
-        details: `Export Excel limité (max ${limit}) démarré`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Export Excel limité (max ${limit}) démarré`,
+        'EXPORT_START',
+        'Cartes',
+        null,
+        null,
+        { type: 'excel_limited', limit },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
       client = await db.getClient();
 
-      // Compter avec filtre de coordination
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
       let countParams = [];
 
-      // Appliquer filtre de coordination
       const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
       const countResult = await client.query(filtreCount.query, filtreCount.params);
       const totalRows = parseInt(countResult.rows[0].total);
 
       console.log(`📊 ${totalRows} cartes accessibles, export limité à ${limit}`);
 
-      // Récupérer les données avec filtre
       let dataQuery = 'SELECT * FROM cartes WHERE 1=1';
       let dataParams = [];
 
-      // Appliquer filtre de coordination
       const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
 
-      // Ajouter limit et order
       const finalQuery = filtreData.query + ' ORDER BY id LIMIT $' + (filtreData.params.length + 1);
       const finalParams = [...filtreData.params, limit];
 
@@ -220,14 +187,12 @@ class OptimizedImportExportController {
         });
       }
 
-      // Créer le workbook avec options optimisées
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'GESCARD Cocody';
       workbook.created = new Date();
       workbook.modified = new Date();
       workbook.lastPrinted = new Date();
 
-      // Utiliser le style optimisé
       workbook.views = [
         {
           x: 0,
@@ -246,7 +211,6 @@ class OptimizedImportExportController {
         views: [{ state: 'frozen', xSplit: 0, ySplit: 1 }],
       });
 
-      // Ajouter les en-têtes avec style optimisé
       worksheet.columns = CONFIG.csvHeaders.map((header) => ({
         header,
         key: header.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, ''),
@@ -257,7 +221,6 @@ class OptimizedImportExportController {
         },
       }));
 
-      // Style de la ligne d'en-tête
       const headerRow = worksheet.getRow(1);
       headerRow.height = 30;
       headerRow.eachCell((cell) => {
@@ -285,11 +248,9 @@ class OptimizedImportExportController {
         };
       });
 
-      // Ajouter les données avec formatage conditionnel
       rows.forEach((row, index) => {
         const excelRow = worksheet.addRow(row);
 
-        // Alterner les couleurs de lignes
         if (index % 2 === 0) {
           excelRow.eachCell((cell) => {
             cell.fill = {
@@ -300,20 +261,19 @@ class OptimizedImportExportController {
           });
         }
 
-        // Formatage spécial pour DELIVRANCE = "OUI"
-        if (row.delivrance && row.delivrance.toUpperCase() === 'OUI') {
+        if (row.delivrance && row.delivrance.toString().toUpperCase() === 'OUI') {
           const delivranceCell = excelRow.getCell('delivrance');
-          delivranceCell.font = { bold: true, color: { argb: 'FF00B050' } };
+          if (delivranceCell) {
+            delivranceCell.font = { bold: true, color: { argb: 'FF00B050' } };
+          }
         }
       });
 
-      // Ajouter auto-filter
       worksheet.autoFilter = {
         from: { row: 1, column: 1 },
         to: { row: 1, column: CONFIG.csvHeaders.length },
       };
 
-      // Configurer la réponse
       const timestamp = new Date().toISOString().split('T')[0];
       const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
       const filename = `export-cartes-limite-${timestamp}-${time}.xlsx`;
@@ -328,22 +288,31 @@ class OptimizedImportExportController {
       res.setHeader('X-Total-Rows', rows.length);
       res.setHeader('X-Export-Type', 'limited');
       res.setHeader('X-Export-ID', exportId);
-      res.setHeader('X-User-Role', req.user.role);
-      if (req.user.coordination) {
+      res.setHeader('X-User-Role', req.user?.role || 'unknown');
+      if (req.user?.coordination) {
         res.setHeader('X-User-Coordination', req.user.coordination);
       }
 
-      // Écrire le fichier avec compression
       await workbook.xlsx.write(res);
 
       const duration = Date.now() - startTime;
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'FIN_EXPORT_EXCEL_LIMITE',
-        tableName: 'Cartes',
-        details: `Export Excel limité terminé: ${rows.length} lignes en ${duration}ms`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Export Excel limité terminé: ${rows.length} lignes en ${duration}ms`,
+        'EXPORT_COMPLETE',
+        'Cartes',
+        null,
+        null,
+        { type: 'excel_limited', rows: rows.length, duration },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
       console.log(`✅ Export Excel limité réussi: ${rows.length} lignes en ${duration}ms`);
     } catch (error) {
@@ -359,12 +328,22 @@ class OptimizedImportExportController {
         });
       }
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'ERREUR_EXPORT_EXCEL',
-        tableName: 'Cartes',
-        details: `Erreur export Excel: ${error.message}`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Erreur export Excel: ${error.message}`,
+        'EXPORT_ERROR',
+        'Cartes',
+        null,
+        null,
+        { error: error.message },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
     } finally {
       if (client?.release) client.release();
       this.activeExports.delete(exportId);
@@ -372,10 +351,9 @@ class OptimizedImportExportController {
   }
 
   // ============================================
-  // EXPORT CSV OPTIMISÉ (EXPORT LIMITÉ)
+  // EXPORT CSV LIMITÉ
   // ============================================
   async exportCSV(req, res) {
-    // ✅ VÉRIFICATION DES DROITS
     const droits = this.verifierDroitsImportExport(req);
     if (!droits.autorise) {
       return res.status(403).json({
@@ -388,7 +366,7 @@ class OptimizedImportExportController {
     const startTime = Date.now();
 
     console.log(
-      `📤 Export CSV limité demandé (ID: ${exportId}) par ${req.user.nomUtilisateur} (${req.user.role})`
+      `📤 Export CSV limité demandé (ID: ${exportId}) par ${req.user?.nomUtilisateur} (${req.user?.role})`
     );
 
     const isTest = req.query.test === 'true' || req.query.limit === '5';
@@ -397,16 +375,25 @@ class OptimizedImportExportController {
     let client;
 
     try {
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'DEBUT_EXPORT_CSV_LIMITE',
-        tableName: 'Cartes',
-        details: `Export CSV limité (max ${limit}) démarré`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Export CSV limité (max ${limit}) démarré`,
+        'EXPORT_START',
+        'Cartes',
+        null,
+        null,
+        { type: 'csv_limited', limit },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
       client = await db.getClient();
 
-      // Compter avec filtre de coordination
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
       let countParams = [];
 
@@ -416,7 +403,6 @@ class OptimizedImportExportController {
 
       console.log(`📊 ${totalRows} cartes accessibles, export CSV limité à ${limit}`);
 
-      // Configurer la réponse avec BOM pour UTF-8
       const timestamp = new Date().toISOString().split('T')[0];
       const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
       const filename = `export-cartes-limite-${timestamp}-${time}.csv`;
@@ -427,29 +413,28 @@ class OptimizedImportExportController {
       res.setHeader('X-Export-Limit', limit.toString());
       res.setHeader('X-Export-Type', 'limited');
       res.setHeader('X-Export-ID', exportId);
-      res.setHeader('X-User-Role', req.user.role);
-      if (req.user.coordination) {
+      res.setHeader('X-User-Role', req.user?.role || 'unknown');
+      if (req.user?.coordination) {
         res.setHeader('X-User-Coordination', req.user.coordination);
       }
 
-      // Écrire BOM pour UTF-8
       res.write('\uFEFF');
 
-      // Écrire les en-têtes avec guillemets
       const headers = CONFIG.csvHeaders.map((h) => `"${h}"`).join(CONFIG.csvDelimiter) + '\n';
       res.write(headers);
 
-      // Utiliser un curseur pour le streaming optimisé avec filtre
       let offset = 0;
       const chunkSize = CONFIG.chunkSize;
       let totalWritten = 0;
-      let batchCount = 0;
+      let iterationCount = 0;
 
-      while (offset < limit) {
-        batchCount++;
+      // Remplacer while (offset < limit) par une boucle avec break condition
+      for (let page = 0; page < Math.ceil(limit / chunkSize); page++) {
+        iterationCount++;
         const currentLimit = Math.min(chunkSize, limit - offset);
 
-        // Construire la requête avec filtre
+        if (currentLimit <= 0) break;
+
         let dataQuery = 'SELECT * FROM cartes WHERE 1=1';
         let dataParams = [];
 
@@ -469,19 +454,15 @@ class OptimizedImportExportController {
         const rows = result.rows;
         if (rows.length === 0) break;
 
-        // Préparer le lot CSV en mémoire
         let batchCSV = '';
         for (const row of rows) {
           const csvRow = CONFIG.csvHeaders
             .map((header) => {
               let value = row[header] || '';
 
-              // Échapper les caractères spéciaux CSV
               if (typeof value === 'string') {
-                // Remplacer les guillemets par des guillemets doubles
                 value = value.replace(/"/g, '""');
 
-                // Mettre entre guillemets si nécessaire
                 if (
                   value.includes(CONFIG.csvDelimiter) ||
                   value.includes('"') ||
@@ -502,14 +483,14 @@ class OptimizedImportExportController {
           totalWritten++;
         }
 
-        // Écrire le lot
         res.write(batchCSV);
         offset += rows.length;
 
-        // Log de progression
-        if (batchCount % 5 === 0) {
+        if (iterationCount % 5 === 0) {
           console.log(`📝 CSV limité: ${totalWritten}/${limit} lignes écrites`);
         }
+
+        if (rows.length < currentLimit) break;
       }
 
       res.end();
@@ -517,12 +498,22 @@ class OptimizedImportExportController {
       const duration = Date.now() - startTime;
       const speed = totalWritten > 0 ? Math.round(totalWritten / (duration / 1000)) : 0;
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'FIN_EXPORT_CSV_LIMITE',
-        tableName: 'Cartes',
-        details: `Export CSV limité terminé: ${totalWritten} lignes en ${duration}ms (${speed} lignes/sec)`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Export CSV limité terminé: ${totalWritten} lignes en ${duration}ms (${speed} lignes/sec)`,
+        'EXPORT_COMPLETE',
+        'Cartes',
+        null,
+        null,
+        { type: 'csv_limited', rows: totalWritten, duration, speed },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
       console.log(
         `✅ Export CSV limité réussi: ${totalWritten} lignes en ${duration}ms (${speed} lignes/sec)`
@@ -541,15 +532,27 @@ class OptimizedImportExportController {
       } else {
         try {
           res.end();
-        } catch (e) {}
+        } catch (e) {
+          // Ignorer les erreurs de fin de réponse
+        }
       }
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'ERREUR_EXPORT_CSV',
-        tableName: 'Cartes',
-        details: `Erreur export CSV: ${error.message}`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Erreur export CSV: ${error.message}`,
+        'EXPORT_ERROR',
+        'Cartes',
+        null,
+        null,
+        { error: error.message },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
     } finally {
       if (client?.release) client.release();
       this.activeExports.delete(exportId);
@@ -557,10 +560,9 @@ class OptimizedImportExportController {
   }
 
   // ============================================
-  // EXPORT EXCEL COMPLET (TOUTES LES DONNÉES)
+  // EXPORT EXCEL COMPLET
   // ============================================
   async exportCompleteExcel(req, res) {
-    // ✅ VÉRIFICATION DES DROITS
     const droits = this.verifierDroitsImportExport(req);
     if (!droits.autorise) {
       return res.status(403).json({
@@ -573,10 +575,9 @@ class OptimizedImportExportController {
     const startTime = Date.now();
 
     console.log(
-      `🚀 EXPORT EXCEL COMPLET demandé par ${req.user.nomUtilisateur} (${req.user.role}) (ID: ${exportId})`
+      `🚀 EXPORT EXCEL COMPLET demandé par ${req.user?.nomUtilisateur} (${req.user?.role}) (ID: ${exportId})`
     );
 
-    // Vérifier les exports concurrents
     if (this.activeExports.size >= CONFIG.maxConcurrent) {
       return res.status(429).json({
         success: false,
@@ -591,16 +592,25 @@ class OptimizedImportExportController {
     let client;
 
     try {
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'DEBUT_EXPORT_EXCEL_COMPLET',
-        tableName: 'Cartes',
-        details: `Export Excel COMPLET démarré`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        'Export Excel COMPLET démarré',
+        'EXPORT_START',
+        'Cartes',
+        null,
+        null,
+        { type: 'excel_complete' },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
       client = await db.getClient();
 
-      // Compter toutes les données accessibles
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
       let countParams = [];
 
@@ -618,25 +628,32 @@ class OptimizedImportExportController {
         });
       }
 
-      // Vérifier les limites
       if (totalRows > CONFIG.maxExportRows) {
         console.warn(
           `⚠️ Export très volumineux: ${totalRows} lignes (max: ${CONFIG.maxExportRows})`
         );
 
-        await journalController.logAction({
-          utilisateurId: req.user.id,
-          actionType: 'AVERTISSEMENT_EXPORT',
-          tableName: 'Cartes',
-          details: `Export très volumineux: ${totalRows} lignes, peut être lent`,
-        });
+        await annulationService.enregistrerAction(
+          req.user?.id,
+          req.user?.nomUtilisateur,
+          req.user?.nomComplet || req.user?.nomUtilisateur,
+          req.user?.role,
+          req.user?.agence || '',
+          `Export très volumineux: ${totalRows} lignes, peut être lent`,
+          'EXPORT_WARNING',
+          'Cartes',
+          null,
+          null,
+          { rows: totalRows, warning: 'large_export' },
+          req.ip,
+          null,
+          req.user?.coordination
+        );
       }
 
-      // Récupérer les colonnes dynamiquement
       const sampleResult = await client.query('SELECT * FROM cartes LIMIT 1');
       const firstRow = sampleResult.rows[0] || {};
 
-      // Exclure les colonnes techniques
       const excludedColumns = ['importbatchid', 'dateimport', 'created_at', 'updated_at', 'id'];
       const headers = Object.keys(firstRow).filter(
         (key) => !excludedColumns.includes(key.toLowerCase())
@@ -644,7 +661,6 @@ class OptimizedImportExportController {
 
       console.log(`📋 ${headers.length} colonnes détectées`);
 
-      // Configurer la réponse
       const timestamp = new Date().toISOString().split('T')[0];
       const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
       const filename = `export-complet-cartes-${timestamp}-${time}.xlsx`;
@@ -658,18 +674,15 @@ class OptimizedImportExportController {
       res.setHeader('X-Export-Complete', 'true');
       res.setHeader('X-Total-Rows', totalRows);
       res.setHeader('X-Export-ID', exportId);
-      res.setHeader('X-User-Role', req.user.role);
-      if (req.user.coordination) {
+      res.setHeader('X-User-Role', req.user?.role || 'unknown');
+      if (req.user?.coordination) {
         res.setHeader('X-User-Coordination', req.user.coordination);
       }
 
-      // Créer le workbook avec options optimisées pour gros fichiers
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'GESCARD Cocody';
       workbook.created = new Date();
       workbook.modified = new Date();
-
-      // Optimisation mémoire pour Excel
       workbook.calcProperties.fullCalcOnLoad = false;
 
       const worksheet = workbook.addWorksheet('Cartes', {
@@ -678,14 +691,12 @@ class OptimizedImportExportController {
         views: [{ state: 'frozen', xSplit: 0, ySplit: 1 }],
       });
 
-      // Ajouter les en-têtes avec style optimisé
       worksheet.columns = headers.map((header) => ({
         header: header.replace(/_/g, ' ').toUpperCase(),
         key: header,
         width: 25,
       }));
 
-      // Style de la ligne d'en-tête
       const headerRow = worksheet.getRow(1);
       headerRow.height = 30;
       headerRow.eachCell((cell) => {
@@ -713,19 +724,17 @@ class OptimizedImportExportController {
         };
       });
 
-      // Récupérer et écrire les données par lots optimisés avec filtre
       console.log(`⏳ Récupération et écriture des données...`);
 
       let offset = 0;
-      const chunkSize = 2000; // Plus petit pour Excel (mémoire)
+      const chunkSize = 2000;
       let totalWritten = 0;
-      let batchCount = 0;
       let lastProgressLog = Date.now();
+      let rowOffset = 0;
 
-      while (true) {
-        batchCount++;
-
-        // Construire la requête avec filtre
+      // Remplacer while (true) par une boucle avec break condition
+      let hasMoreData = true;
+      for (let page = 0; hasMoreData; page++) {
         let dataQuery = 'SELECT * FROM cartes WHERE 1=1';
         let dataParams = [];
 
@@ -743,9 +752,11 @@ class OptimizedImportExportController {
         const result = await client.query(finalQuery, finalParams);
 
         const rows = result.rows;
-        if (rows.length === 0) break;
+        if (rows.length === 0) {
+          hasMoreData = false;
+          break;
+        }
 
-        // Ajouter chaque ligne au Excel avec formatage conditionnel
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
           const rowData = {};
@@ -753,7 +764,6 @@ class OptimizedImportExportController {
           headers.forEach((header) => {
             let value = row[header];
 
-            // Formater les dates
             if (value instanceof Date) {
               value = value.toLocaleDateString('fr-FR');
             }
@@ -763,8 +773,7 @@ class OptimizedImportExportController {
 
           const excelRow = worksheet.addRow(rowData);
 
-          // Alterner les couleurs de lignes
-          if ((totalWritten + i) % 2 === 0) {
+          if ((rowOffset + i) % 2 === 0) {
             excelRow.eachCell((cell) => {
               cell.fill = {
                 type: 'pattern',
@@ -774,17 +783,18 @@ class OptimizedImportExportController {
             });
           }
 
-          // Formatage spécial pour DELIVRANCE
           if (row.delivrance && row.delivrance.toString().toUpperCase() === 'OUI') {
             const delivranceCell = excelRow.getCell('delivrance');
-            delivranceCell.font = { bold: true, color: { argb: 'FF00B050' } };
+            if (delivranceCell) {
+              delivranceCell.font = { bold: true, color: { argb: 'FF00B050' } };
+            }
           }
         }
 
         totalWritten += rows.length;
         offset += rows.length;
+        rowOffset += rows.length;
 
-        // Log de progression (max toutes les 5 secondes)
         const now = Date.now();
         if (now - lastProgressLog > 5000) {
           const progress = Math.round((totalWritten / totalRows) * 100);
@@ -796,22 +806,13 @@ class OptimizedImportExportController {
           );
           lastProgressLog = now;
         }
-
-        // Petite pause pour éviter le blocage
-        if (batchCount % 10 === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-
-        if (rows.length < chunkSize) break;
       }
 
-      // Ajouter auto-filter
       worksheet.autoFilter = {
         from: { row: 1, column: 1 },
         to: { row: 1, column: headers.length },
       };
 
-      // Ajuster automatiquement la largeur des colonnes
       worksheet.columns.forEach((column) => {
         let maxLength = 0;
         column.eachCell({ includeEmpty: true }, (cell) => {
@@ -823,23 +824,30 @@ class OptimizedImportExportController {
         column.width = Math.min(50, maxLength + 2);
       });
 
-      // Écrire le fichier Excel
       console.log(`⏳ Génération finale du fichier Excel...`);
-      const writeStartTime = Date.now();
 
       await workbook.xlsx.write(res);
 
-      const writeTime = Date.now() - writeStartTime;
       const totalTime = Date.now() - startTime;
       const speed = totalWritten > 0 ? Math.round(totalWritten / (totalTime / 1000)) : 0;
       const memoryUsed = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'FIN_EXPORT_EXCEL_COMPLET',
-        tableName: 'Cartes',
-        details: `Export Excel COMPLET terminé: ${totalWritten} lignes en ${totalTime}ms (${speed} lignes/sec)`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Export Excel COMPLET terminé: ${totalWritten} lignes en ${totalTime}ms (${speed} lignes/sec)`,
+        'EXPORT_COMPLETE',
+        'Cartes',
+        null,
+        null,
+        { type: 'excel_complete', rows: totalWritten, duration: totalTime, speed },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
       console.log(`🎉 Export Excel COMPLET réussi !`);
       console.log(`📊 Statistiques:`);
@@ -866,12 +874,22 @@ class OptimizedImportExportController {
         });
       }
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'ERREUR_EXPORT_EXCEL_COMPLET',
-        tableName: 'Cartes',
-        details: `Erreur export Excel complet: ${error.message}`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Erreur export Excel complet: ${error.message}`,
+        'EXPORT_ERROR',
+        'Cartes',
+        null,
+        null,
+        { error: error.message },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
     } finally {
       if (client?.release) client.release();
       this.activeExports.delete(exportId);
@@ -879,10 +897,9 @@ class OptimizedImportExportController {
   }
 
   // ============================================
-  // EXPORT CSV COMPLET (TOUTES LES DONNÉES)
+  // EXPORT CSV COMPLET
   // ============================================
   async exportCompleteCSV(req, res) {
-    // ✅ VÉRIFICATION DES DROITS
     const droits = this.verifierDroitsImportExport(req);
     if (!droits.autorise) {
       return res.status(403).json({
@@ -895,10 +912,9 @@ class OptimizedImportExportController {
     const startTime = Date.now();
 
     console.log(
-      `🚀 EXPORT CSV COMPLET demandé par ${req.user.nomUtilisateur} (${req.user.role}) (ID: ${exportId})`
+      `🚀 EXPORT CSV COMPLET demandé par ${req.user?.nomUtilisateur} (${req.user?.role}) (ID: ${exportId})`
     );
 
-    // Vérifier les exports concurrents
     if (this.activeExports.size >= CONFIG.maxConcurrent) {
       return res.status(429).json({
         success: false,
@@ -912,16 +928,25 @@ class OptimizedImportExportController {
     let client;
 
     try {
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'DEBUT_EXPORT_CSV_COMPLET',
-        tableName: 'Cartes',
-        details: `Export CSV COMPLET démarré`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        'Export CSV COMPLET démarré',
+        'EXPORT_START',
+        'Cartes',
+        null,
+        null,
+        { type: 'csv_complete' },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
       client = await db.getClient();
 
-      // Compter toutes les données accessibles
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
       let countParams = [];
 
@@ -939,7 +964,6 @@ class OptimizedImportExportController {
         });
       }
 
-      // Configurer la réponse avec BOM UTF-8
       const timestamp = new Date().toISOString().split('T')[0];
       const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
       const filename = `export-complet-cartes-${timestamp}-${time}.csv`;
@@ -950,15 +974,13 @@ class OptimizedImportExportController {
       res.setHeader('X-Export-Complete', 'true');
       res.setHeader('X-Total-Rows', totalRows);
       res.setHeader('X-Export-ID', exportId);
-      res.setHeader('X-User-Role', req.user.role);
-      if (req.user.coordination) {
+      res.setHeader('X-User-Role', req.user?.role || 'unknown');
+      if (req.user?.coordination) {
         res.setHeader('X-User-Coordination', req.user.coordination);
       }
 
-      // Écrire BOM pour UTF-8
       res.write('\uFEFF');
 
-      // Récupérer les colonnes dynamiquement
       const sampleResult = await client.query('SELECT * FROM cartes LIMIT 1');
       const firstRow = sampleResult.rows[0] || {};
 
@@ -967,26 +989,22 @@ class OptimizedImportExportController {
         (key) => !excludedColumns.includes(key.toLowerCase())
       );
 
-      // Écrire les en-têtes CSV
       const csvHeaders = headers
         .map((header) => `"${header.replace(/"/g, '""').replace(/_/g, ' ').toUpperCase()}"`)
         .join(CONFIG.csvDelimiter);
 
       res.write(csvHeaders + '\n');
 
-      // Export par lots avec streaming optimisé et filtre
       let offset = 0;
       const chunkSize = CONFIG.chunkSize;
       let totalWritten = 0;
-      let batchCount = 0;
       let lastProgressLog = Date.now();
 
       console.log(`⏳ Début de l'export streaming CSV...`);
 
-      while (true) {
-        batchCount++;
-
-        // Construire la requête avec filtre
+      // Remplacer while (true) par une boucle avec break condition
+      let hasMoreData = true;
+      for (let page = 0; hasMoreData; page++) {
         let dataQuery = 'SELECT * FROM cartes WHERE 1=1';
         let dataParams = [];
 
@@ -1004,21 +1022,21 @@ class OptimizedImportExportController {
         const result = await client.query(finalQuery, finalParams);
 
         const rows = result.rows;
-        if (rows.length === 0) break;
+        if (rows.length === 0) {
+          hasMoreData = false;
+          break;
+        }
 
-        // Préparer le lot CSV
         let batchCSV = '';
         for (const row of rows) {
           const csvRow = headers
             .map((header) => {
               let value = row[header];
 
-              // Gérer les valeurs null/undefined
               if (value === null || value === undefined) {
                 return '';
               }
 
-              // Convertir en string avec formatage
               let stringValue;
               if (value instanceof Date) {
                 stringValue = value.toLocaleDateString('fr-FR');
@@ -1026,7 +1044,6 @@ class OptimizedImportExportController {
                 stringValue = String(value);
               }
 
-              // Échapper les caractères spéciaux CSV
               if (
                 stringValue.includes(CONFIG.csvDelimiter) ||
                 stringValue.includes('"') ||
@@ -1044,11 +1061,9 @@ class OptimizedImportExportController {
           totalWritten++;
         }
 
-        // Écrire le lot
         res.write(batchCSV);
         offset += rows.length;
 
-        // Log de progression
         const now = Date.now();
         if (now - lastProgressLog > 5000) {
           const progress = Math.round((totalWritten / totalRows) * 100);
@@ -1060,18 +1075,14 @@ class OptimizedImportExportController {
           );
           lastProgressLog = now;
 
-          // Flush si possible
           if (res.flush) res.flush();
         }
 
-        // Vérifier la mémoire
         const memUsage = process.memoryUsage().heapUsed / 1024 / 1024;
         if (memUsage > CONFIG.memoryLimitMB * 0.8) {
           console.warn(`⚠️ Mémoire élevée: ${Math.round(memUsage)}MB, pause de 100ms`);
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
-
-        if (rows.length < chunkSize) break;
       }
 
       res.end();
@@ -1080,12 +1091,22 @@ class OptimizedImportExportController {
       const speed = totalWritten > 0 ? Math.round(totalWritten / (duration / 1000)) : 0;
       const memoryUsed = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'FIN_EXPORT_CSV_COMPLET',
-        tableName: 'Cartes',
-        details: `Export CSV COMPLET terminé: ${totalWritten} lignes en ${duration}ms (${speed} lignes/sec)`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Export CSV COMPLET terminé: ${totalWritten} lignes en ${duration}ms (${speed} lignes/sec)`,
+        'EXPORT_COMPLETE',
+        'Cartes',
+        null,
+        null,
+        { type: 'csv_complete', rows: totalWritten, duration, speed },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
       console.log(`🎉 Export CSV COMPLET réussi !`);
       console.log(`📊 Statistiques:`);
@@ -1108,15 +1129,27 @@ class OptimizedImportExportController {
       } else {
         try {
           res.end();
-        } catch (e) {}
+        } catch (e) {
+          // Ignorer les erreurs de fin de réponse
+        }
       }
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'ERREUR_EXPORT_CSV_COMPLET',
-        tableName: 'Cartes',
-        details: `Erreur export CSV complet: ${error.message}`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Erreur export CSV complet: ${error.message}`,
+        'EXPORT_ERROR',
+        'Cartes',
+        null,
+        null,
+        { error: error.message },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
     } finally {
       if (client?.release) client.release();
       this.activeExports.delete(exportId);
@@ -1124,10 +1157,9 @@ class OptimizedImportExportController {
   }
 
   // ============================================
-  // EXPORT TOUT EN UN CLIC (CHOIX AUTOMATIQUE)
+  // EXPORT TOUT EN UN CLIC
   // ============================================
   async exportAllData(req, res) {
-    // ✅ VÉRIFICATION DES DROITS
     const droits = this.verifierDroitsImportExport(req);
     if (!droits.autorise) {
       return res.status(403).json({
@@ -1139,7 +1171,7 @@ class OptimizedImportExportController {
     const exportId = `all_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     console.log(
-      `🚀 Export "TOUT EN UN" demandé par ${req.user.nomUtilisateur} (${req.user.role}) (ID: ${exportId})`
+      `🚀 Export "TOUT EN UN" demandé par ${req.user?.nomUtilisateur} (${req.user?.role}) (ID: ${exportId})`
     );
 
     let client;
@@ -1147,7 +1179,6 @@ class OptimizedImportExportController {
     try {
       client = await db.getClient();
 
-      // Compter toutes les données accessibles
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
       let countParams = [];
 
@@ -1157,30 +1188,33 @@ class OptimizedImportExportController {
 
       console.log(`📊 TOTAL ACCESSIBLE: ${totalRows} cartes`);
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'DEBUT_EXPORT_TOUT_EN_UN',
-        tableName: 'Cartes',
-        details: `Export "TOUT EN UN" démarré: ${totalRows} cartes`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Export "TOUT EN UN" démarré: ${totalRows} cartes`,
+        'EXPORT_START',
+        'Cartes',
+        null,
+        null,
+        { type: 'auto_select', rows: totalRows },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
 
-      // ✅ CHOIX INTELLIGENT DU FORMAT POUR LWS
       let chosenFormat;
-      let reason;
 
       if (totalRows > CONFIG.maxExportRowsRecommended) {
-        // Très gros fichier = CSV
         chosenFormat = 'csv';
-        reason = `${totalRows.toLocaleString()} lignes > ${CONFIG.maxExportRowsRecommended.toLocaleString()} = CSV recommandé`;
       } else {
-        // Fichier moyen = Excel
         chosenFormat = 'excel';
-        reason = `${totalRows.toLocaleString()} lignes < ${CONFIG.maxExportRowsRecommended.toLocaleString()} = Excel (format standard)`;
       }
 
-      console.log(`🤔 Format choisi: ${chosenFormat.toUpperCase()} - ${reason}`);
+      console.log(`🤔 Format choisi: ${chosenFormat.toUpperCase()}`);
 
-      // Rediriger vers la méthode appropriée avec le même exportId
       req.exportId = exportId;
 
       if (chosenFormat === 'excel') {
@@ -1204,22 +1238,31 @@ class OptimizedImportExportController {
         });
       }
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'ERREUR_EXPORT_TOUT_EN_UN',
-        tableName: 'Cartes',
-        details: `Erreur export tout en un: ${error.message}`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Erreur export tout en un: ${error.message}`,
+        'EXPORT_ERROR',
+        'Cartes',
+        null,
+        null,
+        { error: error.message },
+        req.ip,
+        null,
+        req.user?.coordination
+      );
     } finally {
       if (client?.release) client.release();
     }
   }
 
   // ============================================
-  // EXPORT CSV PAR SITE (OPTIMISÉ)
+  // EXPORT CSV PAR SITE
   // ============================================
   async exportCSVBySite(req, res) {
-    // ✅ VÉRIFICATION DES DROITS
     const droits = this.verifierDroitsImportExport(req);
     if (!droits.autorise) {
       return res.status(403).json({
@@ -1240,7 +1283,7 @@ class OptimizedImportExportController {
     const decodedSite = decodeURIComponent(siteRetrait).replace(/\+/g, ' ').trim();
 
     console.log(
-      `📤 Export CSV pour site: ${decodedSite} par ${req.user.nomUtilisateur} (${req.user.role})`
+      `📤 Export CSV pour site: ${decodedSite} par ${req.user?.nomUtilisateur} (${req.user?.role})`
     );
 
     let client;
@@ -1248,7 +1291,6 @@ class OptimizedImportExportController {
     try {
       client = await db.getClient();
 
-      // Vérifier existence et compter avec filtre de coordination
       let countQuery = 'SELECT COUNT(*) as count FROM cartes WHERE "SITE DE RETRAIT" = $1';
       let countParams = [decodedSite];
 
@@ -1269,7 +1311,6 @@ class OptimizedImportExportController {
         });
       }
 
-      // Configurer réponse
       const safeSiteName = decodedSite.replace(/[^a-z0-9]/gi, '-').toLowerCase();
       const timestamp = new Date().toISOString().split('T')[0];
       const filename = `export-${safeSiteName}-${timestamp}.csv`;
@@ -1279,24 +1320,23 @@ class OptimizedImportExportController {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-Site', decodedSite);
       res.setHeader('X-Total-Rows', count);
-      res.setHeader('X-User-Role', req.user.role);
-      if (req.user.coordination) {
+      res.setHeader('X-User-Role', req.user?.role || 'unknown');
+      if (req.user?.coordination) {
         res.setHeader('X-User-Coordination', req.user.coordination);
       }
 
-      // BOM UTF-8
       res.write('\uFEFF');
 
-      // Écrire les en-têtes
       const headers = CONFIG.csvHeaders.map((h) => `"${h}"`).join(CONFIG.csvDelimiter) + '\n';
       res.write(headers);
 
-      // Streaming par lots avec filtre
       let offset = 0;
       const chunkSize = CONFIG.chunkSize;
       let totalWritten = 0;
 
-      while (true) {
+      // Remplacer while (true) par une boucle avec break condition
+      let hasMoreData = true;
+      for (let page = 0; hasMoreData; page++) {
         let dataQuery = 'SELECT * FROM cartes WHERE "SITE DE RETRAIT" = $1';
         let dataParams = [decodedSite];
 
@@ -1319,9 +1359,11 @@ class OptimizedImportExportController {
         const result = await client.query(finalQuery, finalParams);
 
         const rows = result.rows;
-        if (rows.length === 0) break;
+        if (rows.length === 0) {
+          hasMoreData = false;
+          break;
+        }
 
-        // Préparer le lot CSV
         let batchCSV = '';
         for (const row of rows) {
           const csvRow = CONFIG.csvHeaders
@@ -1373,17 +1415,17 @@ class OptimizedImportExportController {
   }
 
   // ============================================
-  // IMPORT CSV OPTIMISÉ
+  // IMPORT CSV
   // ============================================
   async importCSV(req, res) {
-    // ✅ VÉRIFICATION DES DROITS
     const droits = this.verifierDroitsImportExport(req);
     if (!droits.autorise) {
-      // Nettoyer le fichier si uploadé
       if (req.file?.path) {
         try {
           fs.unlinkSync(req.file.path);
-        } catch (e) {}
+        } catch (e) {
+          // Ignorer les erreurs de nettoyage
+        }
       }
       return res.status(403).json({
         success: false,
@@ -1403,10 +1445,9 @@ class OptimizedImportExportController {
     const startTime = Date.now();
 
     console.log(
-      `📥 Import CSV: ${req.file.originalname} (ID: ${importId}) par ${req.user.nomUtilisateur} (${req.user.role})`
+      `📥 Import CSV: ${req.file.originalname} (ID: ${importId}) par ${req.user?.nomUtilisateur} (${req.user?.role})`
     );
 
-    // Vérifier les imports concurrents
     if (this.activeImports.size >= 2) {
       fs.unlinkSync(req.file.path);
       return res.status(429).json({
@@ -1421,17 +1462,25 @@ class OptimizedImportExportController {
     const client = await db.getClient();
 
     try {
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'DEBUT_IMPORT_CSV',
-        tableName: 'Cartes',
-        importBatchID: importBatchId,
-        details: `Import CSV: ${req.file.originalname}`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Import CSV: ${req.file.originalname}`,
+        'IMPORT_START',
+        'Cartes',
+        null,
+        null,
+        { filename: req.file.originalname },
+        req.ip,
+        importBatchId,
+        req.user?.coordination
+      );
 
       await client.query('BEGIN');
 
-      // Vérifier la taille du fichier
       const stats = fs.statSync(req.file.path);
       const fileSizeMB = stats.size / (1024 * 1024);
 
@@ -1441,7 +1490,6 @@ class OptimizedImportExportController {
 
       console.log(`📊 Taille fichier: ${Math.round(fileSizeMB)}MB`);
 
-      // Parser CSV avec gestion des erreurs
       const csvData = await this.parseCSVStream(req.file.path);
 
       console.log(`📋 ${csvData.length} lignes à traiter`);
@@ -1450,7 +1498,6 @@ class OptimizedImportExportController {
         throw new Error('Le fichier CSV est vide');
       }
 
-      // Vérifier les en-têtes
       const firstRow = csvData[0];
       const missingHeaders = CONFIG.requiredHeaders.filter(
         (h) => !Object.keys(firstRow).some((key) => key.toUpperCase() === h)
@@ -1460,7 +1507,6 @@ class OptimizedImportExportController {
         throw new Error(`En-têtes requis manquants: ${missingHeaders.join(', ')}`);
       }
 
-      // Traiter par lots optimisés
       const batchSize = CONFIG.batchSize;
       let imported = 0;
       let updated = 0;
@@ -1475,9 +1521,9 @@ class OptimizedImportExportController {
           batch,
           i + 1,
           importBatchId,
-          req.user.id,
-          req.user.role,
-          req.user.coordination
+          req.user?.id,
+          req.user?.role,
+          req.user?.coordination
         );
 
         imported += batchResult.imported;
@@ -1485,7 +1531,6 @@ class OptimizedImportExportController {
         errors += batchResult.errors;
         processedRows += batch.length;
 
-        // Log de progression
         const progress = Math.round((processedRows / csvData.length) * 100);
         const elapsed = (Date.now() - startTime) / 1000;
         const speed = Math.round(processedRows / elapsed);
@@ -1498,7 +1543,6 @@ class OptimizedImportExportController {
           errorDetails.push(...batchResult.errorDetails.slice(0, 5));
         }
 
-        // Petite pause pour éviter la surcharge
         if (i % (batchSize * 5) === 0) {
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
@@ -1509,13 +1553,22 @@ class OptimizedImportExportController {
       const duration = Date.now() - startTime;
       const speed = csvData.length > 0 ? Math.round(csvData.length / (duration / 1000)) : 0;
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'FIN_IMPORT_CSV',
-        tableName: 'Cartes',
-        importBatchID: importBatchId,
-        details: `Import CSV terminé: ${imported} importées, ${updated} mises à jour, ${errors} erreurs en ${duration}ms`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Import CSV terminé: ${imported} importées, ${updated} mises à jour, ${errors} erreurs en ${duration}ms`,
+        'IMPORT_COMPLETE',
+        'Cartes',
+        null,
+        null,
+        { imported, updated, errors, duration, speed },
+        req.ip,
+        importBatchId,
+        req.user?.coordination
+      );
 
       console.log(`✅ Import CSV terminé en ${duration}ms (${speed} lignes/sec)`);
       console.log(
@@ -1555,7 +1608,6 @@ class OptimizedImportExportController {
         importId,
       });
     } finally {
-      // Nettoyer le fichier temporaire
       if (req.file?.path) {
         try {
           fs.unlinkSync(req.file.path);
@@ -1570,17 +1622,17 @@ class OptimizedImportExportController {
   }
 
   // ============================================
-  // IMPORT SMART SYNC (FUSION INTELLIGENTE)
+  // IMPORT SMART SYNC
   // ============================================
   async importSmartSync(req, res) {
-    // ✅ VÉRIFICATION DES DROITS
     const droits = this.verifierDroitsImportExport(req);
     if (!droits.autorise) {
-      // Nettoyer le fichier si uploadé
       if (req.file?.path) {
         try {
           fs.unlinkSync(req.file.path);
-        } catch (e) {}
+        } catch (e) {
+          // Ignorer les erreurs de nettoyage
+        }
       }
       return res.status(403).json({
         success: false,
@@ -1600,28 +1652,35 @@ class OptimizedImportExportController {
     const startTime = Date.now();
 
     console.log(
-      `🧠 Import Smart Sync: ${req.file.originalname} (ID: ${importId}) par ${req.user.nomUtilisateur} (${req.user.role})`
+      `🧠 Import Smart Sync: ${req.file.originalname} (ID: ${importId}) par ${req.user?.nomUtilisateur} (${req.user?.role})`
     );
 
     const client = await db.getClient();
 
     try {
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'DEBUT_IMPORT_SMART',
-        tableName: 'Cartes',
-        importBatchID: importBatchId,
-        details: `Import Smart Sync: ${req.file.originalname}`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Import Smart Sync: ${req.file.originalname}`,
+        'IMPORT_START',
+        'Cartes',
+        null,
+        null,
+        { type: 'smart', filename: req.file.originalname },
+        req.ip,
+        importBatchId,
+        req.user?.coordination
+      );
 
       await client.query('BEGIN');
 
-      // Parser CSV
       const csvData = await this.parseCSVStream(req.file.path);
 
       console.log(`📋 ${csvData.length} lignes à traiter avec fusion intelligente`);
 
-      // Traiter avec fusion intelligente
       let imported = 0;
       let updated = 0;
       let duplicates = 0;
@@ -1632,8 +1691,7 @@ class OptimizedImportExportController {
         try {
           const item = csvData[i];
 
-          // Ajouter la coordination par défaut si non présente et si utilisateur a une coordination
-          if (!item.COORDINATION && req.user.coordination && req.user.role === 'Gestionnaire') {
+          if (!item.COORDINATION && req.user?.coordination && req.user?.role === 'Gestionnaire') {
             item.COORDINATION = req.user.coordination;
           }
 
@@ -1647,27 +1705,24 @@ class OptimizedImportExportController {
           const prenoms = item.PRENOMS.toString().trim();
           const siteRetrait = item['SITE DE RETRAIT']?.toString().trim() || '';
 
-          // Vérifier si la carte existe
           const existingCarte = await client.query(
             `SELECT * FROM cartes WHERE nom = $1 AND prenoms = $2 AND "SITE DE RETRAIT" = $3`,
             [nom, prenoms, siteRetrait]
           );
 
           if (existingCarte.rows.length > 0) {
-            // Mise à jour intelligente
             const carteExistante = existingCarte.rows[0];
-            const updated_ = await this.smartUpdateCarte(client, carteExistante, item);
+            const updatedRecord = await this.smartUpdateCarte(client, carteExistante, item);
 
-            if (updated_) {
+            if (updatedRecord) {
               updated++;
 
-              // 📝 ENREGISTRER DANS LE JOURNAL POUR LA MISE À JOUR
               await annulationService.enregistrerAction(
-                req.user.id,
-                req.user.nomUtilisateur,
-                req.user.nomComplet || req.user.nomUtilisateur,
-                req.user.role,
-                req.user.agence || '',
+                req.user?.id,
+                req.user?.nomUtilisateur,
+                req.user?.nomComplet || req.user?.nomUtilisateur,
+                req.user?.role,
+                req.user?.agence || '',
                 `Mise à jour via import smart sync (batch ${importBatchId})`,
                 'UPDATE',
                 'cartes',
@@ -1676,29 +1731,27 @@ class OptimizedImportExportController {
                 item,
                 req.ip,
                 importBatchId,
-                carteExistante.coordination || req.user.coordination
+                carteExistante.coordination || req.user?.coordination
               );
             } else {
               duplicates++;
             }
           } else {
-            // Nouvelle insertion
             const newId = await this.smartInsertCarte(
               client,
               item,
               importBatchId,
-              req.user.id,
-              req.user.coordination
+              req.user?.id,
+              req.user?.coordination
             );
             imported++;
 
-            // 📝 ENREGISTRER DANS LE JOURNAL POUR L'INSERTION
             await annulationService.enregistrerAction(
-              req.user.id,
-              req.user.nomUtilisateur,
-              req.user.nomComplet || req.user.nomUtilisateur,
-              req.user.role,
-              req.user.agence || '',
+              req.user?.id,
+              req.user?.nomUtilisateur,
+              req.user?.nomComplet || req.user?.nomUtilisateur,
+              req.user?.role,
+              req.user?.agence || '',
               `Insertion via import smart sync (batch ${importBatchId})`,
               'INSERT',
               'cartes',
@@ -1707,7 +1760,7 @@ class OptimizedImportExportController {
               item,
               req.ip,
               importBatchId,
-              item.COORDINATION || req.user.coordination
+              item.COORDINATION || req.user?.coordination
             );
           }
         } catch (error) {
@@ -1715,7 +1768,6 @@ class OptimizedImportExportController {
           errorDetails.push(`Ligne ${i + 2}: ${error.message}`);
         }
 
-        // Log de progression
         if ((i + 1) % 1000 === 0) {
           const progress = Math.round(((i + 1) / csvData.length) * 100);
           console.log(`📊 Progression smart: ${progress}% (${i + 1}/${csvData.length})`);
@@ -1726,13 +1778,22 @@ class OptimizedImportExportController {
 
       const duration = Date.now() - startTime;
 
-      await journalController.logAction({
-        utilisateurId: req.user.id,
-        actionType: 'FIN_IMPORT_SMART',
-        tableName: 'Cartes',
-        importBatchID: importBatchId,
-        details: `Import Smart Sync terminé: ${imported} nouvelles, ${updated} mises à jour, ${duplicates} identiques, ${errors} erreurs`,
-      });
+      await annulationService.enregistrerAction(
+        req.user?.id,
+        req.user?.nomUtilisateur,
+        req.user?.nomComplet || req.user?.nomUtilisateur,
+        req.user?.role,
+        req.user?.agence || '',
+        `Import Smart Sync terminé: ${imported} nouvelles, ${updated} mises à jour, ${duplicates} identiques, ${errors} erreurs`,
+        'IMPORT_COMPLETE',
+        'Cartes',
+        null,
+        null,
+        { imported, updated, duplicates, errors, duration },
+        req.ip,
+        importBatchId,
+        req.user?.coordination
+      );
 
       console.log(`✅ Import Smart Sync terminé en ${duration}ms`);
       console.log(
@@ -1784,12 +1845,9 @@ class OptimizedImportExportController {
   }
 
   // ============================================
-  // MÉTHODES UTILITAIRES OPTIMISÉES
+  // MÉTHODES UTILITAIRES
   // ============================================
 
-  /**
-   * Parse un fichier CSV en streaming
-   */
   parseCSVStream(filePath) {
     return new Promise((resolve, reject) => {
       const results = [];
@@ -1800,7 +1858,6 @@ class OptimizedImportExportController {
           csv({
             separator: CONFIG.csvDelimiter,
             mapHeaders: ({ header }) => {
-              // Nettoyer et normaliser les en-têtes
               return header
                 .trim()
                 .toUpperCase()
@@ -1818,7 +1875,6 @@ class OptimizedImportExportController {
           results.push(data);
           rowCount++;
 
-          // Log pour les gros fichiers
           if (rowCount % 10000 === 0) {
             console.log(`📖 CSV parsing: ${rowCount} lignes lues`);
           }
@@ -1833,9 +1889,6 @@ class OptimizedImportExportController {
     });
   }
 
-  /**
-   * Traite un lot de données CSV optimisé
-   */
   async processCSVBatchOptimized(
     client,
     batch,
@@ -1857,12 +1910,10 @@ class OptimizedImportExportController {
       const lineNum = startLine + i;
 
       try {
-        // Ajouter la coordination si non présente
         if (!data.COORDINATION && userCoordination && userRole === 'Gestionnaire') {
           data.COORDINATION = userCoordination;
         }
 
-        // Validation
         if (!data.NOM || !data.PRENOMS) {
           result.errors++;
           result.errorDetails.push(`Ligne ${lineNum}: NOM et PRENOMS obligatoires`);
@@ -1873,7 +1924,6 @@ class OptimizedImportExportController {
         const prenoms = data.PRENOMS.toString().trim();
         const siteRetrait = data['SITE DE RETRAIT']?.toString().trim() || '';
 
-        // Vérifier si la carte existe
         const existing = await client.query(
           `SELECT id, coordination FROM cartes WHERE nom = $1 AND prenoms = $2 AND "SITE DE RETRAIT" = $3`,
           [nom, prenoms, siteRetrait]
@@ -1895,7 +1945,6 @@ class OptimizedImportExportController {
         };
 
         if (existing.rows.length > 0) {
-          // Vérifier la coordination pour les gestionnaires
           if (
             userRole === 'Gestionnaire' &&
             existing.rows[0].coordination &&
@@ -1908,7 +1957,6 @@ class OptimizedImportExportController {
             continue;
           }
 
-          // Mise à jour
           await client.query(
             `
             UPDATE cartes SET
@@ -1942,15 +1990,13 @@ class OptimizedImportExportController {
 
           result.updated++;
         } else {
-          // Insertion
-          const insertResult = await client.query(
+          await client.query(
             `
             INSERT INTO cartes (
               "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
               "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
               "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, importbatchid, sourceimport
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            RETURNING id
           `,
             [
               insertData["LIEU D'ENROLEMENT"],
@@ -1981,16 +2027,12 @@ class OptimizedImportExportController {
     return result;
   }
 
-  /**
-   * Mise à jour intelligente d'une carte
-   */
   async smartUpdateCarte(client, existingCarte, newData) {
     let updated = false;
     const updates = [];
     const params = [];
     let paramCount = 0;
 
-    // Colonnes à comparer
     const columnsToCheck = [
       "LIEU D'ENROLEMENT",
       'RANGEMENT',
@@ -2008,19 +2050,16 @@ class OptimizedImportExportController {
       const newVal = newData[col] || '';
 
       if (newVal && newVal !== oldVal) {
-        // Règles de priorité
         let shouldUpdate = true;
 
-        // Pour les contacts, garder le plus complet
         if (col === 'CONTACT' || col === 'CONTACT DE RETRAIT') {
           if (oldVal.length > newVal.length) shouldUpdate = false;
         }
 
-        // Pour DELIVRANCE, ne pas remplacer "OUI" par autre chose
         if (
           col === 'DELIVRANCE' &&
-          oldVal.toUpperCase() === 'OUI' &&
-          newVal.toUpperCase() !== 'OUI'
+          oldVal.toString().toUpperCase() === 'OUI' &&
+          newVal.toString().toUpperCase() !== 'OUI'
         ) {
           shouldUpdate = false;
         }
@@ -2052,9 +2091,6 @@ class OptimizedImportExportController {
     return updated;
   }
 
-  /**
-   * Insertion intelligente d'une carte
-   */
   async smartInsertCarte(client, data, importBatchID, userId, userCoordination) {
     const insertData = {
       "LIEU D'ENROLEMENT": this.sanitizeString(data["LIEU D'ENROLEMENT"]),
@@ -2101,40 +2137,28 @@ class OptimizedImportExportController {
     return result.rows[0].id;
   }
 
-  /**
-   * Nettoie une chaîne de caractères
-   */
   sanitizeString(value) {
     if (!value) return '';
     return value.toString().trim().replace(/\s+/g, ' ');
   }
 
-  /**
-   * Formate une date
-   */
   formatDate(value) {
     if (!value) return null;
 
     try {
-      // Essayer différents formats
       let date;
 
       if (value instanceof Date) {
         date = value;
       } else if (typeof value === 'string') {
-        // Format JJ/MM/AAAA
         if (value.includes('/')) {
           const parts = value.split('/');
           if (parts.length === 3) {
             date = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
           }
-        }
-        // Format AAAA-MM-JJ
-        else if (value.includes('-')) {
+        } else if (value.includes('-')) {
           date = new Date(value);
-        }
-        // Timestamp
-        else if (!isNaN(parseInt(value))) {
+        } else if (!isNaN(parseInt(value))) {
           date = new Date(parseInt(value));
         } else {
           date = new Date(value);
@@ -2151,16 +2175,11 @@ class OptimizedImportExportController {
     }
   }
 
-  /**
-   * Formate un numéro de téléphone
-   */
   formatPhone(value) {
     if (!value) return '';
 
-    // Garder uniquement les chiffres
     const digits = value.toString().replace(/\D/g, '');
 
-    // Format ivoirien: commencer par 0 ou 07/05
     if (digits.length === 10 && digits.startsWith('0')) {
       return digits;
     } else if (digits.length === 8) {
@@ -2169,13 +2188,9 @@ class OptimizedImportExportController {
       return '0' + digits.substring(3);
     }
 
-    // Retourner les 8 premiers chiffres si trop long
     return digits.substring(0, 8);
   }
 
-  /**
-   * Formate DELIVRANCE
-   */
   formatDelivrance(value) {
     if (!value) return '';
     const upper = value.toString().trim().toUpperCase();
@@ -2185,9 +2200,6 @@ class OptimizedImportExportController {
     return value.toString().trim();
   }
 
-  /**
-   * Formate une valeur selon la colonne
-   */
   formatValue(column, value) {
     if (!value) return '';
 
@@ -2206,16 +2218,12 @@ class OptimizedImportExportController {
   // ROUTES UTILITAIRES
   // ============================================
 
-  /**
-   * Récupère la liste des sites
-   */
   async getSitesList(req, res) {
     try {
       let query =
         'SELECT DISTINCT "SITE DE RETRAIT" as site FROM cartes WHERE "SITE DE RETRAIT" IS NOT NULL';
       let params = [];
 
-      // Appliquer filtre de coordination
       const filtre = this.ajouterFiltreCoordination(req, query, params);
 
       const result = await db.query(filtre.query + ' ORDER BY site', filtre.params);
@@ -2237,9 +2245,6 @@ class OptimizedImportExportController {
     }
   }
 
-  /**
-   * Télécharge le template d'import
-   */
   async downloadTemplate(req, res) {
     try {
       const workbook = new ExcelJS.Workbook();
@@ -2247,7 +2252,6 @@ class OptimizedImportExportController {
         properties: { tabColor: { argb: 'FF2E75B5' } },
       });
 
-      // Ajouter les en-têtes avec style
       worksheet.columns = CONFIG.csvHeaders.map((header) => ({
         header,
         key: header.replace(/\s+/g, '_'),
@@ -2266,7 +2270,6 @@ class OptimizedImportExportController {
         cell.alignment = { vertical: 'middle', horizontal: 'center' };
       });
 
-      // Ajouter une ligne d'exemple
       const exampleData = {
         "LIEU D'ENROLEMENT": 'Abidjan Plateau',
         'SITE DE RETRAIT': 'Yopougon',
@@ -2279,7 +2282,7 @@ class OptimizedImportExportController {
         DELIVRANCE: 'OUI',
         'CONTACT DE RETRAIT': '07654321',
         'DATE DE DELIVRANCE': '20/11/2024',
-        COORDINATION: req.user.coordination || 'Exemple',
+        COORDINATION: req.user?.coordination || 'Exemple',
       };
 
       const exampleRow = worksheet.addRow(exampleData);
@@ -2291,7 +2294,6 @@ class OptimizedImportExportController {
         };
       });
 
-      // Ajouter des instructions
       worksheet.addRow([]);
       const instructions = worksheet.addRow(['INSTRUCTIONS IMPORTANTES:']);
       instructions.getCell(1).font = { bold: true };
@@ -2308,7 +2310,7 @@ class OptimizedImportExportController {
       );
       res.setHeader('Content-Disposition', 'attachment; filename="template-import-cartes.xlsx"');
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-User-Role', req.user.role);
+      res.setHeader('X-User-Role', req.user?.role || 'unknown');
 
       await workbook.xlsx.write(res);
     } catch (error) {
@@ -2320,9 +2322,6 @@ class OptimizedImportExportController {
     }
   }
 
-  /**
-   * Diagnostic complet
-   */
   async diagnostic(req, res) {
     try {
       const memoryUsage = process.memoryUsage();
@@ -2330,7 +2329,6 @@ class OptimizedImportExportController {
       const hours = Math.floor(uptime / 3600);
       const minutes = Math.floor((uptime % 3600) / 60);
 
-      // Statistiques DB avec filtre de coordination
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
       let countParams = [];
 
@@ -2350,7 +2348,6 @@ class OptimizedImportExportController {
       `);
       const recentImports = parseInt(recentResult.rows[0].recent);
 
-      // Statistiques par coordination
       const coordinationStats = await db.query(`
         SELECT coordination, COUNT(*) as total 
         FROM cartes 
@@ -2366,9 +2363,9 @@ class OptimizedImportExportController {
         environment: 'lws-optimized',
         version: '4.0.0-lws',
         user: {
-          role: req.user.role,
-          coordination: req.user.coordination,
-          nom: req.user.nomUtilisateur,
+          role: req.user?.role,
+          coordination: req.user?.coordination,
+          nom: req.user?.nomUtilisateur,
         },
         data: {
           total_cartes_accessibles: totalRows,
@@ -2427,9 +2424,6 @@ class OptimizedImportExportController {
     }
   }
 
-  /**
-   * Statut des exports en cours
-   */
   async getExportStatus(req, res) {
     res.json({
       success: true,
@@ -2451,43 +2445,28 @@ class OptimizedImportExportController {
 }
 
 // ============================================
-// EXPORT OPTIMISÉ POUR LWS
+// EXPORT
 // ============================================
 const controller = new OptimizedImportExportController();
 
 module.exports = {
-  // Imports
   importCSV: controller.importCSV.bind(controller),
-  importExcel: controller.importCSV.bind(controller), // Alias
+  importExcel: controller.importCSV.bind(controller),
   importSmartSync: controller.importSmartSync.bind(controller),
-
-  // Export standard (limité)
   exportExcel: controller.exportExcel.bind(controller),
   exportCSV: controller.exportCSV.bind(controller),
-
-  // Export COMPLET (nouvelles méthodes optimisées)
   exportCompleteExcel: controller.exportCompleteExcel.bind(controller),
   exportCompleteCSV: controller.exportCompleteCSV.bind(controller),
   exportAllData: controller.exportAllData.bind(controller),
-
-  // Export par site
   exportCSVBySite: controller.exportCSVBySite.bind(controller),
-  exportFiltered: controller.exportCSVBySite.bind(controller), // Alias
-  exportResultats: controller.exportCSVBySite.bind(controller), // Alias
-
-  // Streaming
-  exportStream: controller.exportCompleteCSV.bind(controller), // Redirige vers complet
-  exportOptimized: controller.exportCompleteCSV.bind(controller), // Redirige vers complet
-
-  // Utilitaires
+  exportFiltered: controller.exportCSVBySite.bind(controller),
+  exportResultats: controller.exportCSVBySite.bind(controller),
+  exportStream: controller.exportCompleteCSV.bind(controller),
+  exportOptimized: controller.exportCompleteCSV.bind(controller),
   getSitesList: controller.getSitesList.bind(controller),
   downloadTemplate: controller.downloadTemplate.bind(controller),
   diagnostic: controller.diagnostic.bind(controller),
   getExportStatus: controller.getExportStatus.bind(controller),
-
-  // Configuration
   CONFIG,
-
-  // Accès au contrôleur pour debug
   _controller: controller,
 };

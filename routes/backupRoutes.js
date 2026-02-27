@@ -444,9 +444,6 @@ router.post('/download', authenticate, async (req, res) => {
       });
     }
 
-    const protocol = req.protocol;
-    const host = req.get('host');
-
     res.json({
       success: true,
       message: 'Liens de téléchargement générés',
@@ -506,7 +503,7 @@ router.get('/download/:backupId', async (req, res) => {
  */
 router.post('/sync/local-export', authenticate, requireAdmin, async (req, res) => {
   try {
-    const { data, lastSync, client_version, platform } = req.body;
+    const { data, client_version, platform } = req.body;
 
     console.log(
       `📨 Sync depuis application desktop v${client_version || 'unknown'} (${platform || 'unknown'})`
@@ -651,8 +648,8 @@ router.get('/test', async (req, res) => {
         config: {
           ...config,
           missing: Object.entries(config)
-            .filter(([_, v]) => !v || v === 'false')
-            .map(([k]) => k),
+            .filter((entry) => !entry[1] || entry[1] === 'false')
+            .map((entry) => entry[0]),
         },
         instructions: [
           '1. Obtenez des credentials Google Drive API',
