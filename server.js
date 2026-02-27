@@ -17,6 +17,24 @@ const { query } = require('./db/db');
 const journalRequetes = require('./middleware/journalRequetes');
 const { securityHeaders } = require('./middleware/apiAuth');
 
+// ========== MIDDLEWARE DE SÉCURITÉ SUPPLÉMENTAIRE ==========
+// Protection contre les tentatives d'accès aux fichiers sensibles
+const securityMiddleware = (req, res, next) => {
+  // Bloquer les tentatives d'accès aux fichiers sensibles
+  const blockedPaths = ['.env', 'config', '.git', 'wp-admin', 'wp-content', 'php', 'sql'];
+
+  if (blockedPaths.some((path) => req.url.toLowerCase().includes(path))) {
+    console.warn(`🚨 Tentative d'accès bloquée: ${req.url} de ${req.ip}`);
+    return res.status(403).json({
+      success: false,
+      message: 'Accès interdit',
+      code: 'FORBIDDEN_PATH',
+      request_id: req.idRequete,
+    });
+  }
+  next();
+};
+
 // Import des routes
 const authRoutes = require('./routes/authRoutes');
 const cartesRoutes = require('./routes/Cartes');
@@ -29,7 +47,7 @@ const inventaireRoutes = require('./routes/Inventaire');
 const statistiquesRoutes = require('./routes/statistiques');
 const externalApiRoutes = require('./routes/externalApi');
 const backupRoutes = require('./routes/backupRoutes');
-const syncRoutes = require('./routes/syncRoutes'); // ✅ AJOUTÉ - Routes de synchronisation des sites
+const syncRoutes = require('./routes/syncRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -46,6 +64,9 @@ dirs.forEach((dir) => {
 // ========== MIDDLEWARE DE JOURNALISATION DES REQUÊTES (PREMIER) ==========
 app.use(journalRequetes);
 
+// ========== MIDDLEWARE DE SÉCURITÉ ==========
+app.use(securityMiddleware);
+
 // ========== CONFIGURATION BACKUP AUTOMATIQUE ==========
 async function setupBackupSystem() {
   console.log('🔧 Configuration du système de backup...');
@@ -57,7 +78,6 @@ async function setupBackupSystem() {
 
   try {
     const PostgreSQLBackup = require('./backup-postgres');
-
     const backupService = new PostgreSQLBackup();
 
     // Vérifier si la base est vide (nouvelle installation)
@@ -97,6 +117,9 @@ app.use(
     contentSecurityPolicy: false,
     crossOriginResourcePolicy: { policy: 'cross-origin' },
     hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+    hidePoweredBy: true,
+    noSniff: true,
+    xssFilter: true,
   })
 );
 
@@ -119,7 +142,7 @@ app.use(
 // Rate Limiting (assoupli pour VPS)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5000, // 5000 requêtes / 15 min = ~5 req/sec, confortable
+  max: 5000,
   message: {
     success: false,
     error: 'Limite de requêtes atteinte',
@@ -145,6 +168,7 @@ const allowedOrigins = [
   'https://gescardcocody.com',
   'http://www.gescarcocody.com',
   'https://www.gescarcocody.com',
+  /\.gescardcocody\.com$/, // Accepte tous les sous-domaines
   'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:5174',
@@ -154,10 +178,23 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
+    // En développement, tout accepter
     if (process.env.NODE_ENV !== 'production') {
       return callback(null, true);
     }
-    if (!origin || allowedOrigins.includes(origin)) {
+
+    // Si pas d'origine (appel serveur à serveur), accepter
+    if (!origin) return callback(null, true);
+
+    // Vérification avec regex et liste
+    const allowed = allowedOrigins.some((pattern) => {
+      if (typeof pattern === 'string') {
+        return pattern === origin;
+      }
+      return pattern.test(origin);
+    });
+
+    if (allowed) {
       callback(null, true);
     } else {
       console.warn(`🚫 Origine CORS bloquée: ${origin}`);
@@ -294,7 +331,7 @@ app.get('/api/cors-test', (req, res) => {
   res.json({
     message: 'CORS test successful',
     your_origin: req.headers.origin || 'not specified',
-    allowed_origins: allowedOrigins,
+    allowed_origins: allowedOrigins.filter((o) => typeof o === 'string'),
     cors_enabled: true,
     requestId: req.idRequete,
   });
@@ -312,7 +349,7 @@ app.use('/api/profil', profilRoutes);
 app.use('/api/statistiques', statistiquesRoutes);
 app.use('/api/external', externalApiRoutes);
 app.use('/api/backup', backupRoutes);
-app.use('/api/sync', syncRoutes); // ✅ AJOUTÉ - Routes de synchronisation des sites
+app.use('/api/sync', syncRoutes);
 
 // ========== ROUTE RACINE ==========
 app.get('/', (req, res) => {
@@ -337,10 +374,9 @@ app.get('/', (req, res) => {
       annulation_actions: true,
       filtrage_coordination: true,
       journal_amelioré: true,
-      sync_sites: true, // ✅ AJOUTÉ - Indique que la synchronisation des sites est disponible
+      sync_sites: true,
     },
     sync_endpoints: {
-      // ✅ AJOUTÉ - Documentation des endpoints de synchronisation
       login: 'POST /api/sync/login',
       test: 'GET /api/sync/test',
       upload: 'POST /api/sync/upload',
@@ -363,7 +399,7 @@ app.use((req, res) => {
   });
 });
 
-// Gestion globale des erreurs
+// Gestion globale des erreurs - CORRIGÉ (next supprimé)
 app.use((err, req, res) => {
   console.error('❌ Error:', {
     message: err.message,
@@ -458,7 +494,10 @@ const server = app.listen(PORT, async () => {
   console.log('• Connexions DB max: 50');
   console.log("• Rôles supportés: Administrateur, Gestionnaire, Chef d'équipe, Opérateur");
   console.log('• Synchronisation sites: ✅ ACTIVE (12 endpoints)');
-  console.log("• Nouveautés: Annulation d'actions, Filtrage par coordination, Sync sites\n");
+  console.log('• Protection fichiers sensibles: ✅ ACTIVE');
+  console.log(
+    "• Nouveautés: Annulation d'actions, Filtrage par coordination, Sync sites, Sécurité renforcée\n"
+  );
 });
 
 // Configuration des timeouts (augmentés pour VPS)
