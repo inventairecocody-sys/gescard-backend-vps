@@ -20,9 +20,7 @@ const syncService = {
           s.coordination_id,
           c.code as coordination_code,
           c.nom as coordination_nom,
-          s.is_active,
-          s.last_sync_at,
-          s.total_cards
+          s.is_active
         FROM sites s
         JOIN coordinations c ON s.coordination_id = c.id
         WHERE s.id = $1 
@@ -158,7 +156,6 @@ const syncService = {
       await client.query(
         `
         UPDATE sites SET
-          total_cards = (SELECT COUNT(*) FROM cartes WHERE site_proprietaire_id = $1),
           last_sync_at = NOW(),
           last_sync_status = $2
         WHERE id = $1
