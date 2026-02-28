@@ -11,6 +11,9 @@ const cron = require('node-cron');
 
 dotenv.config();
 
+// ✅ AJOUTER CETTE LIGNE ICI (après dotenv.config)
+app.set('trust proxy', 1);
+
 const { query } = require('./db/db');
 
 // Import des middlewares
