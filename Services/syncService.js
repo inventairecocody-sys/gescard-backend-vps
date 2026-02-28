@@ -14,7 +14,7 @@ const syncService = {
     try {
       const result = await db.query(
         `
-        SELECT 
+        SELECT
           s.id,
           s.nom,
           s.coordination_id,
@@ -23,8 +23,8 @@ const syncService = {
           s.is_active
         FROM sites s
         JOIN coordinations c ON s.coordination_id = c.id
-        WHERE s.id = $1 
-          AND s.api_key = $2 
+        WHERE s.id = $1
+          AND s.api_key = $2
           AND s.is_active = true
       `,
         [siteId, apiKey]
@@ -152,15 +152,15 @@ const syncService = {
         ]
       );
 
-      // 4. Mettre à jour les stats du site
+      // 4. ✅ Mettre à jour les stats du site - CORRIGÉ (utilise last_sync_error au lieu de last_sync_status)
       await client.query(
         `
         UPDATE sites SET
           last_sync_at = NOW(),
-          last_sync_status = $2
+          last_sync_error = $2
         WHERE id = $1
       `,
-        [site.id, uploaded.errors > 0 ? 'partial' : 'success']
+        [site.id, uploaded.errors > 0 ? `${uploaded.errors} erreur(s) détectée(s)` : null]
       );
 
       await client.query('COMMIT');
@@ -230,7 +230,7 @@ const syncService = {
     // Vérifier la version
     const checkVersion = await client.query(
       `
-      SELECT version FROM cartes 
+      SELECT version FROM cartes
       WHERE id = $1 AND site_proprietaire_id = $2
     `,
       [mod.pg_id, site.id]
@@ -302,7 +302,7 @@ const syncService = {
 
     await client.query(
       `
-      UPDATE cartes 
+      UPDATE cartes
       SET ${updates.join(', ')}
       WHERE id = $${paramCount + 1} AND site_proprietaire_id = $${paramCount + 2}
     `,
@@ -318,7 +318,7 @@ const syncService = {
   async _handleDelete(client, mod, site) {
     await client.query(
       `
-      DELETE FROM cartes 
+      DELETE FROM cartes
       WHERE id = $1 AND site_proprietaire_id = $2
     `,
       [mod.pg_id, site.id]
@@ -334,7 +334,7 @@ const syncService = {
     try {
       const result = await db.query(
         `
-        SELECT 
+        SELECT
           c.id as pg_id,
           c.coordination_id,
           coord.code as coordination_code,
@@ -377,7 +377,7 @@ const syncService = {
     try {
       await db.query(
         `
-        UPDATE sync_history 
+        UPDATE sync_history
         SET downloaded_count = $1,
             downloaded_inserts = $2,
             downloaded_updates = $3,
@@ -400,18 +400,17 @@ const syncService = {
   },
 
   /**
-   * Obtenir le statut d'un site
+   * ✅ Obtenir le statut d'un site - CORRIGÉ (sans last_sync_status)
    */
   async getSiteStatus(siteId) {
     try {
       const result = await db.query(
         `
-        SELECT 
+        SELECT
           total_cards,
           pending_cards,
           synced_cards,
           last_sync_at,
-          last_sync_status,
           last_sync_error
         FROM sites
         WHERE id = $1
@@ -427,7 +426,11 @@ const syncService = {
 
       // Ajouter des informations dérivées
       return {
-        ...site,
+        total_cards: site.total_cards,
+        pending_cards: site.pending_cards,
+        synced_cards: site.synced_cards,
+        last_sync_at: site.last_sync_at,
+        last_error: site.last_sync_error,
         sync_status:
           site.last_sync_at && new Date() - new Date(site.last_sync_at) < 24 * 60 * 60 * 1000
             ? 'OK'
