@@ -11,9 +11,6 @@ const cron = require('node-cron');
 
 dotenv.config();
 
-// ✅ AJOUTER CETTE LIGNE ICI (après dotenv.config)
-app.set('trust proxy', 1);
-
 const { query } = require('./db/db');
 
 // Import des middlewares
@@ -52,8 +49,11 @@ const externalApiRoutes = require('./routes/externalApi');
 const backupRoutes = require('./routes/backupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
 
-const app = express();
+const app = express(); // ✅ DÉCLARATION DE app EN PREMIER
 const PORT = process.env.PORT || 3000;
+
+// ✅ CONFIGURATION TRUST PROXY (après déclaration de app)
+app.set('trust proxy', 1);
 
 // ========== CRÉATION DES DOSSIERS NÉCESSAIRES ==========
 const dirs = ['uploads', 'logs', 'backups'];
