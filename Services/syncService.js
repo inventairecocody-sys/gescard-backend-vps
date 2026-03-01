@@ -56,10 +56,9 @@ const syncService = {
 
   /**
    * Traiter les modifications reçues d'un site
-   * ✅ VERSION CORRIGÉE : Traitement individuel avec transactions séparées
    */
   async processUpload(site, modifications, lastSync) {
-    let historyId; // ✅ Déclaration explicite de la variable
+    let historyId;
 
     // Utiliser une connexion pour l'historique seulement
     const client = await db.pool.connect();
@@ -78,7 +77,7 @@ const syncService = {
         [site.id]
       );
 
-      historyId = historyResult.rows[0].id; // ✅ Assignation
+      historyId = historyResult.rows[0].id;
 
       await client.query('COMMIT');
     } catch (error) {
@@ -88,7 +87,7 @@ const syncService = {
       client.release();
     }
 
-    // 2. Traiter chaque modification INDIVIDUELLEMENT avec sa propre transaction
+    // 2. Traiter chaque modification INDIVIDUELLEMENT
     const uploaded = {
       inserts: 0,
       updates: 0,
@@ -100,13 +99,12 @@ const syncService = {
     const processed = [];
 
     for (const mod of modifications || []) {
-      // ✅ Nouvelle connexion pour chaque modification
       const itemClient = await db.pool.connect();
 
       try {
         await itemClient.query('BEGIN');
 
-        // 🔐 VALIDATION CRITIQUE : la coordination doit correspondre
+        // 🔐 VALIDATION : la coordination doit correspondre
         if (mod.coordination_id !== site.coordination_id) {
           throw new Error(
             `Coordination invalide: attendu ${site.coordination_id}, reçu ${mod.coordination_id}`
@@ -119,7 +117,7 @@ const syncService = {
           result = await this._handleInsert(itemClient, mod, site);
           uploaded.inserts++;
         } else if (mod.operation === 'UPDATE') {
-          result = await this._handleUpdate(itemClient, mod, site, historyId); // ✅ Utilisation correcte
+          result = await this._handleUpdate(itemClient, mod, site, historyId);
           if (result.conflict) {
             uploaded.conflicts++;
           } else {
@@ -152,7 +150,7 @@ const syncService = {
       }
     }
 
-    // 3. Mettre à jour l'historique avec les résultats finaux
+    // 3. Mettre à jour l'historique
     const updateClient = await db.pool.connect();
     try {
       await updateClient.query('BEGIN');
@@ -174,7 +172,7 @@ const syncService = {
           uploaded.deletes,
           uploaded.conflicts,
           uploaded.errors > 0 ? 'partial' : 'success',
-          historyId, // ✅ Utilisation correcte
+          historyId,
         ]
       );
 
@@ -197,11 +195,11 @@ const syncService = {
       updateClient.release();
     }
 
-    // 5. Préparer les données à renvoyer
+    // 5. ✅ Préparer les données à renvoyer (TOUTES les cartes)
     const download = await this.prepareDownload(site, lastSync, 1000);
 
     return {
-      historyId, // ✅ Utilisation correcte
+      historyId,
       uploaded,
       download,
       processed,
@@ -280,7 +278,7 @@ const syncService = {
       `,
         [
           site.id,
-          historyId, // ✅ Utilisation correcte
+          historyId,
           mod.pg_id,
           site.coordination_id,
           JSON.stringify(mod),
@@ -296,7 +294,6 @@ const syncService = {
     const params = [];
     let paramCount = 0;
 
-    // Champs modifiables
     if (mod.delivrance !== undefined) {
       paramCount++;
       updates.push(`"delivrance" = $${paramCount}`);
@@ -318,7 +315,6 @@ const syncService = {
       params.push(mod.contacts);
     }
 
-    // Toujours mettre à jour version et timestamp
     paramCount++;
     updates.push(`version = version + 1`);
     paramCount++;
@@ -354,7 +350,8 @@ const syncService = {
   },
 
   /**
-   * Préparer les données à envoyer à un site
+   * ✅ Préparer les données à envoyer à un site
+   * VERSION CORRIGÉE : Retourne TOUTES les cartes disponibles
    */
   async prepareDownload(site, since, limit = 1000) {
     try {
@@ -380,13 +377,11 @@ const syncService = {
         FROM cartes c
         JOIN coordinations coord ON c.coordination_id = coord.id
         JOIN sites ON c.site_proprietaire_id = sites.id
-        WHERE c.coordination_id != $1
-          AND c.site_proprietaire_id != $2
-          AND c.sync_timestamp > COALESCE($3::timestamp, '2000-01-01')
+        WHERE 1=1
         ORDER BY c.sync_timestamp DESC
-        LIMIT $4
+        LIMIT $1
       `,
-        [site.coordination_id, site.id, since, limit]
+        [limit]
       );
 
       return result.rows;
@@ -450,7 +445,6 @@ const syncService = {
 
       const site = result.rows[0];
 
-      // Ajouter des informations dérivées
       return {
         total_cards: site.total_cards,
         pending_cards: site.pending_cards,
