@@ -56,8 +56,12 @@ const syncService = {
 
   /**
    * Traiter les modifications reçues d'un site
+   * ✅ VERSION CORRIGÉE : Traitement individuel avec transactions séparées
    */
   async processUpload(site, modifications, lastSync) {
+    let historyId; // ✅ Déclaration explicite de la variable
+
+    // Utiliser une connexion pour l'historique seulement
     const client = await db.pool.connect();
 
     try {
@@ -74,64 +78,86 @@ const syncService = {
         [site.id]
       );
 
-      const historyId = historyResult.rows[0].id;
+      historyId = historyResult.rows[0].id; // ✅ Assignation
 
-      // 2. Traiter chaque modification
-      const uploaded = {
-        inserts: 0,
-        updates: 0,
-        deletes: 0,
-        conflicts: 0,
-        errors: 0,
-      };
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
-      const processed = [];
+    // 2. Traiter chaque modification INDIVIDUELLEMENT avec sa propre transaction
+    const uploaded = {
+      inserts: 0,
+      updates: 0,
+      deletes: 0,
+      conflicts: 0,
+      errors: 0,
+    };
 
-      for (const mod of modifications || []) {
-        try {
-          // 🔐 VALIDATION CRITIQUE : la coordination doit correspondre
-          if (mod.coordination_id !== site.coordination_id) {
-            throw new Error(
-              `Coordination invalide: attendu ${site.coordination_id}, reçu ${mod.coordination_id}`
-            );
-          }
+    const processed = [];
 
-          let result;
+    for (const mod of modifications || []) {
+      // ✅ Nouvelle connexion pour chaque modification
+      const itemClient = await db.pool.connect();
 
-          if (mod.operation === 'INSERT') {
-            result = await this._handleInsert(client, mod, site);
-            uploaded.inserts++;
-          } else if (mod.operation === 'UPDATE') {
-            result = await this._handleUpdate(client, mod, site, historyId);
-            if (result.conflict) {
-              uploaded.conflicts++;
-            } else {
-              uploaded.updates++;
-            }
-          } else if (mod.operation === 'DELETE') {
-            result = await this._handleDelete(client, mod, site);
-            uploaded.deletes++;
-          } else {
-            throw new Error(`Opération inconnue: ${mod.operation}`);
-          }
+      try {
+        await itemClient.query('BEGIN');
 
-          processed.push({
-            local_id: mod.local_id,
-            pg_id: result?.pg_id || mod.pg_id,
-            status: result?.conflict ? 'conflict' : 'success',
-          });
-        } catch (error) {
-          uploaded.errors++;
-          processed.push({
-            local_id: mod.local_id,
-            error: error.message,
-            status: 'error',
-          });
+        // 🔐 VALIDATION CRITIQUE : la coordination doit correspondre
+        if (mod.coordination_id !== site.coordination_id) {
+          throw new Error(
+            `Coordination invalide: attendu ${site.coordination_id}, reçu ${mod.coordination_id}`
+          );
         }
-      }
 
-      // 3. Mettre à jour l'historique
-      await client.query(
+        let result;
+
+        if (mod.operation === 'INSERT') {
+          result = await this._handleInsert(itemClient, mod, site);
+          uploaded.inserts++;
+        } else if (mod.operation === 'UPDATE') {
+          result = await this._handleUpdate(itemClient, mod, site, historyId); // ✅ Utilisation correcte
+          if (result.conflict) {
+            uploaded.conflicts++;
+          } else {
+            uploaded.updates++;
+          }
+        } else if (mod.operation === 'DELETE') {
+          result = await this._handleDelete(itemClient, mod, site);
+          uploaded.deletes++;
+        } else {
+          throw new Error(`Opération inconnue: ${mod.operation}`);
+        }
+
+        await itemClient.query('COMMIT');
+
+        processed.push({
+          local_id: mod.local_id,
+          pg_id: result?.pg_id || mod.pg_id,
+          status: result?.conflict ? 'conflict' : 'success',
+        });
+      } catch (error) {
+        await itemClient.query('ROLLBACK');
+        uploaded.errors++;
+        processed.push({
+          local_id: mod.local_id,
+          error: error.message,
+          status: 'error',
+        });
+      } finally {
+        itemClient.release();
+      }
+    }
+
+    // 3. Mettre à jour l'historique avec les résultats finaux
+    const updateClient = await db.pool.connect();
+    try {
+      await updateClient.query('BEGIN');
+
+      await updateClient.query(
         `
         UPDATE sync_history SET
           sync_end = NOW(),
@@ -148,12 +174,12 @@ const syncService = {
           uploaded.deletes,
           uploaded.conflicts,
           uploaded.errors > 0 ? 'partial' : 'success',
-          historyId,
+          historyId, // ✅ Utilisation correcte
         ]
       );
 
-      // 4. ✅ Mettre à jour les stats du site - CORRIGÉ (utilise last_sync_error au lieu de last_sync_status)
-      await client.query(
+      // 4. Mettre à jour les stats du site
+      await updateClient.query(
         `
         UPDATE sites SET
           last_sync_at = NOW(),
@@ -163,23 +189,23 @@ const syncService = {
         [site.id, uploaded.errors > 0 ? `${uploaded.errors} erreur(s) détectée(s)` : null]
       );
 
-      await client.query('COMMIT');
-
-      // 5. Préparer les données à renvoyer
-      const download = await this.prepareDownload(site, lastSync, 1000);
-
-      return {
-        historyId,
-        uploaded,
-        download,
-        processed,
-      };
+      await updateClient.query('COMMIT');
     } catch (error) {
-      await client.query('ROLLBACK');
+      await updateClient.query('ROLLBACK');
       throw error;
     } finally {
-      client.release();
+      updateClient.release();
     }
+
+    // 5. Préparer les données à renvoyer
+    const download = await this.prepareDownload(site, lastSync, 1000);
+
+    return {
+      historyId, // ✅ Utilisation correcte
+      uploaded,
+      download,
+      processed,
+    };
   },
 
   /**
@@ -254,7 +280,7 @@ const syncService = {
       `,
         [
           site.id,
-          historyId,
+          historyId, // ✅ Utilisation correcte
           mod.pg_id,
           site.coordination_id,
           JSON.stringify(mod),
@@ -400,7 +426,7 @@ const syncService = {
   },
 
   /**
-   * ✅ Obtenir le statut d'un site - CORRIGÉ (sans last_sync_status)
+   * Obtenir le statut d'un site
    */
   async getSiteStatus(siteId) {
     try {
