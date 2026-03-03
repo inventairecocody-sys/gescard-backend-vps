@@ -1,15 +1,19 @@
-// Services/syncService.js
+// ============================================================
+// Services/syncService.js — VERSION CORRIGÉE
+// Corrections appliquées :
+//   1. prepareDownload() → filtre différentiel réel sur sync_timestamp
+//   2. _handleUpdate()   → Last-Write-Wins via timestamp (plus version)
+//   3. _handleDelete()   → Soft delete (deleted_at) au lieu de DELETE
+//   4. processUpload()   → sync_status mis à jour après traitement
+// ============================================================
+
 const db = require('../db/db');
 const jwt = require('jsonwebtoken');
 
-/**
- * Service de synchronisation
- * Contient toute la logique métier
- */
 const syncService = {
-  /**
-   * Authentifier un site avec sa clé API
-   */
+  // ----------------------------------------------------------
+  // Authentifier un site avec sa clé API
+  // ----------------------------------------------------------
   async authenticateSite(siteId, apiKey) {
     try {
       const result = await db.query(
@@ -18,13 +22,13 @@ const syncService = {
           s.id,
           s.nom,
           s.coordination_id,
-          c.code as coordination_code,
-          c.nom as coordination_nom,
+          c.code  AS coordination_code,
+          c.nom   AS coordination_nom,
           s.is_active
         FROM sites s
         JOIN coordinations c ON s.coordination_id = c.id
-        WHERE s.id = $1
-          AND s.api_key = $2
+        WHERE s.id       = $1
+          AND s.api_key  = $2
           AND s.is_active = true
       `,
         [siteId, apiKey]
@@ -37,9 +41,9 @@ const syncService = {
     }
   },
 
-  /**
-   * Générer un token JWT pour le site
-   */
+  // ----------------------------------------------------------
+  // Générer un token JWT 24h pour le site
+  // ----------------------------------------------------------
   generateSiteToken(site) {
     return jwt.sign(
       {
@@ -54,57 +58,43 @@ const syncService = {
     );
   },
 
-  /**
-   * Traiter les modifications reçues d'un site
-   */
+  // ----------------------------------------------------------
+  // Traiter les modifications reçues d'un site (UPLOAD)
+  // ----------------------------------------------------------
   async processUpload(site, modifications, lastSync) {
     let historyId;
 
-    // Utiliser une connexion pour l'historique seulement
-    const client = await db.pool.connect();
-
+    // 1. Créer l'entrée dans sync_history
+    const histClient = await db.pool.connect();
     try {
-      await client.query('BEGIN');
-
-      // 1. Créer l'entrée dans l'historique
-      const historyResult = await client.query(
+      await histClient.query('BEGIN');
+      const histResult = await histClient.query(
         `
-        INSERT INTO sync_history (
-          site_id, sync_start, status
-        ) VALUES ($1, NOW(), 'in_progress')
+        INSERT INTO sync_history (site_id, sync_start, status)
+        VALUES ($1, NOW(), 'in_progress')
         RETURNING id
       `,
         [site.id]
       );
-
-      historyId = historyResult.rows[0].id;
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
+      historyId = histResult.rows[0].id;
+      await histClient.query('COMMIT');
+    } catch (err) {
+      await histClient.query('ROLLBACK');
+      throw err;
     } finally {
-      client.release();
+      histClient.release();
     }
 
-    // 2. Traiter chaque modification INDIVIDUELLEMENT
-    const uploaded = {
-      inserts: 0,
-      updates: 0,
-      deletes: 0,
-      conflicts: 0,
-      errors: 0,
-    };
-
+    // 2. Traiter chaque modification individuellement
+    const stats = { inserts: 0, updates: 0, deletes: 0, conflicts: 0, errors: 0 };
     const processed = [];
 
     for (const mod of modifications || []) {
-      const itemClient = await db.pool.connect();
-
+      const client = await db.pool.connect();
       try {
-        await itemClient.query('BEGIN');
+        await client.query('BEGIN');
 
-        // 🔐 VALIDATION : la coordination doit correspondre
+        // Vérification de coordination
         if (mod.coordination_id !== site.coordination_id) {
           throw new Error(
             `Coordination invalide: attendu ${site.coordination_id}, reçu ${mod.coordination_id}`
@@ -114,102 +104,121 @@ const syncService = {
         let result;
 
         if (mod.operation === 'INSERT') {
-          result = await this._handleInsert(itemClient, mod, site);
-          uploaded.inserts++;
+          result = await this._handleInsert(client, mod, site);
+          stats.inserts++;
         } else if (mod.operation === 'UPDATE') {
-          result = await this._handleUpdate(itemClient, mod, site, historyId);
-          if (result.conflict) {
-            uploaded.conflicts++;
-          } else {
-            uploaded.updates++;
-          }
+          result = await this._handleUpdate(client, mod, site, historyId);
+          result.conflict ? stats.conflicts++ : stats.updates++;
         } else if (mod.operation === 'DELETE') {
-          result = await this._handleDelete(itemClient, mod, site);
-          uploaded.deletes++;
+          result = await this._handleDelete(client, mod, site);
+          stats.deletes++;
         } else {
           throw new Error(`Opération inconnue: ${mod.operation}`);
         }
 
-        await itemClient.query('COMMIT');
+        await client.query('COMMIT');
 
         processed.push({
           local_id: mod.local_id,
           pg_id: result?.pg_id || mod.pg_id,
           status: result?.conflict ? 'conflict' : 'success',
         });
-      } catch (error) {
-        await itemClient.query('ROLLBACK');
-        uploaded.errors++;
-        processed.push({
-          local_id: mod.local_id,
-          error: error.message,
-          status: 'error',
-        });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        stats.errors++;
+        processed.push({ local_id: mod.local_id, error: err.message, status: 'error' });
       } finally {
-        itemClient.release();
+        client.release();
       }
     }
 
-    // 3. Mettre à jour l'historique
-    const updateClient = await db.pool.connect();
-    try {
-      await updateClient.query('BEGIN');
+    // 3. ✅ Marquer les cartes uploadées comme synced côté serveur
+    if (processed.length > 0) {
+      const successIds = processed
+        .filter((p) => p.status === 'success' && p.pg_id)
+        .map((p) => p.pg_id);
 
-      await updateClient.query(
+      if (successIds.length > 0) {
+        await db.query(
+          `
+          UPDATE cartes
+          SET sync_status = 'synced',
+              last_sync_attempt = NOW()
+          WHERE id = ANY($1)
+        `,
+          [successIds]
+        );
+      }
+    }
+
+    // 4. Mettre à jour sync_history
+    const updClient = await db.pool.connect();
+    try {
+      await updClient.query('BEGIN');
+      await updClient.query(
         `
-        UPDATE sync_history SET
-          sync_end = NOW(),
-          uploaded_inserts = $1,
-          uploaded_updates = $2,
-          uploaded_deletes = $3,
-          uploaded_conflicts = $4,
-          status = $5
+        UPDATE sync_history
+        SET sync_end             = NOW(),
+            uploaded_inserts     = $1,
+            uploaded_updates     = $2,
+            uploaded_deletes     = $3,
+            uploaded_conflicts   = $4,
+            status               = $5
         WHERE id = $6
       `,
         [
-          uploaded.inserts,
-          uploaded.updates,
-          uploaded.deletes,
-          uploaded.conflicts,
-          uploaded.errors > 0 ? 'partial' : 'success',
+          stats.inserts,
+          stats.updates,
+          stats.deletes,
+          stats.conflicts,
+          stats.errors > 0 ? 'partial' : 'success',
           historyId,
         ]
       );
 
-      // 4. Mettre à jour les stats du site
-      await updateClient.query(
+      // Mettre à jour last_sync_at sur le site
+      await updClient.query(
         `
-        UPDATE sites SET
-          last_sync_at = NOW(),
-          last_sync_error = $2
+        UPDATE sites
+        SET last_sync_at    = NOW(),
+            last_sync_error = $2
         WHERE id = $1
       `,
-        [site.id, uploaded.errors > 0 ? `${uploaded.errors} erreur(s) détectée(s)` : null]
+        [site.id, stats.errors > 0 ? `${stats.errors} erreur(s)` : null]
       );
 
-      await updateClient.query('COMMIT');
-    } catch (error) {
-      await updateClient.query('ROLLBACK');
-      throw error;
+      await updClient.query('COMMIT');
+    } catch (err) {
+      await updClient.query('ROLLBACK');
+      throw err;
     } finally {
-      updateClient.release();
+      updClient.release();
     }
 
-    // 5. ✅ Préparer les données à renvoyer (TOUTES les cartes)
+    // 5. Recalculer les stats du site
+    await db.query(`SELECT refresh_site_sync_stats($1)`, [site.id]);
+
+    // 6. Préparer le download différentiel
     const download = await this.prepareDownload(site, lastSync, 1000);
 
-    return {
-      historyId,
-      uploaded,
-      download,
-      processed,
-    };
+    return { historyId, uploaded: stats, download, processed };
   },
 
-  /**
-   * Gérer une insertion
-   */
+  // ----------------------------------------------------------
+  // Gérer une insertion
+  // ----------------------------------------------------------
   async _handleInsert(client, mod, site) {
+    // Vérifier si local_id existe déjà (idempotence)
+    if (mod.local_id) {
+      const existing = await client.query(
+        `SELECT id FROM cartes WHERE local_id = $1 AND site_proprietaire_id = $2`,
+        [mod.local_id, site.id]
+      );
+      if (existing.rows.length > 0) {
+        return { pg_id: existing.rows[0].id }; // Déjà inséré → OK
+      }
+    }
+
     const result = await client.query(
       `
       INSERT INTO cartes (
@@ -225,8 +234,9 @@ const syncService = {
         "DATE DE DELIVRANCE",
         version,
         sync_timestamp,
+        sync_status,
         local_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, NOW(), $11)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, 1, NOW(), 'synced', $11)
       RETURNING id
     `,
       [
@@ -234,47 +244,54 @@ const syncService = {
         site.id,
         mod.nom,
         mod.prenoms,
-        mod.date_naissance,
-        mod.lieu_naissance,
-        mod.contacts,
-        mod.delivrance,
-        mod.contact_retrait,
-        mod.date_delivrance,
-        mod.local_id,
+        mod.date_naissance || null,
+        mod.lieu_naissance || null,
+        mod.contact || null,
+        mod.delivrance || null,
+        mod.contact_retrait || null,
+        mod.date_delivrance || null,
+        mod.local_id || null,
       ]
     );
 
     return { pg_id: result.rows[0].id };
   },
 
-  /**
-   * Gérer une mise à jour
-   */
+  // ----------------------------------------------------------
+  // ✅ CORRIGÉ : Last-Write-Wins via sync_timestamp
+  // ----------------------------------------------------------
   async _handleUpdate(client, mod, site, historyId) {
-    // Vérifier la version
-    const checkVersion = await client.query(
+    // Récupérer l'état serveur actuel
+    const serverRow = await client.query(
       `
-      SELECT version FROM cartes
-      WHERE id = $1 AND site_proprietaire_id = $2
+      SELECT id, version, sync_timestamp, delivrance,
+             "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", contact
+      FROM cartes
+      WHERE id = $1
     `,
-      [mod.pg_id, site.id]
+      [mod.pg_id]
     );
 
-    if (checkVersion.rows.length === 0) {
-      throw new Error(`Carte ${mod.pg_id} introuvable ou non propriétaire`);
+    if (serverRow.rows.length === 0) {
+      throw new Error(`Carte ${mod.pg_id} introuvable`);
     }
 
-    const serverVersion = checkVersion.rows[0].version;
+    const server = serverRow.rows[0];
+    const serverTime = new Date(server.sync_timestamp);
+    const clientTime = mod.sync_timestamp ? new Date(mod.sync_timestamp) : new Date(0);
 
-    if (mod.version < serverVersion) {
-      // Conflit détecté
+    // ✅ LAST-WRITE-WINS : le client est-il plus récent ?
+    if (clientTime <= serverTime) {
+      // Serveur plus récent → on log le conflit et on renvoie la version serveur
       await client.query(
         `
         INSERT INTO sync_conflicts (
-          site_id, sync_history_id, carte_id,
-          coordination_id, conflict_type,
-          client_value, server_value
-        ) VALUES ($1, $2, $3, $4, 'version_mismatch', $5, $6)
+          site_id, sync_history_id, carte_id, coordination_id,
+          conflict_type, conflict_field,
+          client_value, server_value,
+          resolution_status, resolution_method
+        ) VALUES ($1, $2, $3, $4, 'timestamp_conflict', 'sync_timestamp',
+                  $5, $6, 'resolved', 'last_write_wins')
       `,
         [
           site.id,
@@ -282,51 +299,48 @@ const syncService = {
           mod.pg_id,
           site.coordination_id,
           JSON.stringify(mod),
-          JSON.stringify(checkVersion.rows[0]),
+          JSON.stringify(server),
         ]
       );
 
-      return { conflict: true };
+      return { conflict: true, pg_id: mod.pg_id, winner: 'server' };
     }
 
-    // Mise à jour normale
+    // Client plus récent → appliquer les modifications
     const updates = [];
     const params = [];
-    let paramCount = 0;
+    let paramIdx = 0;
 
-    if (mod.delivrance !== undefined) {
-      paramCount++;
-      updates.push(`"delivrance" = $${paramCount}`);
-      params.push(mod.delivrance);
-    }
-    if (mod.contact_retrait !== undefined) {
-      paramCount++;
-      updates.push(`"CONTACT DE RETRAIT" = $${paramCount}`);
-      params.push(mod.contact_retrait);
-    }
-    if (mod.date_delivrance !== undefined) {
-      paramCount++;
-      updates.push(`"DATE DE DELIVRANCE" = $${paramCount}`);
-      params.push(mod.date_delivrance);
-    }
-    if (mod.contacts !== undefined) {
-      paramCount++;
-      updates.push(`"contact" = $${paramCount}`);
-      params.push(mod.contacts);
+    const fieldsMap = {
+      delivrance: '"delivrance"',
+      contact_retrait: '"CONTACT DE RETRAIT"',
+      date_delivrance: '"DATE DE DELIVRANCE"',
+      contact: '"contact"',
+      nom: '"nom"',
+      prenoms: '"prenoms"',
+      lieu_naissance: '"LIEU NAISSANCE"',
+    };
+
+    for (const [modKey, sqlCol] of Object.entries(fieldsMap)) {
+      if (mod[modKey] !== undefined) {
+        paramIdx++;
+        updates.push(`${sqlCol} = $${paramIdx}`);
+        params.push(mod[modKey]);
+      }
     }
 
-    paramCount++;
-    updates.push(`version = version + 1`);
-    paramCount++;
-    updates.push(`sync_timestamp = NOW()`);
+    if (updates.length === 0) {
+      return { pg_id: mod.pg_id }; // Rien à mettre à jour
+    }
 
-    params.push(mod.pg_id, site.id);
+    // sync_timestamp et version sont gérés par le trigger trg_cartes_update ✅
+    params.push(mod.pg_id);
 
     await client.query(
       `
       UPDATE cartes
       SET ${updates.join(', ')}
-      WHERE id = $${paramCount + 1} AND site_proprietaire_id = $${paramCount + 2}
+      WHERE id = $${paramIdx + 1}
     `,
       params
     );
@@ -334,14 +348,18 @@ const syncService = {
     return { pg_id: mod.pg_id };
   },
 
-  /**
-   * Gérer une suppression
-   */
+  // ----------------------------------------------------------
+  // ✅ CORRIGÉ : Soft delete au lieu de DELETE physique
+  // ----------------------------------------------------------
   async _handleDelete(client, mod, site) {
     await client.query(
       `
-      DELETE FROM cartes
-      WHERE id = $1 AND site_proprietaire_id = $2
+      UPDATE cartes
+      SET deleted_at    = NOW(),
+          sync_status   = 'synced'
+      WHERE id                   = $1
+        AND site_proprietaire_id = $2
+        AND deleted_at IS NULL
     `,
       [mod.pg_id, site.id]
     );
@@ -349,41 +367,27 @@ const syncService = {
     return { pg_id: mod.pg_id };
   },
 
-  /**
-   * ✅ Préparer les données à envoyer à un site
-   * VERSION CORRIGÉE : Retourne TOUTES les cartes disponibles
-   */
+  // ----------------------------------------------------------
+  // ✅ CORRIGÉ : Download différentiel avec filtre "since"
+  //    Utilise la fonction SQL get_changes_since() créée dans
+  //    le fichier gescard_sync_sql.sql
+  // ----------------------------------------------------------
   async prepareDownload(site, since, limit = 1000) {
     try {
-      const result = await db.query(
-        `
-        SELECT
-          c.id as pg_id,
-          c.coordination_id,
-          coord.code as coordination_code,
-          coord.nom as coordination_nom,
-          c.site_proprietaire_id,
-          sites.nom as site_nom,
-          c.nom,
-          c.prenoms,
-          to_char(c."DATE DE NAISSANCE", 'DD/MM/YYYY') as date_naissance,
-          c."LIEU NAISSANCE",
-          c.contact,
-          c.delivrance,
-          c."CONTACT DE RETRAIT",
-          to_char(c."DATE DE DELIVRANCE", 'DD/MM/YYYY') as date_delivrance,
-          c.version,
-          c.sync_timestamp
-        FROM cartes c
-        JOIN coordinations coord ON c.coordination_id = coord.id
-        JOIN sites ON c.site_proprietaire_id = sites.id
-        WHERE 1=1
-        ORDER BY c.sync_timestamp DESC
-        LIMIT $1
-      `,
-        [limit]
-      );
+      // Utiliser une date par défaut si "since" est absent
+      const sinceDate = since
+        ? new Date(since).toISOString()
+        : new Date('2000-01-01').toISOString();
 
+      const result = await db.query(`SELECT * FROM get_changes_since($1, $2::TIMESTAMP, $3)`, [
+        site.id,
+        sinceDate,
+        limit,
+      ]);
+
+      console.log(
+        `📥 Download pour ${site.id}: ${result.rows.length} enregistrements depuis ${sinceDate}`
+      );
       return result.rows;
     } catch (error) {
       console.error('❌ Erreur prepareDownload:', error);
@@ -391,24 +395,34 @@ const syncService = {
     }
   },
 
-  /**
-   * Confirmer le téléchargement
-   */
+  // ----------------------------------------------------------
+  // Confirmer la réception du download
+  // ----------------------------------------------------------
   async confirmDownload(siteId, historyId, appliedIds, errors) {
     try {
+      // Marquer les cartes comme synced via la fonction SQL
+      if (appliedIds && appliedIds.length > 0) {
+        const numericIds = appliedIds.map((id) => parseInt(id)).filter((id) => !isNaN(id));
+
+        if (numericIds.length > 0) {
+          await db.query(`SELECT mark_as_synced($1, $2)`, [siteId, numericIds]);
+        }
+      }
+
+      // Mettre à jour l'historique
       await db.query(
         `
         UPDATE sync_history
-        SET downloaded_count = $1,
+        SET downloaded_count   = $1,
             downloaded_inserts = $2,
             downloaded_updates = $3,
-            error_message = $4
+            error_message      = $4
         WHERE id = $5 AND site_id = $6
       `,
         [
           appliedIds?.length || 0,
-          appliedIds?.filter((id) => id.includes('new')).length || 0,
-          appliedIds?.filter((id) => !id.includes('new')).length || 0,
+          appliedIds?.filter((id) => String(id).includes('new')).length || 0,
+          appliedIds?.filter((id) => !String(id).includes('new')).length || 0,
           errors ? JSON.stringify(errors) : null,
           historyId,
           siteId,
@@ -420,46 +434,52 @@ const syncService = {
     }
   },
 
-  /**
-   * Obtenir le statut d'un site
-   */
+  // ----------------------------------------------------------
+  // Statut détaillé d'un site (utilise la vue v_sync_status)
+  // ----------------------------------------------------------
   async getSiteStatus(siteId) {
     try {
-      const result = await db.query(
-        `
-        SELECT
-          total_cards,
-          pending_cards,
-          synced_cards,
-          last_sync_at,
-          last_sync_error
-        FROM sites
-        WHERE id = $1
-      `,
-        [siteId]
-      );
+      const result = await db.query(`SELECT * FROM v_sync_status WHERE site_id = $1`, [siteId]);
 
-      if (result.rows.length === 0) {
-        return null;
-      }
+      if (result.rows.length === 0) return null;
 
-      const site = result.rows[0];
-
+      const s = result.rows[0];
       return {
-        total_cards: site.total_cards,
-        pending_cards: site.pending_cards,
-        synced_cards: site.synced_cards,
-        last_sync_at: site.last_sync_at,
-        last_error: site.last_sync_error,
-        sync_status:
-          site.last_sync_at && new Date() - new Date(site.last_sync_at) < 24 * 60 * 60 * 1000
-            ? 'OK'
-            : site.last_sync_at
-              ? 'EN_RETARD'
-              : 'JAMAIS_SYNC',
+        total_cards: s.total_cards,
+        pending_cards: s.pending_cards,
+        synced_cards: s.synced_cards,
+        conflict_cards: s.conflict_cards,
+        taux_sync_pct: s.taux_sync_pct,
+        last_sync_at: s.last_sync_at,
+        last_successful_sync: s.last_successful_sync,
+        conflicts_pending: s.conflicts_pending,
+        sync_health: s.sync_health,
+        last_error: s.last_sync_error,
       };
     } catch (error) {
       console.error('❌ Erreur getSiteStatus:', error);
+      throw error;
+    }
+  },
+
+  // ----------------------------------------------------------
+  // Récupérer le tableau de bord global (admin)
+  // ----------------------------------------------------------
+  async getGlobalDashboard() {
+    try {
+      const [dashboard, sites, conflicts] = await Promise.all([
+        db.query(`SELECT * FROM v_sync_dashboard`),
+        db.query(`SELECT * FROM v_sync_status`),
+        db.query(`SELECT * FROM v_conflicts_pending LIMIT 50`),
+      ]);
+
+      return {
+        global: dashboard.rows[0],
+        sites: sites.rows,
+        conflicts: conflicts.rows,
+      };
+    } catch (error) {
+      console.error('❌ Erreur getGlobalDashboard:', error);
       throw error;
     }
   },
