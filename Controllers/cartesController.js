@@ -1,5 +1,5 @@
 const db = require('../db/db');
-const annulationService = require('../Services/annulationService');
+const annulationService = require('../services/annulationService');
 
 // 🔧 CONFIGURATION API EXTERNE - OPTIMISÉE POUR LWS
 const API_CONFIG = {
@@ -498,14 +498,49 @@ const updateCarte = async (req, res) => {
 
     const ancienneCarte = carteExistante.rows[0];
 
+    // ✅ MAPPING camelCase → noms réels de colonnes PostgreSQL
+    // Le frontend peut envoyer des clés camelCase (lieuEnrolement, siteRetrait, etc.)
+    // ou des noms de colonnes réels ("LIEU D'ENROLEMENT", etc.)
+    // Ce mapping normalise tout avant de construire le UPDATE dynamique.
+    const CAMEL_TO_DB = {
+      lieuEnrolement: "LIEU D'ENROLEMENT",
+      siteRetrait: 'SITE DE RETRAIT',
+      dateNaissance: 'DATE DE NAISSANCE',
+      lieuNaissance: 'LIEU NAISSANCE',
+      contactRetrait: 'CONTACT DE RETRAIT',
+      dateDelivrance: 'DATE DE DELIVRANCE',
+      // Colonnes directes (déjà au bon nom, listées pour exhaustivité)
+      rangement: 'rangement',
+      nom: 'nom',
+      prenoms: 'prenoms',
+      contact: 'contact',
+      delivrance: 'delivrance',
+      coordination: 'coordination',
+    };
+
+    const normaliserCles = (data) => {
+      const normalise = {};
+      for (const [key, value] of Object.entries(data)) {
+        const dbKey = CAMEL_TO_DB[key] || key; // fallback: utiliser la clé telle quelle
+        normalise[dbKey] = value;
+      }
+      return normalise;
+    };
+
     // 🔍 FILTRER LES COLONNES SELON LE RÔLE
-    let donneesAModifier = { ...req.body };
+    let donneesAModifier = normaliserCles({ ...req.body });
 
     if (Array.isArray(req.colonnesAutorisees) && req.colonnesAutorisees.length > 0) {
+      // Les colonnesAutorisees peuvent être en camelCase ou en noms DB — normaliser les deux
+      const colonnesAutoriseeNormalisees = req.colonnesAutorisees.map(
+        (col) => CAMEL_TO_DB[col] || col
+      );
+      const bodyNormalise = normaliserCles({ ...req.body });
+
       donneesAModifier = {};
-      req.colonnesAutorisees.forEach((col) => {
-        if (req.body[col] !== undefined) {
-          donneesAModifier[col] = req.body[col];
+      colonnesAutoriseeNormalisees.forEach((col) => {
+        if (bodyNormalise[col] !== undefined) {
+          donneesAModifier[col] = bodyNormalise[col];
         }
       });
 
