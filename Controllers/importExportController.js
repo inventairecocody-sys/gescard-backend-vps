@@ -1498,13 +1498,82 @@ class OptimizedImportExportController {
         throw new Error('Le fichier CSV est vide');
       }
 
-      const firstRow = csvData[0];
+      // ✅ Log des en-têtes détectés pour diagnostic
+      const headersDetected = Object.keys(csvData[0]);
+      console.log(`📋 En-têtes détectés: ${headersDetected.join(' | ')}`);
+
+      // ✅ Mapping flexible des en-têtes alternatifs vers les noms standards
+      // Permet d'accepter des variantes de noms de colonnes dans le fichier
+      const HEADER_ALIASES = {
+        NOM: ['NOM', 'NAME', 'LASTNAME', 'LAST NAME', 'FAMILLE'],
+        PRENOMS: ['PRENOMS', 'PRENOM', 'FIRSTNAME', 'FIRST NAME', 'PRÉNOMS', 'PRÉNOM'],
+        'SITE DE RETRAIT': ['SITE DE RETRAIT', 'SITE', 'SITERETRAIT', 'SITE_RETRAIT'],
+        "LIEU D'ENROLEMENT": [
+          "LIEU D'ENROLEMENT",
+          'LIEU DENROLEMENT',
+          'LIEU ENROLEMENT',
+          'LIEU D ENROLEMENT',
+          'LIEUDANROLEMENT',
+          'ENROLEMENT',
+        ],
+        RANGEMENT: ['RANGEMENT', 'RANGE', 'CASIER'],
+        'DATE DE NAISSANCE': [
+          'DATE DE NAISSANCE',
+          'DATENAISSANCE',
+          'DATE_NAISSANCE',
+          'DDN',
+          'NAISSANCE',
+        ],
+        'LIEU NAISSANCE': [
+          'LIEU NAISSANCE',
+          'LIEUNAISSANCE',
+          'LIEU_NAISSANCE',
+          'LIEU DE NAISSANCE',
+        ],
+        CONTACT: ['CONTACT', 'TELEPHONE', 'TEL', 'PHONE', 'MOBILE'],
+        DELIVRANCE: ['DELIVRANCE', 'DÉLIVRANCE', 'RETIRE', 'RETIRÉ', 'LIVRÉ', 'LIVRE'],
+        'CONTACT DE RETRAIT': [
+          'CONTACT DE RETRAIT',
+          'CONTACTRETRAIT',
+          'CONTACT_RETRAIT',
+          'TEL RETRAIT',
+        ],
+        'DATE DE DELIVRANCE': [
+          'DATE DE DELIVRANCE',
+          'DATE DELIVRANCE',
+          'DATEDELIVRANCE',
+          'DATE_DELIVRANCE',
+          'DATE RETRAIT',
+        ],
+        COORDINATION: ['COORDINATION', 'COORD', 'ZONE'],
+      };
+
+      const normaliserLigne = (row) => {
+        const normalised = { ...row };
+        for (const [standard, aliases] of Object.entries(HEADER_ALIASES)) {
+          if (normalised[standard] !== undefined) continue; // déjà présent
+          for (const alias of aliases) {
+            if (row[alias] !== undefined) {
+              normalised[standard] = row[alias];
+              break;
+            }
+          }
+        }
+        return normalised;
+      };
+
+      const csvDataNormalisee = csvData.map(normaliserLigne);
+
+      // ✅ Vérifier les en-têtes requis sur les données NORMALISÉES
+      const firstRowNorm = csvDataNormalisee[0];
       const missingHeaders = CONFIG.requiredHeaders.filter(
-        (h) => !Object.keys(firstRow).some((key) => key.toUpperCase() === h)
+        (h) => !Object.keys(firstRowNorm).some((key) => key.toUpperCase() === h)
       );
 
       if (missingHeaders.length > 0) {
-        throw new Error(`En-têtes requis manquants: ${missingHeaders.join(', ')}`);
+        throw new Error(
+          `En-têtes requis manquants: ${missingHeaders.join(', ')}. En-têtes détectés: ${headersDetected.join(', ')}`
+        );
       }
 
       const batchSize = CONFIG.batchSize;
@@ -1514,8 +1583,8 @@ class OptimizedImportExportController {
       const errorDetails = [];
       let processedRows = 0;
 
-      for (let i = 0; i < csvData.length; i += batchSize) {
-        const batch = csvData.slice(i, i + batchSize);
+      for (let i = 0; i < csvDataNormalisee.length; i += batchSize) {
+        const batch = csvDataNormalisee.slice(i, i + batchSize);
         const batchResult = await this.processCSVBatchOptimized(
           client,
           batch,
@@ -1531,12 +1600,12 @@ class OptimizedImportExportController {
         errors += batchResult.errors;
         processedRows += batch.length;
 
-        const progress = Math.round((processedRows / csvData.length) * 100);
+        const progress = Math.round((processedRows / csvDataNormalisee.length) * 100);
         const elapsed = (Date.now() - startTime) / 1000;
         const speed = Math.round(processedRows / elapsed);
 
         console.log(
-          `📈 Progression: ${progress}% (${processedRows}/${csvData.length}) - ${speed} lignes/sec`
+          `📈 Progression: ${progress}% (${processedRows}/${csvDataNormalisee.length}) - ${speed} lignes/sec`
         );
 
         if (batchResult.errors > 0) {
@@ -1551,7 +1620,8 @@ class OptimizedImportExportController {
       await client.query('COMMIT');
 
       const duration = Date.now() - startTime;
-      const speed = csvData.length > 0 ? Math.round(csvData.length / (duration / 1000)) : 0;
+      const speed =
+        csvDataNormalisee.length > 0 ? Math.round(csvDataNormalisee.length / (duration / 1000)) : 0;
 
       await annulationService.enregistrerAction(
         req.user?.id,
@@ -1677,7 +1747,67 @@ class OptimizedImportExportController {
 
       await client.query('BEGIN');
 
-      const csvData = await this.parseFile(req.file.path, req.file.originalname);
+      const csvDataRaw = await this.parseFile(req.file.path, req.file.originalname);
+      const headersDetectedSmart = Object.keys(csvDataRaw[0] || {});
+      console.log(`📋 En-têtes Smart Sync: ${headersDetectedSmart.join(' | ')}`);
+
+      // Même normalisation des en-têtes que pour l'import standard
+      const HEADER_ALIASES_SMART = {
+        NOM: ['NOM', 'NAME', 'LASTNAME', 'LAST NAME', 'FAMILLE'],
+        PRENOMS: ['PRENOMS', 'PRENOM', 'FIRSTNAME', 'FIRST NAME', 'PRÉNOMS', 'PRÉNOM'],
+        'SITE DE RETRAIT': ['SITE DE RETRAIT', 'SITE', 'SITERETRAIT', 'SITE_RETRAIT'],
+        "LIEU D'ENROLEMENT": [
+          "LIEU D'ENROLEMENT",
+          'LIEU DENROLEMENT',
+          'LIEU ENROLEMENT',
+          'LIEU D ENROLEMENT',
+          'ENROLEMENT',
+        ],
+        RANGEMENT: ['RANGEMENT', 'RANGE', 'CASIER'],
+        'DATE DE NAISSANCE': [
+          'DATE DE NAISSANCE',
+          'DATENAISSANCE',
+          'DATE_NAISSANCE',
+          'DDN',
+          'NAISSANCE',
+        ],
+        'LIEU NAISSANCE': [
+          'LIEU NAISSANCE',
+          'LIEUNAISSANCE',
+          'LIEU_NAISSANCE',
+          'LIEU DE NAISSANCE',
+        ],
+        CONTACT: ['CONTACT', 'TELEPHONE', 'TEL', 'PHONE', 'MOBILE'],
+        DELIVRANCE: ['DELIVRANCE', 'DÉLIVRANCE', 'RETIRE', 'RETIRÉ', 'LIVRÉ', 'LIVRE'],
+        'CONTACT DE RETRAIT': [
+          'CONTACT DE RETRAIT',
+          'CONTACTRETRAIT',
+          'CONTACT_RETRAIT',
+          'TEL RETRAIT',
+        ],
+        'DATE DE DELIVRANCE': [
+          'DATE DE DELIVRANCE',
+          'DATE DELIVRANCE',
+          'DATEDELIVRANCE',
+          'DATE_DELIVRANCE',
+          'DATE RETRAIT',
+        ],
+        COORDINATION: ['COORDINATION', 'COORD', 'ZONE'],
+      };
+
+      const csvData = csvDataRaw.map((row) => {
+        const normalised = { ...row };
+        for (const [standard, aliases] of Object.entries(HEADER_ALIASES_SMART)) {
+          if (normalised[standard] !== undefined) continue;
+          for (const alias of aliases) {
+            if (row[alias] !== undefined) {
+              normalised[standard] = row[alias];
+              break;
+            }
+          }
+        }
+        return normalised;
+      });
 
       console.log(`📋 ${csvData.length} lignes à traiter avec fusion intelligente`);
 
@@ -1900,27 +2030,45 @@ class OptimizedImportExportController {
     const worksheet = workbook.worksheets[0];
     if (!worksheet) throw new Error('Le fichier Excel ne contient aucune feuille');
 
+    // ✅ Extraire la valeur brute d'une cellule ExcelJS (gère tous les types)
+    const getCellValue = (cell) => {
+      if (cell === null || cell === undefined) return '';
+      // ExcelJS peut retourner un objet { text, hyperlink } pour les cellules riches
+      if (typeof cell === 'object') {
+        if (cell.text !== undefined) return String(cell.text).trim();
+        if (cell.result !== undefined) return String(cell.result).trim(); // formule
+        if (cell.value !== undefined) return getCellValue(cell.value);
+      }
+      return String(cell).trim();
+    };
+
     const results = [];
     let headers = [];
+    let headerRowFound = false;
 
-    worksheet.eachRow((row, rowNumber) => {
-      const values = row.values.slice(1); // ExcelJS commence à index 1
+    worksheet.eachRow({ includeEmpty: false }, (row) => {
+      // Extraire toutes les valeurs de la ligne
+      const rawValues = [];
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        rawValues[colNumber - 1] = getCellValue(cell.value);
+      });
 
-      if (rowNumber === 1) {
-        // Première ligne = en-têtes, normaliser comme parseCSVStream
-        headers = values.map((h) =>
+      if (!headerRowFound) {
+        // Normaliser les en-têtes exactement comme parseCSVStream
+        headers = rawValues.map((h) =>
           String(h || '')
             .trim()
             .toUpperCase()
             .replace(/[^\w\s'-]/g, '')
             .replace(/\s+/g, ' ')
         );
+        headerRowFound = true;
+        console.log(`📋 En-têtes Excel lus: ${headers.filter(Boolean).join(' | ')}`);
       } else {
-        // Lignes de données
+        // Construire l'objet de données
         const obj = {};
         headers.forEach((header, i) => {
-          const val = values[i];
-          obj[header] = val != null ? String(val).trim() : '';
+          if (header) obj[header] = rawValues[i] || '';
         });
         // Ignorer les lignes complètement vides
         if (Object.values(obj).some((v) => v !== '')) {
@@ -1930,6 +2078,9 @@ class OptimizedImportExportController {
     });
 
     console.log(`✅ Excel parsing terminé: ${results.length} lignes`);
+    if (results.length > 0) {
+      console.log(`📋 Exemple ligne 1: NOM=${results[0].NOM}, PRENOMS=${results[0].PRENOMS}`);
+    }
     return results;
   }
 
