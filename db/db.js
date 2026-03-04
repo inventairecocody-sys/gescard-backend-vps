@@ -1,3 +1,4 @@
+// db/db.js
 const { Pool } = require('pg');
 require('dotenv').config();
 
@@ -67,25 +68,25 @@ const unregisterExportStream = (streamId) => {
 };
 
 // Événements du pool
-pool.on('connect', (client) => {
+pool.on('connect', () => {
   console.log('✅ Nouvelle connexion PostgreSQL établie');
 });
 
-pool.on('acquire', (client) => {
+pool.on('acquire', () => {
   const stats = getPoolStats();
   console.log(`🔗 Client acquis (actifs: ${stats.total - stats.idle}/${stats.total})`);
 });
 
-pool.on('remove', (client) => {
+pool.on('remove', () => {
   console.log('🗑️ Client retiré du pool');
 });
 
-pool.on('error', (err, client) => {
+pool.on('error', (err) => {
   console.error('❌ Erreur PostgreSQL pool:', err.message);
 });
 
 // Requêtes standard avec timing
-const query = async (text, params, options = {}) => {
+const query = async (text, params) => {
   const start = Date.now();
   const isExportQuery =
     text.includes('cartes') && (text.includes('SELECT') || text.includes('select'));
@@ -309,7 +310,7 @@ const waitForPostgres = async (maxAttempts = 15, delay = 2000) => {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       // Requête simple pour tester la connexion
-      const result = await pool.query('SELECT 1 as connection_test');
+      await pool.query('SELECT 1 as connection_test');
       console.log(`✅ PostgreSQL connecté (tentative ${attempt}/${maxAttempts})`);
 
       // Récupérer quelques infos utiles

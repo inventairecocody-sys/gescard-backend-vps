@@ -1,6 +1,7 @@
+// routes/statistiques.js
 const express = require('express');
 const router = express.Router();
-const db = require('../db/db'); // Renommé pour éviter le shadowing
+const db = require('../db/db');
 const { verifierToken } = require('../middleware/auth');
 const role = require('../middleware/verificationRole');
 const permission = require('../middleware/permission');
@@ -97,7 +98,6 @@ const formatSites = (rows) =>
 
 // Authentification sur toutes les routes
 router.use(verifierToken);
-router.use(permission.peutVoirInfosSensibles);
 
 // Middleware de logging
 router.use((req, res, next) => {
@@ -221,6 +221,11 @@ router.get('/globales', permission.peutVoirStatistiques, async (req, res) => {
 /**
  * 🔹 STATISTIQUES PAR SITE AVEC CACHE ET FILTRAGE PAR COORDINATION
  * GET /api/statistiques/sites
+ *
+ * ✅ CORRECTION : Le cache stockait l'objet response entier { sites:[...], totals, count }
+ * ce qui faisait que response.data.sites retournait un objet au lieu d'un tableau,
+ * causant l'erreur "TypeError: Y.map is not a function" côté frontend.
+ * Fix : on stocke uniquement le tableau `stats` dans cache.sites.data
  */
 router.get('/sites', permission.peutVoirStatistiques, async (req, res) => {
   try {
@@ -234,8 +239,30 @@ router.get('/sites', permission.peutVoirStatistiques, async (req, res) => {
       console.log(
         `📦 Statistiques par site servies depuis le cache pour coordination: ${coordination || 'toutes'}`
       );
+
+      // ✅ CORRIGÉ : cache.sites.data contient maintenant le tableau stats directement
+      const cachedStats = STATS_CONFIG.cache.sites.data;
+
+      // Recalculer les totaux depuis le cache
+      const totals = Array.isArray(cachedStats)
+        ? cachedStats.reduce(
+            (acc, site) => ({
+              total: acc.total + site.total,
+              retires: acc.retires + site.retires,
+              restants: acc.restants + site.restants,
+            }),
+            { total: 0, retires: 0, restants: 0 }
+          )
+        : { total: 0, retires: 0, restants: 0 };
+
       return res.json({
-        sites: STATS_CONFIG.cache.sites.data,
+        sites: cachedStats,
+        totals: {
+          ...totals,
+          tauxRetraitGlobal:
+            totals.total > 0 ? Math.round((totals.retires / totals.total) * 100) : 0,
+        },
+        count: Array.isArray(cachedStats) ? cachedStats.length : 0,
         cached: true,
         cacheAge: Math.round((Date.now() - STATS_CONFIG.cache.sites.timestamp) / 1000) + 's',
         filtres: {
@@ -309,9 +336,11 @@ router.get('/sites', permission.peutVoirStatistiques, async (req, res) => {
       },
     };
 
-    // Mettre en cache
+    // ✅ CORRIGÉ : on stocke uniquement le tableau `stats` (pas l'objet response entier)
+    // Avant ce fix, data: response faisait que cache.sites.data = { sites:[...], totals, count }
+    // et response.data.sites côté frontend recevait cet objet au lieu du tableau → .map() plantait
     STATS_CONFIG.cache.sites = {
-      data: response,
+      data: stats,
       timestamp: Date.now(),
       coordination: coordination,
     };

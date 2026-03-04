@@ -1,41 +1,60 @@
 # Crée le fichier .gitignore
 @"
-# Node modules
+# ==============================
+# NODE
+# ==============================
 node_modules/
 
-# Environment variables
+# ==============================
+# VARIABLES D'ENVIRONNEMENT
+# ==============================
 .env
 .env.local
 .env.production
 .env.development
 
-# Google tokens
+# ==============================
+# FICHIERS SENSIBLES
+# ==============================
 google-tokens-backup.json
 get-token.js
+consolider.js
 
-# Render
+# ==============================
+# RENDER
+# ==============================
 render.yaml
 
-# Logs
+# ==============================
+# LOGS
+# ==============================
 logs/
 *.log
 npm-debug.log*
 
-# Uploads (garder le dossier mais pas les fichiers)
+# ==============================
+# UPLOADS (garder le dossier mais pas les fichiers)
+# ==============================
 uploads/*
 !uploads/.gitkeep
 
-# Backups locaux
+# ==============================
+# BACKUPS LOCAUX
+# ==============================
 backups/
 *.dump
 *.sql
 *.gz
 
-# OS files
+# ==============================
+# FICHIERS SYSTEME
+# ==============================
 .DS_Store
 Thumbs.db
 
-# IDE
+# ==============================
+# IDE / EDITEURS
+# ==============================
 .vscode/
 .idea/
 *.swp
