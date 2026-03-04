@@ -2175,9 +2175,8 @@ class OptimizedImportExportController {
               "CONTACT DE RETRAIT" = $7,
               "DATE DE DELIVRANCE" = $8,
               coordination = $9,
-              dateimport = NOW(),
-              importbatchid = $10
-            WHERE id = $11
+              dateimport = NOW()
+            WHERE id = $10
           `,
             [
               insertData["LIEU D'ENROLEMENT"],
@@ -2189,7 +2188,6 @@ class OptimizedImportExportController {
               insertData['CONTACT DE RETRAIT'],
               insertData['DATE DE DELIVRANCE'],
               insertData['COORDINATION'],
-              importBatchID,
               existing.rows[0].id,
             ]
           );
@@ -2201,8 +2199,8 @@ class OptimizedImportExportController {
             INSERT INTO cartes (
               "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
               "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
-              "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, importbatchid, sourceimport
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+              "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, dateimport
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
           `,
             [
               insertData["LIEU D'ENROLEMENT"],
@@ -2217,8 +2215,6 @@ class OptimizedImportExportController {
               insertData['CONTACT DE RETRAIT'],
               insertData['DATE DE DELIVRANCE'],
               insertData['COORDINATION'],
-              importBatchID,
-              'csv_import',
             ]
           );
 
@@ -2227,6 +2223,11 @@ class OptimizedImportExportController {
       } catch (error) {
         result.errors++;
         result.errorDetails.push(`Ligne ${lineNum}: ${error.message}`);
+        // ✅ Logger la première erreur en détail pour diagnostic
+        if (result.errors === 1) {
+          console.error(`❌ Erreur import ligne ${lineNum}:`, error.message);
+          console.error(`   Data reçue:`, JSON.stringify(data).substring(0, 300));
+        }
       }
     }
 
@@ -2318,8 +2319,8 @@ class OptimizedImportExportController {
       INSERT INTO cartes (
         "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
         "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
-        "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, importbatchid, sourceimport
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, dateimport
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
       RETURNING id
     `,
       [
@@ -2335,8 +2336,6 @@ class OptimizedImportExportController {
         insertData['CONTACT DE RETRAIT'],
         insertData['DATE DE DELIVRANCE'],
         insertData['COORDINATION'],
-        importBatchID,
-        'smart_import',
       ]
     );
 
