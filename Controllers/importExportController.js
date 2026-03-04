@@ -1579,6 +1579,7 @@ class OptimizedImportExportController {
       const batchSize = CONFIG.batchSize;
       let imported = 0;
       let updated = 0;
+      let duplicates = 0;
       let errors = 0;
       const errorDetails = [];
       let processedRows = 0;
@@ -1597,6 +1598,7 @@ class OptimizedImportExportController {
 
         imported += batchResult.imported;
         updated += batchResult.updated;
+        duplicates += batchResult.duplicates || 0;
         errors += batchResult.errors;
         processedRows += batch.length;
 
@@ -1609,7 +1611,7 @@ class OptimizedImportExportController {
         );
 
         if (batchResult.errors > 0) {
-          errorDetails.push(...batchResult.errorDetails.slice(0, 5));
+          errorDetails.push(...batchResult.errorDetails.slice(0, 10));
         }
 
         if (i % (batchSize * 5) === 0) {
@@ -1629,29 +1631,30 @@ class OptimizedImportExportController {
         req.user?.nomComplet || req.user?.nomUtilisateur,
         req.user?.role,
         req.user?.agence || '',
-        `Import CSV terminé: ${imported} importées, ${updated} mises à jour, ${errors} erreurs en ${duration}ms`,
+        `Import terminé: ${imported} nouvelles, ${updated} mises à jour, ${duplicates} doublons bloqués, ${errors} erreurs en ${duration}ms`,
         'IMPORT_COMPLETE',
         'Cartes',
         null,
         null,
-        { imported, updated, errors, duration, speed },
+        { imported, updated, duplicates, errors, duration, speed },
         req.ip,
         importBatchId,
         req.user?.coordination
       );
 
-      console.log(`✅ Import CSV terminé en ${duration}ms (${speed} lignes/sec)`);
+      console.log(`✅ Import terminé en ${duration}ms (${speed} lignes/sec)`);
       console.log(
-        `📊 Résultats: ${imported} nouvelles, ${updated} mises à jour, ${errors} erreurs`
+        `📊 Résultats: ${imported} nouvelles, ${updated} mises à jour, ${duplicates} doublons bloqués, ${errors} erreurs`
       );
 
       res.json({
         success: true,
-        message: 'Import CSV terminé',
+        message: 'Import terminé avec succès',
         stats: {
-          totalRows: csvData.length,
+          totalRows: csvDataNormalisee.length,
           imported,
           updated,
+          duplicates,
           errors,
           importBatchID: importBatchId,
         },
@@ -1660,7 +1663,8 @@ class OptimizedImportExportController {
           lines_per_second: speed,
           file_size_mb: Math.round(fileSizeMB * 10) / 10,
         },
-        errors: errorDetails.slice(0, 10),
+        // ✅ Erreurs lisibles : max 20 renvoyées au frontend
+        errors: errorDetails.slice(0, 20),
       });
     } catch (error) {
       console.error('❌ Erreur import CSV:', error);
@@ -1833,11 +1837,17 @@ class OptimizedImportExportController {
 
           const nom = item.NOM.toString().trim();
           const prenoms = item.PRENOMS.toString().trim();
-          const siteRetrait = item['SITE DE RETRAIT']?.toString().trim() || '';
+          const dateNaissanceSmartRaw = this.formatDate(item['DATE DE NAISSANCE']);
+          const lieuNaissanceSmartRaw = this.sanitizeString(item['LIEU NAISSANCE']);
 
+          // ✅ Doublon = même nom + mêmes prénoms + même date de naissance + même lieu de naissance
           const existingCarte = await client.query(
-            `SELECT * FROM cartes WHERE nom = $1 AND prenoms = $2 AND "SITE DE RETRAIT" = $3`,
-            [nom, prenoms, siteRetrait]
+            `SELECT * FROM cartes
+             WHERE LOWER(TRIM(nom)) = LOWER($1)
+               AND LOWER(TRIM(prenoms)) = LOWER($2)
+               AND "DATE DE NAISSANCE" = $3
+               AND LOWER(TRIM("LIEU NAISSANCE")) = LOWER($4)`,
+            [nom, prenoms, dateNaissanceSmartRaw, lieuNaissanceSmartRaw]
           );
 
           if (existingCarte.rows.length > 0) {
@@ -2107,6 +2117,7 @@ class OptimizedImportExportController {
     const result = {
       imported: 0,
       updated: 0,
+      duplicates: 0,
       errors: 0,
       errorDetails: [],
     };
@@ -2114,6 +2125,9 @@ class OptimizedImportExportController {
     for (let i = 0; i < batch.length; i++) {
       const data = batch[i];
       const lineNum = startLine + i;
+      // ✅ Déclarés avant le try pour être accessibles dans le catch
+      let nom = '';
+      let prenoms = '';
 
       try {
         if (!data.COORDINATION && userCoordination && userRole === 'Gestionnaire') {
@@ -2126,13 +2140,20 @@ class OptimizedImportExportController {
           continue;
         }
 
-        const nom = data.NOM.toString().trim();
-        const prenoms = data.PRENOMS.toString().trim();
+        nom = data.NOM.toString().trim();
+        prenoms = data.PRENOMS.toString().trim();
         const siteRetrait = data['SITE DE RETRAIT']?.toString().trim() || '';
+        const dateNaissanceRaw = this.formatDate(data['DATE DE NAISSANCE']);
+        const lieuNaissanceRaw = this.sanitizeString(data['LIEU NAISSANCE']);
 
+        // ✅ Doublon = même nom + mêmes prénoms + même date de naissance + même lieu de naissance
         const existing = await client.query(
-          `SELECT id, coordination FROM cartes WHERE nom = $1 AND prenoms = $2 AND "SITE DE RETRAIT" = $3`,
-          [nom, prenoms, siteRetrait]
+          `SELECT id, coordination, "SITE DE RETRAIT" as site FROM cartes
+           WHERE LOWER(TRIM(nom)) = LOWER($1)
+             AND LOWER(TRIM(prenoms)) = LOWER($2)
+             AND "DATE DE NAISSANCE" = $3
+             AND LOWER(TRIM("LIEU NAISSANCE")) = LOWER($4)`,
+          [nom, prenoms, dateNaissanceRaw, lieuNaissanceRaw]
         );
 
         const insertData = {
@@ -2151,27 +2172,29 @@ class OptimizedImportExportController {
         };
 
         if (existing.rows.length > 0) {
+          // Doublon trouvé — bloquer si Gestionnaire et coordination différente
           if (
             userRole === 'Gestionnaire' &&
             existing.rows[0].coordination &&
             existing.rows[0].coordination !== userCoordination
           ) {
-            result.errors++;
+            result.duplicates++;
             result.errorDetails.push(
-              `Ligne ${lineNum}: Carte existante dans une autre coordination (${existing.rows[0].coordination})`
+              `⛔ Ligne ${lineNum} [DOUBLON BLOQUÉ] "${nom} ${prenoms}" (né le ${dateNaissanceRaw || '?'} à ${lieuNaissanceRaw || '?'}) existe déjà dans la coordination "${existing.rows[0].coordination}" — modification non autorisée`
             );
             continue;
           }
 
+          // Mise à jour de la carte existante
           await client.query(
             `
             UPDATE cartes SET
               "LIEU D'ENROLEMENT" = $1,
-              "RANGEMENT" = $2,
+              rangement = $2,
               "DATE DE NAISSANCE" = $3,
               "LIEU NAISSANCE" = $4,
-              "CONTACT" = $5,
-              "DELIVRANCE" = $6,
+              contact = $5,
+              delivrance = $6,
               "CONTACT DE RETRAIT" = $7,
               "DATE DE DELIVRANCE" = $8,
               coordination = $9,
@@ -2192,8 +2215,9 @@ class OptimizedImportExportController {
             ]
           );
 
-          result.updated++;
+          result.updated++; // mise à jour réussie — pas un doublon bloqué
         } else {
+          // ✅ Nouvelle carte — colonnes en minuscules sans guillemets
           await client.query(
             `
             INSERT INTO cartes (
@@ -2222,11 +2246,37 @@ class OptimizedImportExportController {
         }
       } catch (error) {
         result.errors++;
-        result.errorDetails.push(`Ligne ${lineNum}: ${error.message}`);
-        // ✅ Logger la première erreur en détail pour diagnostic
-        if (result.errors === 1) {
-          console.error(`❌ Erreur import ligne ${lineNum}:`, error.message);
-          console.error(`   Data reçue:`, JSON.stringify(data).substring(0, 300));
+        // ✅ Message d'erreur détaillé et compréhensible
+        let messageErreur = error.message;
+
+        if (error.message.includes("n'existe pas")) {
+          // Erreur colonne PostgreSQL — extraire le nom de la colonne
+          const match = error.message.match(/«\s*(.+?)\s*»/);
+          const colonne = match ? match[1] : '?';
+          messageErreur = `Colonne inconnue en base de données: "${colonne}" — contactez l'administrateur`;
+        } else if (
+          error.message.includes('violates not-null') ||
+          error.message.includes('null value')
+        ) {
+          messageErreur = `Champ obligatoire manquant (NOM ou PRENOMS vide)`;
+        } else if (error.message.includes('duplicate key') || error.message.includes('unique')) {
+          messageErreur = `Doublon détecté — cette carte existe déjà`;
+        } else if (error.message.includes('invalid input syntax')) {
+          const match = error.message.match(/type "(.+?)"/);
+          const type = match ? match[1] : 'inconnu';
+          messageErreur = `Format de données invalide pour le type "${type}" — vérifiez les dates et numéros`;
+        }
+
+        result.errorDetails.push(
+          `❌ Ligne ${lineNum} [${nom || '?'} ${prenoms || '?'}]: ${messageErreur}`
+        );
+
+        // Logger en détail dans la console serveur
+        if (result.errors <= 3) {
+          console.error(`❌ Erreur import ligne ${lineNum} (${nom} ${prenoms}):`, error.message);
+          console.error(`   Data:`, JSON.stringify(data).substring(0, 200));
+        } else if (result.errors === 4) {
+          console.error(`❌ ... (autres erreurs supprimées des logs)`);
         }
       }
     }
