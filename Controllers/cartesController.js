@@ -518,9 +518,22 @@ const updateCarte = async (req, res) => {
       coordination: 'coordination',
     };
 
+    // ✅ Champs en lecture seule — jamais mis à jour (calculés, identifiants, métadonnées)
+    const CHAMPS_LECTURE_SEULE = new Set([
+      'id',
+      'dateCreation',
+      'dateimport',
+      'dateModification',
+      'createurId',
+      'moderateurId',
+      'prenom', // alias frontend de prenoms, ne pas envoyer en double
+    ]);
+
     const normaliserCles = (data) => {
       const normalise = {};
       for (const [key, value] of Object.entries(data)) {
+        // Ignorer les champs en lecture seule
+        if (CHAMPS_LECTURE_SEULE.has(key)) continue;
         const dbKey = CAMEL_TO_DB[key] || key; // fallback: utiliser la clé telle quelle
         normalise[dbKey] = value;
       }
