@@ -1,5 +1,5 @@
 const db = require('../db/db');
-const annulationService = require('../services/annulationService');
+const annulationService = require('../Services/annulationService');
 
 // 🔧 CONFIGURATION API EXTERNE - OPTIMISÉE POUR LWS
 const API_CONFIG = {
