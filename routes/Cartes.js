@@ -1,12 +1,12 @@
+// routes/Cartes.js
 const express = require('express');
 const router = express.Router();
 const db = require('../db/db');
-const { verifierToken } = require('../middleware/auth');
-const role = require('../middleware/verificationRole');
-const colonnes = require('../middleware/filtreColonnes');
+const { verifyToken: verifierToken } = require('../middleware/auth');
+const role = require('../middleware/role');
+const colonnes = require('../middleware/colonnes');
 const permission = require('../middleware/permission');
 const cartesController = require('../Controllers/cartesController');
-
 // ============================================
 // MIDDLEWARE
 // ============================================
@@ -356,47 +356,136 @@ router.get('/modifications', async (req, res) => {
  */
 router.get('/', async (req, res) => {
   try {
-    const { site, nom, prenoms, dateNaissance, limit = 100, offset = 0 } = req.query;
+    const {
+      // Params envoyés par le frontend (camelCase)
+      nom,
+      prenoms,
+      siteRetrait,
+      lieuEnrolement,
+      rangement,
+      dateNaissance,
+      lieuNaissance,
+      contact,
+      contactRetrait,
+      delivrance,
+      dateDelivrance,
+      coordination,
+      // Ancien param "site" conservé pour compatibilité
+      site,
+      // Pagination
+      page = 1,
+      limit = 50,
+    } = req.query;
 
-    let query = 'SELECT * FROM cartes WHERE 1=1';
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(parseInt(limit) || 50, 500);
+    const offset = (pageNum - 1) * limitNum;
+
+    // ✅ SELECT avec aliases camelCase pour le frontend
+    let dataQuery = `
+      SELECT
+        id,
+        coordination,
+        "LIEU D'ENROLEMENT"     AS "lieuEnrolement",
+        "SITE DE RETRAIT"       AS "siteRetrait",
+        rangement,
+        nom,
+        prenoms,
+        TO_CHAR("DATE DE NAISSANCE", 'YYYY-MM-DD') AS "dateNaissance",
+        "LIEU NAISSANCE"        AS "lieuNaissance",
+        contact,
+        delivrance,
+        "CONTACT DE RETRAIT"    AS "contactRetrait",
+        TO_CHAR("DATE DE DELIVRANCE", 'YYYY-MM-DD') AS "dateDelivrance",
+        TO_CHAR(dateimport, 'YYYY-MM-DD HH24:MI:SS') AS "dateCreation"
+      FROM cartes
+      WHERE 1=1
+    `;
+
     const params = [];
 
-    if (site) {
-      params.push(site);
-      query += ` AND "SITE DE RETRAIT" = $${params.length}`;
-    }
-
+    // ─── Filtres ───────────────────────────────────────────────
     if (nom) {
       params.push(`%${nom}%`);
-      query += ` AND nom ILIKE $${params.length}`;
+      dataQuery += ` AND nom ILIKE $${params.length}`;
     }
-
     if (prenoms) {
       params.push(`%${prenoms}%`);
-      query += ` AND prenoms ILIKE $${params.length}`;
+      dataQuery += ` AND prenoms ILIKE $${params.length}`;
     }
-
+    if (siteRetrait || site) {
+      params.push(`%${siteRetrait || site}%`);
+      dataQuery += ` AND "SITE DE RETRAIT" ILIKE $${params.length}`;
+    }
+    if (lieuEnrolement) {
+      params.push(`%${lieuEnrolement}%`);
+      dataQuery += ` AND "LIEU D'ENROLEMENT" ILIKE $${params.length}`;
+    }
+    if (rangement) {
+      params.push(`%${rangement}%`);
+      dataQuery += ` AND rangement ILIKE $${params.length}`;
+    }
     if (dateNaissance) {
       params.push(dateNaissance);
-      query += ` AND "DATE DE NAISSANCE" = $${params.length}`;
+      dataQuery += ` AND "DATE DE NAISSANCE" = $${params.length}`;
+    }
+    if (lieuNaissance) {
+      params.push(`%${lieuNaissance}%`);
+      dataQuery += ` AND "LIEU NAISSANCE" ILIKE $${params.length}`;
+    }
+    if (contact) {
+      params.push(`%${contact}%`);
+      dataQuery += ` AND contact ILIKE $${params.length}`;
+    }
+    if (contactRetrait) {
+      params.push(`%${contactRetrait}%`);
+      dataQuery += ` AND "CONTACT DE RETRAIT" ILIKE $${params.length}`;
+    }
+    if (delivrance !== undefined && delivrance !== '') {
+      // Le frontend envoie true/false (boolean) ou 'oui'/'non' (string)
+      if (delivrance === true || delivrance === 'true' || delivrance === 'oui') {
+        dataQuery += ` AND delivrance IS NOT NULL AND TRIM(COALESCE(delivrance,'')) != '' AND UPPER(delivrance) != 'NON'`;
+      } else if (delivrance === false || delivrance === 'false' || delivrance === 'non') {
+        dataQuery += ` AND (delivrance IS NULL OR TRIM(COALESCE(delivrance,'')) = '' OR UPPER(delivrance) = 'NON')`;
+      }
+    }
+    if (dateDelivrance) {
+      params.push(dateDelivrance);
+      dataQuery += ` AND "DATE DE DELIVRANCE" = $${params.length}`;
+    }
+    if (coordination) {
+      params.push(coordination);
+      dataQuery += ` AND coordination = $${params.length}`;
     }
 
-    query += ` ORDER BY nom, prenoms LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(parseInt(limit), parseInt(offset));
+    // Filtre automatique par coordination selon le rôle
+    if (req.user?.role === 'Gestionnaire' && req.user?.coordination && !coordination) {
+      params.push(req.user.coordination);
+      dataQuery += ` AND coordination = $${params.length}`;
+    }
 
-    const result = await db.query(query, params);
+    // ─── Count ─────────────────────────────────────────────────
+    const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE 1=1${dataQuery.split('WHERE 1=1')[1]}`;
 
-    // Compter le total
-    const countResult = await db.query('SELECT COUNT(*) as total FROM cartes');
+    const [countResult] = await Promise.all([db.query(countQuery, params)]);
+    const total = parseInt(countResult.rows[0].total);
+
+    // ─── Pagination ────────────────────────────────────────────
+    dataQuery += ` ORDER BY nom, prenoms LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limitNum, offset);
+
+    const result = await db.query(dataQuery, params);
 
     res.json({
       success: true,
       data: result.rows,
       pagination: {
-        total: parseInt(countResult.rows[0].total),
-        limit: parseInt(limit),
-        offset: parseInt(offset),
-        pages: Math.ceil(parseInt(countResult.rows[0].total) / parseInt(limit)),
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+        hasNext: pageNum < Math.ceil(total / limitNum),
+        hasPrev: pageNum > 1,
       },
       timestamp: new Date().toISOString(),
     });
