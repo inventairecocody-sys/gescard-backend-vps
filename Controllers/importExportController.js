@@ -1490,7 +1490,7 @@ class OptimizedImportExportController {
 
       console.log(`📊 Taille fichier: ${Math.round(fileSizeMB)}MB`);
 
-      const csvData = await this.parseCSVStream(req.file.path);
+      const csvData = await this.parseFile(req.file.path, req.file.originalname);
 
       console.log(`📋 ${csvData.length} lignes à traiter`);
 
@@ -1677,7 +1677,7 @@ class OptimizedImportExportController {
 
       await client.query('BEGIN');
 
-      const csvData = await this.parseCSVStream(req.file.path);
+      const csvData = await this.parseFile(req.file.path, req.file.originalname);
 
       console.log(`📋 ${csvData.length} lignes à traiter avec fusion intelligente`);
 
@@ -1858,11 +1858,14 @@ class OptimizedImportExportController {
           csv({
             separator: CONFIG.csvDelimiter,
             mapHeaders: ({ header }) => {
-              return header
-                .trim()
-                .toUpperCase()
-                .replace(/[^\w\s]/g, '')
-                .replace(/\s+/g, ' ');
+              return (
+                header
+                  .trim()
+                  .toUpperCase()
+                  // ✅ Garder les apostrophes (LIEU D'ENROLEMENT) et tirets
+                  .replace(/[^\w\s'-]/g, '')
+                  .replace(/\s+/g, ' ')
+              );
             },
             mapValues: ({ value }) => {
               if (!value) return '';
@@ -1887,6 +1890,58 @@ class OptimizedImportExportController {
           reject(new Error(`Erreur parsing CSV: ${error.message}`));
         });
     });
+  }
+
+  // ✅ Parsing Excel (.xlsx / .xls) → même format de données que parseCSVStream
+  async parseExcelFile(filePath) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(filePath);
+
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) throw new Error('Le fichier Excel ne contient aucune feuille');
+
+    const results = [];
+    let headers = [];
+
+    worksheet.eachRow((row, rowNumber) => {
+      const values = row.values.slice(1); // ExcelJS commence à index 1
+
+      if (rowNumber === 1) {
+        // Première ligne = en-têtes, normaliser comme parseCSVStream
+        headers = values.map((h) =>
+          String(h || '')
+            .trim()
+            .toUpperCase()
+            .replace(/[^\w\s'-]/g, '')
+            .replace(/\s+/g, ' ')
+        );
+      } else {
+        // Lignes de données
+        const obj = {};
+        headers.forEach((header, i) => {
+          const val = values[i];
+          obj[header] = val != null ? String(val).trim() : '';
+        });
+        // Ignorer les lignes complètement vides
+        if (Object.values(obj).some((v) => v !== '')) {
+          results.push(obj);
+        }
+      }
+    });
+
+    console.log(`✅ Excel parsing terminé: ${results.length} lignes`);
+    return results;
+  }
+
+  // ✅ Détecte automatiquement le format (CSV ou Excel) selon l'extension du fichier
+  async parseFile(filePath, originalName) {
+    const ext = (originalName || filePath).toLowerCase().split('.').pop();
+    if (ext === 'xlsx' || ext === 'xls') {
+      console.log(`📊 Format détecté: Excel (${ext})`);
+      return this.parseExcelFile(filePath);
+    }
+    console.log(`📊 Format détecté: CSV`);
+    return this.parseCSVStream(filePath);
   }
 
   async processCSVBatchOptimized(
