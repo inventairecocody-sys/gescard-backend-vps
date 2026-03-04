@@ -3,8 +3,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/db');
 const { verifyToken: verifierToken } = require('../middleware/auth');
-const role = require('../middleware/role');
-const colonnes = require('../middleware/colonnes');
+const role = require('../middleware/verificationRole'); // ✅ corrigé: était 'colonnes'
+const colonnes = require('../middleware/filtreColonnes'); // ✅ corrigé: était '../middleware/colonnes'
 const permission = require('../middleware/permission');
 const cartesController = require('../Controllers/cartesController');
 // ============================================
@@ -141,7 +141,7 @@ router.post('/sync', async (req, res) => {
       inserted: 0,
       updated: 0,
       errors: 0,
-      lastSync: new Date().toISOString(), // Nouvelle date de synchronisation
+      lastSync: new Date().toISOString(),
     };
 
     for (const item of itemsToSync) {
@@ -357,7 +357,6 @@ router.get('/modifications', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const {
-      // Params envoyés par le frontend (camelCase)
       nom,
       prenoms,
       siteRetrait,
@@ -370,9 +369,7 @@ router.get('/', async (req, res) => {
       delivrance,
       dateDelivrance,
       coordination,
-      // Ancien param "site" conservé pour compatibilité
       site,
-      // Pagination
       page = 1,
       limit = 50,
     } = req.query;
@@ -381,7 +378,6 @@ router.get('/', async (req, res) => {
     const limitNum = Math.min(parseInt(limit) || 50, 500);
     const offset = (pageNum - 1) * limitNum;
 
-    // ✅ SELECT avec aliases camelCase pour le frontend
     let dataQuery = `
       SELECT
         id,
@@ -404,7 +400,6 @@ router.get('/', async (req, res) => {
 
     const params = [];
 
-    // ─── Filtres ───────────────────────────────────────────────
     if (nom) {
       params.push(`%${nom}%`);
       dataQuery += ` AND nom ILIKE $${params.length}`;
@@ -442,7 +437,6 @@ router.get('/', async (req, res) => {
       dataQuery += ` AND "CONTACT DE RETRAIT" ILIKE $${params.length}`;
     }
     if (delivrance !== undefined && delivrance !== '') {
-      // Le frontend envoie true/false (boolean) ou 'oui'/'non' (string)
       if (delivrance === true || delivrance === 'true' || delivrance === 'oui') {
         dataQuery += ` AND delivrance IS NOT NULL AND TRIM(COALESCE(delivrance,'')) != '' AND UPPER(delivrance) != 'NON'`;
       } else if (delivrance === false || delivrance === 'false' || delivrance === 'non') {
@@ -464,13 +458,10 @@ router.get('/', async (req, res) => {
       dataQuery += ` AND coordination = $${params.length}`;
     }
 
-    // ─── Count ─────────────────────────────────────────────────
     const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE 1=1${dataQuery.split('WHERE 1=1')[1]}`;
-
     const [countResult] = await Promise.all([db.query(countQuery, params)]);
     const total = parseInt(countResult.rows[0].total);
 
-    // ─── Pagination ────────────────────────────────────────────
     dataQuery += ` ORDER BY nom, prenoms LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limitNum, offset);
 
@@ -566,7 +557,7 @@ router.get('/list', role.peutAccederPage('inventaire'), async (req, res) => {
  */
 router.get('/statistiques', permission.peutVoirStatistiques, async (req, res) => {
   try {
-    const role = req.user?.role;
+    const userRole = req.user?.role;
     const coordination = req.user?.coordination;
 
     let query = `
@@ -580,7 +571,7 @@ router.get('/statistiques', permission.peutVoirStatistiques, async (req, res) =>
 
     const params = [];
 
-    if (role === 'Gestionnaire' && coordination) {
+    if (userRole === 'Gestionnaire' && coordination) {
       params.push(coordination);
       query += ` AND coordination = $1`;
     }
