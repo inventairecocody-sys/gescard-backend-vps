@@ -22,12 +22,10 @@ const validateUpload = [
  * Routes publiques (sans token)
  */
 router.post('/login', validateLogin, async (req, res) => {
-  // Vérifier les erreurs de validation
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
   }
-
   await syncController.login(req, res);
 });
 
@@ -51,7 +49,6 @@ router.post('/upload', verifySiteToken, validateUpload, async (req, res) => {
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
   }
-
   await syncController.upload(req, res);
 });
 
@@ -68,6 +65,11 @@ router.post('/confirm', verifySiteToken, async (req, res) => {
 // Statut du site
 router.get('/status', verifySiteToken, async (req, res) => {
   await syncController.status(req, res);
+});
+
+// Synchronisation des utilisateurs
+router.get('/users', verifySiteToken, async (req, res) => {
+  await syncController.getUsers(req, res);
 });
 
 module.exports = router;

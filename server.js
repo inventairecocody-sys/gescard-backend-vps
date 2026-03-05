@@ -18,11 +18,8 @@ const journalRequetes = require('./middleware/journalRequetes');
 const { securityHeaders } = require('./middleware/apiAuth');
 
 // ========== MIDDLEWARE DE SÉCURITÉ SUPPLÉMENTAIRE ==========
-// Protection contre les tentatives d'accès aux fichiers sensibles
 const securityMiddleware = (req, res, next) => {
-  // Bloquer les tentatives d'accès aux fichiers sensibles
   const blockedPaths = ['.env', 'config', '.git', 'wp-admin', 'wp-content', 'php', 'sql'];
-
   if (blockedPaths.some((path) => req.url.toLowerCase().includes(path))) {
     console.warn(`🚨 Tentative d'accès bloquée: ${req.url} de ${req.ip}`);
     return res.status(403).json({
@@ -48,11 +45,11 @@ const statistiquesRoutes = require('./routes/statistiques');
 const externalApiRoutes = require('./routes/externalApi');
 const backupRoutes = require('./routes/backupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
+const updatesRoutes = require('./routes/updatesroutes'); // ✅ Nouveau
 
-const app = express(); // ✅ DÉCLARATION DE app EN PREMIER
+const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ CONFIGURATION TRUST PROXY (après déclaration de app)
 app.set('trust proxy', 1);
 
 // ========== CRÉATION DES DOSSIERS NÉCESSAIRES ==========
@@ -83,7 +80,6 @@ async function setupBackupSystem() {
     const PostgreSQLBackup = require('./backup-postgres');
     const backupService = new PostgreSQLBackup();
 
-    // Vérifier si la base est vide (nouvelle installation)
     const { Client } = require('pg');
     const client = new Client({
       connectionString: process.env.DATABASE_URL,
@@ -97,7 +93,6 @@ async function setupBackupSystem() {
 
     console.log(`📊 Base de données: ${carteCount} cartes trouvées`);
 
-    // Backup automatique tous les jours à 2h du matin
     cron.schedule('0 2 * * *', async () => {
       console.log('⏰ Backup automatique programmé...');
       try {
@@ -126,10 +121,8 @@ app.use(
   })
 );
 
-// Headers de sécurité supplémentaires
 app.use(securityHeaders);
 
-// Compression GZIP
 app.use(
   compression({
     level: 6,
@@ -142,7 +135,7 @@ app.use(
   })
 );
 
-// Rate Limiting (assoupli pour VPS)
+// Rate Limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5000,
@@ -155,9 +148,13 @@ const limiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Routes exemptées du rate limiting
-const noLimitRoutes = ['/api/health', '/api/test-db', '/api/cors-test'];
-
+const noLimitRoutes = [
+  '/api/health',
+  '/api/test-db',
+  '/api/cors-test',
+  '/api/updates/check',
+  '/api/updates/download',
+];
 app.use((req, res, next) => {
   const isExempt = noLimitRoutes.some((route) => req.path.startsWith(route));
   if (isExempt) return next();
@@ -171,7 +168,7 @@ const allowedOrigins = [
   'https://gescardcocody.com',
   'http://www.gescarcocody.com',
   'https://www.gescarcocody.com',
-  /\.gescardcocody\.com$/, // Accepte tous les sous-domaines
+  /\.gescardcocody\.com$/,
   'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:5174',
@@ -181,19 +178,11 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // En développement, tout accepter
-    if (process.env.NODE_ENV !== 'production') {
-      return callback(null, true);
-    }
-
-    // Si pas d'origine (appel serveur à serveur), accepter
+    if (process.env.NODE_ENV !== 'production') return callback(null, true);
     if (!origin) return callback(null, true);
 
-    // Vérification avec regex et liste
     const allowed = allowedOrigins.some((pattern) => {
-      if (typeof pattern === 'string') {
-        return pattern === origin;
-      }
+      if (typeof pattern === 'string') return pattern === origin;
       return pattern.test(origin);
     });
 
@@ -247,10 +236,8 @@ app.use(
   })
 );
 
-// Middleware de logging personnalisé
 app.use((req, res, next) => {
   const start = Date.now();
-
   res.on('finish', () => {
     const duration = Date.now() - start;
     if (duration > 1000 || res.statusCode >= 400) {
@@ -259,18 +246,15 @@ app.use((req, res, next) => {
       );
     }
   });
-
   next();
 });
 
 // ========== ROUTES PUBLIQUES ==========
 
-// Route de santé
 app.get('/api/health', async (req, res) => {
   try {
     const dbResult = await query('SELECT 1 as ok, current_database() as db, NOW() as time');
     const countResult = await query('SELECT COUNT(*) as total FROM cartes');
-
     const memory = process.memoryUsage();
 
     res.json({
@@ -293,10 +277,10 @@ app.get('/api/health', async (req, res) => {
       environment: process.env.NODE_ENV || 'development',
       uptime: Math.round(process.uptime()) + 's',
       roles: {
-        administrateur: 'Accès complet',
-        gestionnaire: 'Accès limité à sa coordination',
-        chef_equipe: 'Accès inventaire uniquement (3 colonnes)',
-        operateur: 'Lecture seule',
+        administrateur: 'Accès complet — toutes coordinations',
+        gestionnaire: 'Accès limité à sa coordination', // ✅ corrigé
+        chef_equipe: 'Accès à sa coordination — inventaire et cartes',
+        operateur: 'Accès à son site uniquement',
       },
     });
   } catch (error) {
@@ -309,7 +293,6 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Route de test DB
 app.get('/api/test-db', async (req, res) => {
   try {
     const result = await query('SELECT version() as pg_version, NOW() as server_time');
@@ -321,15 +304,10 @@ app.get('/api/test-db', async (req, res) => {
       request_id: req.idRequete,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      request_id: req.idRequete,
-    });
+    res.status(500).json({ success: false, error: error.message, request_id: req.idRequete });
   }
 });
 
-// Test CORS
 app.get('/api/cors-test', (req, res) => {
   res.json({
     message: 'CORS test successful',
@@ -353,21 +331,22 @@ app.use('/api/statistiques', statistiquesRoutes);
 app.use('/api/external', externalApiRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/sync', syncRoutes);
+app.use('/api/updates', updatesRoutes); // ✅ Nouveau
 
 // ========== ROUTE RACINE ==========
 app.get('/', (req, res) => {
   res.json({
-    message: 'API CartesProject PostgreSQL',
-    version: '3.0.0',
+    message: 'API GESCARD PostgreSQL',
+    version: '3.1.0',
     environment: process.env.NODE_ENV || 'development',
     documentation: `${req.protocol}://${req.get('host')}/api`,
     health_check: `${req.protocol}://${req.get('host')}/api/health`,
     requestId: req.idRequete,
     roles_support: {
-      administrateur: '✅ Accès complet',
-      gestionnaire: '✅ Stats filtrées, import/export',
-      chef_equipe: '✅ Inventaire uniquement (3 colonnes)',
-      operateur: '✅ Lecture seule',
+      administrateur: '✅ Accès complet — toutes coordinations',
+      gestionnaire: '✅ Stats et données de sa coordination', // ✅ corrigé
+      chef_equipe: '✅ Données de sa coordination',
+      operateur: '✅ Données de son site uniquement',
     },
     features: {
       bulk_import: true,
@@ -376,23 +355,45 @@ app.get('/', (req, res) => {
       backup_system: !!process.env.GOOGLE_CLIENT_ID,
       annulation_actions: true,
       filtrage_coordination: true,
-      journal_amelioré: true,
+      journal_ameliore: true,
       sync_sites: true,
+      sync_utilisateurs: true,
+      auto_update: true, // ✅ Nouveau
     },
     sync_endpoints: {
       login: 'POST /api/sync/login',
-      test: 'GET /api/sync/test',
+      test: 'GET  /api/sync/test',
       upload: 'POST /api/sync/upload',
-      download: 'GET /api/sync/download',
+      download: 'GET  /api/sync/download',
       confirm: 'POST /api/sync/confirm',
-      status: 'GET /api/sync/status',
+      status: 'GET  /api/sync/status',
+      users: 'GET  /api/sync/users',
+    },
+    statistiques_endpoints: {
+      globales: 'GET  /api/statistiques/globales',
+      sites: 'GET  /api/statistiques/sites',
+      detail: 'GET  /api/statistiques/detail',
+      quick: 'GET  /api/statistiques/quick',
+      evolution: 'GET  /api/statistiques/evolution',
+      imports: 'GET  /api/statistiques/imports',
+      coordinations: 'GET  /api/statistiques/coordinations',
+      refresh: 'POST /api/statistiques/refresh',
+      diagnostic: 'GET  /api/statistiques/diagnostic',
+    },
+    updates_endpoints: {
+      // ✅ Nouveau
+      check: 'GET  /api/updates/check?version=X.X.X',
+      latest: 'GET  /api/updates/latest',
+      download: 'GET  /api/updates/download',
+      publish: 'POST /api/updates/publish',
+      history: 'GET  /api/updates/history',
+      diagnostic: 'GET  /api/updates/diagnostic',
     },
   });
 });
 
 // ========== GESTION DES ERREURS ==========
 
-// 404
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -402,8 +403,7 @@ app.use((req, res) => {
   });
 });
 
-// Gestion globale des erreurs - CORRIGÉ (next supprimé)
-app.use((err, req, res) => {
+app.use((err, req, res, next) => {
   console.error('❌ Error:', {
     message: err.message,
     url: req.url,
@@ -412,7 +412,6 @@ app.use((err, req, res) => {
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
   });
 
-  // Erreur CORS
   if (err.message && err.message.includes('CORS')) {
     return res.status(403).json({
       success: false,
@@ -421,8 +420,6 @@ app.use((err, req, res) => {
       request_id: req.idRequete,
     });
   }
-
-  // Rate limit
   if (err.statusCode === 429) {
     return res.status(429).json({
       success: false,
@@ -430,8 +427,6 @@ app.use((err, req, res) => {
       request_id: req.idRequete,
     });
   }
-
-  // Erreur de fichier trop volumineux
   if (err.message && err.message.includes('too large')) {
     return res.status(413).json({
       success: false,
@@ -440,8 +435,6 @@ app.use((err, req, res) => {
       request_id: req.idRequete,
     });
   }
-
-  // Erreur de validation JWT
   if (err.name === 'JsonWebTokenError') {
     return res.status(401).json({
       success: false,
@@ -450,7 +443,6 @@ app.use((err, req, res) => {
       request_id: req.idRequete,
     });
   }
-
   if (err.name === 'TokenExpiredError') {
     return res.status(401).json({
       success: false,
@@ -460,17 +452,22 @@ app.use((err, req, res) => {
     });
   }
 
-  // Erreur générique
+  // Erreur multer — fichier trop volumineux
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      success: false,
+      message: 'Fichier trop volumineux (max 500MB)',
+      request_id: req.idRequete,
+    });
+  }
+
   const errorResponse = {
     success: false,
     message: 'Internal server error',
     request_id: req.idRequete,
     timestamp: new Date().toISOString(),
   };
-
-  if (process.env.NODE_ENV === 'development') {
-    errorResponse.error = err.message;
-  }
+  if (process.env.NODE_ENV === 'development') errorResponse.error = err.message;
 
   res.status(err.status || 500).json(errorResponse);
 });
@@ -478,36 +475,31 @@ app.use((err, req, res) => {
 // ========== LANCEMENT DU SERVEUR ==========
 const server = app.listen(PORT, async () => {
   console.log('\n🚀 =====================================');
-  console.log(`🚀 Server started on port ${PORT}`);
+  console.log(`🚀 GESCARD API démarrée sur le port ${PORT}`);
   console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`⚡ PID: ${process.pid}`);
   console.log(`⏰ Started at: ${new Date().toLocaleString()}`);
-  console.log(`🧠 RAM disponible: 8 Go`);
   console.log('🚀 =====================================\n');
 
-  // Démarrer le système de backup
   await setupBackupSystem();
 
-  console.log('\n📋 Configuration VPS LWS:');
-  console.log('• Upload limit: 200MB');
-  console.log('• Rate limit: 5000 req/15min');
-  console.log('• Journalisation: middleware/journalRequetes.js');
-  console.log('• Logs: /logs/access.log');
-  console.log('• Backups: /backups/ (local) + Google Drive');
-  console.log('• Connexions DB max: 50');
-  console.log("• Rôles supportés: Administrateur, Gestionnaire, Chef d'équipe, Opérateur");
-  console.log('• Synchronisation sites: ✅ ACTIVE (12 endpoints)');
-  console.log('• Protection fichiers sensibles: ✅ ACTIVE');
-  console.log(
-    "• Nouveautés: Annulation d'actions, Filtrage par coordination, Sync sites, Sécurité renforcée\n"
-  );
+  console.log('\n📋 Configuration:');
+  console.log('• Upload limit        : 200MB (exe: 500MB)');
+  console.log('• Rate limit          : 5000 req/15min');
+  console.log('• Logs                : /logs/access.log');
+  console.log('• Backups             : /backups/ + Google Drive');
+  console.log('• Connexions DB max   : 50');
+  console.log("• Rôles               : Administrateur, Gestionnaire, Chef d'équipe, Opérateur"); // ✅ corrigé
+  console.log('• Sync sites          : ✅ ACTIVE (login/upload/download/confirm/status/users)');
+  console.log('• Sync utilisateurs   : ✅ ACTIVE');
+  console.log('• Statistiques        : ✅ ACTIVE (filtrées par rôle)');
+  console.log('• Auto-update logiciel: ✅ ACTIVE (/api/updates)'); // ✅ Nouveau
+  console.log('• Sécurité            : ✅ ACTIVE\n');
 });
 
-// Configuration des timeouts (augmentés pour VPS)
-server.keepAliveTimeout = 300000; // 5 minutes
-server.headersTimeout = 310000; // Juste au-dessus
+server.keepAliveTimeout = 300000;
+server.headersTimeout = 310000;
 
-// Gestion du shutdown
 process.on('SIGTERM', () => {
   console.log('🛑 SIGTERM received, shutting down gracefully...');
   server.close(() => {
@@ -524,7 +516,6 @@ process.on('SIGINT', () => {
   });
 });
 
-// Gestion des erreurs non capturées
 process.on('unhandledRejection', (reason) => {
   console.error('❌ Unhandled Rejection:', reason);
 });

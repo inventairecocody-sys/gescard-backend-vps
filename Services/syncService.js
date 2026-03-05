@@ -1,12 +1,4 @@
-// ============================================================
-// Services/syncService.js — VERSION CORRIGÉE
-// Corrections appliquées :
-//   1. prepareDownload() → filtre différentiel réel sur sync_timestamp
-//   2. _handleUpdate()   → Last-Write-Wins via timestamp (plus version)
-//   3. _handleDelete()   → Soft delete (deleted_at) au lieu de DELETE
-//   4. processUpload()   → sync_status mis à jour après traitement
-// ============================================================
-
+// Services/syncService.js
 const db = require('../db/db');
 const jwt = require('jsonwebtoken');
 
@@ -17,8 +9,7 @@ const syncService = {
   async authenticateSite(siteId, apiKey) {
     try {
       const result = await db.query(
-        `
-        SELECT
+        `SELECT
           s.id,
           s.nom,
           s.coordination_id,
@@ -29,11 +20,9 @@ const syncService = {
         JOIN coordinations c ON s.coordination_id = c.id
         WHERE s.id       = $1
           AND s.api_key  = $2
-          AND s.is_active = true
-      `,
+          AND s.is_active = true`,
         [siteId, apiKey]
       );
-
       return result.rows[0] || null;
     } catch (error) {
       console.error('❌ Erreur authenticateSite:', error);
@@ -64,16 +53,13 @@ const syncService = {
   async processUpload(site, modifications, lastSync) {
     let historyId;
 
-    // 1. Créer l'entrée dans sync_history
     const histClient = await db.pool.connect();
     try {
       await histClient.query('BEGIN');
       const histResult = await histClient.query(
-        `
-        INSERT INTO sync_history (site_id, sync_start, status)
-        VALUES ($1, NOW(), 'in_progress')
-        RETURNING id
-      `,
+        `INSERT INTO sync_history (site_id, sync_start, status)
+         VALUES ($1, NOW(), 'in_progress')
+         RETURNING id`,
         [site.id]
       );
       historyId = histResult.rows[0].id;
@@ -85,7 +71,6 @@ const syncService = {
       histClient.release();
     }
 
-    // 2. Traiter chaque modification individuellement
     const stats = { inserts: 0, updates: 0, deletes: 0, conflicts: 0, errors: 0 };
     const processed = [];
 
@@ -94,7 +79,6 @@ const syncService = {
       try {
         await client.query('BEGIN');
 
-        // Vérification de coordination
         if (mod.coordination_id !== site.coordination_id) {
           throw new Error(
             `Coordination invalide: attendu ${site.coordination_id}, reçu ${mod.coordination_id}`
@@ -132,7 +116,6 @@ const syncService = {
       }
     }
 
-    // 3. ✅ Marquer les cartes uploadées comme synced côté serveur
     if (processed.length > 0) {
       const successIds = processed
         .filter((p) => p.status === 'success' && p.pg_id)
@@ -140,32 +123,26 @@ const syncService = {
 
       if (successIds.length > 0) {
         await db.query(
-          `
-          UPDATE cartes
-          SET sync_status = 'synced',
-              last_sync_attempt = NOW()
-          WHERE id = ANY($1)
-        `,
+          `UPDATE cartes
+           SET sync_status = 'synced', last_sync_attempt = NOW()
+           WHERE id = ANY($1)`,
           [successIds]
         );
       }
     }
 
-    // 4. Mettre à jour sync_history
     const updClient = await db.pool.connect();
     try {
       await updClient.query('BEGIN');
       await updClient.query(
-        `
-        UPDATE sync_history
-        SET sync_end             = NOW(),
-            uploaded_inserts     = $1,
-            uploaded_updates     = $2,
-            uploaded_deletes     = $3,
-            uploaded_conflicts   = $4,
-            status               = $5
-        WHERE id = $6
-      `,
+        `UPDATE sync_history
+         SET sync_end           = NOW(),
+             uploaded_inserts   = $1,
+             uploaded_updates   = $2,
+             uploaded_deletes   = $3,
+             uploaded_conflicts = $4,
+             status             = $5
+         WHERE id = $6`,
         [
           stats.inserts,
           stats.updates,
@@ -176,14 +153,11 @@ const syncService = {
         ]
       );
 
-      // Mettre à jour last_sync_at sur le site
       await updClient.query(
-        `
-        UPDATE sites
-        SET last_sync_at    = NOW(),
-            last_sync_error = $2
-        WHERE id = $1
-      `,
+        `UPDATE sites
+         SET last_sync_at    = NOW(),
+             last_sync_error = $2
+         WHERE id = $1`,
         [site.id, stats.errors > 0 ? `${stats.errors} erreur(s)` : null]
       );
 
@@ -195,10 +169,8 @@ const syncService = {
       updClient.release();
     }
 
-    // 5. Recalculer les stats du site
     await db.query(`SELECT refresh_site_sync_stats($1)`, [site.id]);
 
-    // 6. Préparer le download différentiel
     const download = await this.prepareDownload(site, lastSync, 1000);
 
     return { historyId, uploaded: stats, download, processed };
@@ -208,37 +180,24 @@ const syncService = {
   // Gérer une insertion
   // ----------------------------------------------------------
   async _handleInsert(client, mod, site) {
-    // Vérifier si local_id existe déjà (idempotence)
     if (mod.local_id) {
       const existing = await client.query(
         `SELECT id FROM cartes WHERE local_id = $1 AND site_proprietaire_id = $2`,
         [mod.local_id, site.id]
       );
       if (existing.rows.length > 0) {
-        return { pg_id: existing.rows[0].id }; // Déjà inséré → OK
+        return { pg_id: existing.rows[0].id };
       }
     }
 
     const result = await client.query(
-      `
-      INSERT INTO cartes (
-        coordination_id,
-        site_proprietaire_id,
-        nom,
-        prenoms,
-        "DATE DE NAISSANCE",
-        "LIEU NAISSANCE",
-        contact,
-        delivrance,
-        "CONTACT DE RETRAIT",
-        "DATE DE DELIVRANCE",
-        version,
-        sync_timestamp,
-        sync_status,
-        local_id
+      `INSERT INTO cartes (
+        coordination_id, site_proprietaire_id, nom, prenoms,
+        "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
+        "CONTACT DE RETRAIT", "DATE DE DELIVRANCE",
+        version, sync_timestamp, sync_status, local_id
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, 1, NOW(), 'synced', $11)
-      RETURNING id
-    `,
+      RETURNING id`,
       [
         mod.coordination_id,
         site.id,
@@ -258,17 +217,13 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // ✅ CORRIGÉ : Last-Write-Wins via sync_timestamp
+  // Last-Write-Wins via sync_timestamp
   // ----------------------------------------------------------
   async _handleUpdate(client, mod, site, historyId) {
-    // Récupérer l'état serveur actuel
     const serverRow = await client.query(
-      `
-      SELECT id, version, sync_timestamp, delivrance,
-             "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", contact
-      FROM cartes
-      WHERE id = $1
-    `,
+      `SELECT id, version, sync_timestamp, delivrance,
+              "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", contact
+       FROM cartes WHERE id = $1`,
       [mod.pg_id]
     );
 
@@ -280,19 +235,15 @@ const syncService = {
     const serverTime = new Date(server.sync_timestamp);
     const clientTime = mod.sync_timestamp ? new Date(mod.sync_timestamp) : new Date(0);
 
-    // ✅ LAST-WRITE-WINS : le client est-il plus récent ?
     if (clientTime <= serverTime) {
-      // Serveur plus récent → on log le conflit et on renvoie la version serveur
       await client.query(
-        `
-        INSERT INTO sync_conflicts (
+        `INSERT INTO sync_conflicts (
           site_id, sync_history_id, carte_id, coordination_id,
           conflict_type, conflict_field,
           client_value, server_value,
           resolution_status, resolution_method
         ) VALUES ($1, $2, $3, $4, 'timestamp_conflict', 'sync_timestamp',
-                  $5, $6, 'resolved', 'last_write_wins')
-      `,
+                  $5, $6, 'resolved', 'last_write_wins')`,
         [
           site.id,
           historyId,
@@ -302,11 +253,9 @@ const syncService = {
           JSON.stringify(server),
         ]
       );
-
       return { conflict: true, pg_id: mod.pg_id, winner: 'server' };
     }
 
-    // Client plus récent → appliquer les modifications
     const updates = [];
     const params = [];
     let paramIdx = 0;
@@ -330,18 +279,13 @@ const syncService = {
     }
 
     if (updates.length === 0) {
-      return { pg_id: mod.pg_id }; // Rien à mettre à jour
+      return { pg_id: mod.pg_id };
     }
 
-    // sync_timestamp et version sont gérés par le trigger trg_cartes_update ✅
     params.push(mod.pg_id);
 
     await client.query(
-      `
-      UPDATE cartes
-      SET ${updates.join(', ')}
-      WHERE id = $${paramIdx + 1}
-    `,
+      `UPDATE cartes SET ${updates.join(', ')} WHERE id = $${paramIdx + 1}`,
       params
     );
 
@@ -349,32 +293,26 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // ✅ CORRIGÉ : Soft delete au lieu de DELETE physique
+  // Soft delete
   // ----------------------------------------------------------
   async _handleDelete(client, mod, site) {
     await client.query(
-      `
-      UPDATE cartes
-      SET deleted_at    = NOW(),
-          sync_status   = 'synced'
-      WHERE id                   = $1
-        AND site_proprietaire_id = $2
-        AND deleted_at IS NULL
-    `,
+      `UPDATE cartes
+       SET deleted_at  = NOW(),
+           sync_status = 'synced'
+       WHERE id                   = $1
+         AND site_proprietaire_id = $2
+         AND deleted_at IS NULL`,
       [mod.pg_id, site.id]
     );
-
     return { pg_id: mod.pg_id };
   },
 
   // ----------------------------------------------------------
-  // ✅ CORRIGÉ : Download différentiel avec filtre "since"
-  //    Utilise la fonction SQL get_changes_since() créée dans
-  //    le fichier gescard_sync_sql.sql
+  // Download différentiel
   // ----------------------------------------------------------
   async prepareDownload(site, since, limit = 1000) {
     try {
-      // Utiliser une date par défaut si "since" est absent
       const sinceDate = since
         ? new Date(since).toISOString()
         : new Date('2000-01-01').toISOString();
@@ -400,25 +338,20 @@ const syncService = {
   // ----------------------------------------------------------
   async confirmDownload(siteId, historyId, appliedIds, errors) {
     try {
-      // Marquer les cartes comme synced via la fonction SQL
       if (appliedIds && appliedIds.length > 0) {
         const numericIds = appliedIds.map((id) => parseInt(id)).filter((id) => !isNaN(id));
-
         if (numericIds.length > 0) {
           await db.query(`SELECT mark_as_synced($1, $2)`, [siteId, numericIds]);
         }
       }
 
-      // Mettre à jour l'historique
       await db.query(
-        `
-        UPDATE sync_history
-        SET downloaded_count   = $1,
-            downloaded_inserts = $2,
-            downloaded_updates = $3,
-            error_message      = $4
-        WHERE id = $5 AND site_id = $6
-      `,
+        `UPDATE sync_history
+         SET downloaded_count   = $1,
+             downloaded_inserts = $2,
+             downloaded_updates = $3,
+             error_message      = $4
+         WHERE id = $5 AND site_id = $6`,
         [
           appliedIds?.length || 0,
           appliedIds?.filter((id) => String(id).includes('new')).length || 0,
@@ -435,7 +368,7 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Statut détaillé d'un site (utilise la vue v_sync_status)
+  // Statut détaillé d'un site
   // ----------------------------------------------------------
   async getSiteStatus(siteId) {
     try {
@@ -463,7 +396,7 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Récupérer le tableau de bord global (admin)
+  // Tableau de bord global (admin)
   // ----------------------------------------------------------
   async getGlobalDashboard() {
     try {
@@ -480,6 +413,20 @@ const syncService = {
       };
     } catch (error) {
       console.error('❌ Erreur getGlobalDashboard:', error);
+      throw error;
+    }
+  },
+
+  // ----------------------------------------------------------
+  // Récupérer les utilisateurs autorisés pour un site
+  // ----------------------------------------------------------
+  async getUsersForSite(siteId) {
+    try {
+      const result = await db.query(`SELECT * FROM get_users_for_site($1)`, [siteId]);
+      console.log(`👥 Utilisateurs pour ${siteId}: ${result.rows.length}`);
+      return result.rows;
+    } catch (error) {
+      console.error('❌ Erreur getUsersForSite:', error);
       throw error;
     }
   },

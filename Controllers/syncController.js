@@ -15,7 +15,6 @@ const syncController = {
     try {
       const { site_id, api_key } = req.body;
 
-      // Validation basique
       if (!site_id || !api_key) {
         return res.status(400).json({
           success: false,
@@ -23,7 +22,6 @@ const syncController = {
         });
       }
 
-      // Authentifier le site
       const site = await syncService.authenticateSite(site_id, api_key);
 
       if (!site) {
@@ -33,10 +31,8 @@ const syncController = {
         });
       }
 
-      // Générer le token JWT
       const token = syncService.generateSiteToken(site);
 
-      // Journaliser la connexion
       await journalService.logAction({
         utilisateurId: null,
         nomUtilisateur: site.id,
@@ -78,13 +74,11 @@ const syncController = {
    */
   async upload(req, res) {
     const { modifications, last_sync } = req.body;
-    const site = req.site; // Rempli par le middleware
+    const site = req.site;
 
     try {
-      // Démarrer la synchronisation
       const result = await syncService.processUpload(site, modifications, last_sync);
 
-      // Journaliser
       await journalService.logAction({
         utilisateurId: null,
         nomUtilisateur: site.id,
@@ -111,7 +105,6 @@ const syncController = {
     } catch (error) {
       console.error('❌ Erreur upload:', error);
 
-      // Journaliser l'erreur
       await journalService.logAction({
         utilisateurId: null,
         nomUtilisateur: site?.id || 'inconnu',
@@ -211,6 +204,46 @@ const syncController = {
       });
     } catch (error) {
       console.error('❌ Erreur status:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  },
+
+  /**
+   * Récupération des utilisateurs pour un site
+   * GET /api/sync/users
+   */
+  async getUsers(req, res) {
+    const site = req.site;
+    try {
+      const users = await syncService.getUsersForSite(site.id);
+
+      await journalService.logAction({
+        utilisateurId: null,
+        nomUtilisateur: site.id,
+        nomComplet: site.nom,
+        role: 'SITE',
+        agence: null,
+        coordination: site.coordination_code,
+        action: 'Sync utilisateurs',
+        actionType: 'SYNC_USERS',
+        tableName: 'utilisateurs',
+        recordId: site.id,
+        details: `Site ${site.id} a téléchargé ${users.length} utilisateur(s)`,
+        ip: req.ip,
+      });
+
+      res.json({
+        success: true,
+        count: users.length,
+        users,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('❌ Erreur getUsers:', error);
       res.status(500).json({
         success: false,
         error: error.message,
