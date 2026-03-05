@@ -6,7 +6,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { verifierToken } = require('../middleware/auth');
-const ctrl = require('../Controllers/updatescontroller');
+const ctrl = require('../Controllers/Updatescontroller');
 
 // ============================================
 // CONFIGURATION MULTER (upload .exe)

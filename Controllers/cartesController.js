@@ -3,13 +3,13 @@ const annulationService = require('../Services/annulationService');
 
 // 🔧 CONFIGURATION API EXTERNE - OPTIMISÉE POUR LWS
 const API_CONFIG = {
-  maxResults: 5000, // Augmenté de 1000 → 5000 pour LWS
+  maxResults: 5000,
   defaultLimit: 100,
-  maxSyncRecords: 2000, // Augmenté de 500 → 2000 pour LWS
-  maxBatchSize: 500, // Taille des lots pour traitement mémoire
-  maxFileSize: '100mb', // Limite de taille de fichier pour LWS
-  enableCompression: true, // Activer la compression des réponses
-  exportMaxRows: 10000, // Export complet jusqu'à 10000 lignes
+  maxSyncRecords: 2000,
+  maxBatchSize: 500,
+  maxFileSize: '100mb',
+  enableCompression: true,
+  exportMaxRows: 10000,
 
   SITES: [
     'ADJAME',
@@ -29,20 +29,12 @@ const API_CONFIG = {
 // 🔄 FONCTIONS DE FUSION INTELLIGENTE
 // ====================================================
 
-/**
- * Met à jour une carte existante avec fusion intelligente des données
- * @param {Object} client - Client PostgreSQL (transaction)
- * @param {Object} carteExistante - Données actuelles de la carte
- * @param {Object} nouvellesDonnees - Nouvelles données à fusionner
- * @returns {Object} Résultat de la mise à jour
- */
 const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
   let updated = false;
   const updates = [];
   const params = [];
   let paramCount = 0;
 
-  // ✅ TOUTES LES COLONNES PRINCIPALES À FUSIONNER
   const colonnesAFusionner = {
     "LIEU D'ENROLEMENT": 'texte',
     'SITE DE RETRAIT': 'texte',
@@ -52,7 +44,7 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
     'LIEU NAISSANCE': 'texte',
     CONTACT: 'contact',
     'CONTACT DE RETRAIT': 'contact',
-    DELIVRANCE: 'delivrance', // Gestion spéciale
+    DELIVRANCE: 'delivrance',
     'DATE DE NAISSANCE': 'date',
     'DATE DE DELIVRANCE': 'date',
   };
@@ -154,9 +146,6 @@ const mettreAJourCarte = async (client, carteExistante, nouvellesDonnees) => {
   return { updated };
 };
 
-/**
- * Vérifie si un contact est plus complet (indicatif, longueur, format)
- */
 const estContactPlusComplet = (nouveauContact, ancienContact) => {
   if (!nouveauContact) return false;
   if (!ancienContact) return true;
@@ -172,22 +161,12 @@ const estContactPlusComplet = (nouveauContact, ancienContact) => {
   return false;
 };
 
-/**
- * Vérifie si une date est plus récente (avec règles spécifiques)
- */
 const estDatePlusRecente = (nouvelleDate, dateExistante, colonne) => {
   if (!dateExistante) return true;
-
-  if (colonne === 'DATE DE DELIVRANCE') {
-    return nouvelleDate > dateExistante;
-  }
-
+  if (colonne === 'DATE DE DELIVRANCE') return nouvelleDate > dateExistante;
   return false;
 };
 
-/**
- * Vérifie si une valeur texte est plus complète
- */
 const estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
   if (!nouvelleValeur) return false;
   if (!valeurExistante) return true;
@@ -200,7 +179,6 @@ const estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
       if (nouvelleValeur.length > valeurExistante.length) return true;
       break;
     }
-
     case 'LIEU NAISSANCE':
     case "LIEU D'ENROLEMENT": {
       const motsNouveaux = nouvelleValeur.split(/\s+/).length;
@@ -209,7 +187,6 @@ const estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
       if (nouvelleValeur.length > valeurExistante.length) return true;
       break;
     }
-
     default:
       if (nouvelleValeur.length > valeurExistante.length) return true;
   }
@@ -218,7 +195,7 @@ const estValeurPlusComplete = (nouvelleValeur, valeurExistante, colonne) => {
 };
 
 // ====================================================
-// 🔹 NOUVELLES FONCTIONS POUR GESTION DES CARTES (INTÉRIEUR)
+// 🔹 CRUD CARTES (APPLICATION WEB)
 // ====================================================
 
 /**
@@ -254,14 +231,12 @@ const getToutesCartes = async (req, res) => {
     const params = [];
     let paramCount = 0;
 
-    // Filtre par coordination si l'utilisateur n'est pas admin
     if (req.infosRole?.peutVoirStatistiques === 'coordination' && req.user?.coordination) {
       paramCount++;
       query += ` WHERE coordination = $${paramCount}`;
       params.push(req.user.coordination);
     }
 
-    // Recherche textuelle
     if (recherche) {
       paramCount++;
       const searchCondition = ` (nom ILIKE $${paramCount} OR prenoms ILIKE $${paramCount} OR contact ILIKE $${paramCount})`;
@@ -269,7 +244,6 @@ const getToutesCartes = async (req, res) => {
       params.push(`%${recherche}%`);
     }
 
-    // Compter le total
     const countQuery = query
       .replace(/SELECT.*FROM/, 'SELECT COUNT(*) as total FROM')
       .split(' ORDER BY')[0];
@@ -277,7 +251,6 @@ const getToutesCartes = async (req, res) => {
     const countResult = await db.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
 
-    // Ajouter pagination et tri
     query += ` ORDER BY id DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
     params.push(limit, offset);
 
@@ -286,12 +259,7 @@ const getToutesCartes = async (req, res) => {
     res.json({
       success: true,
       data: result.rows,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     console.error('❌ Erreur getToutesCartes:', error);
@@ -332,13 +300,9 @@ const getCarteParId = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        erreur: 'Carte non trouvée',
-      });
+      return res.status(404).json({ success: false, erreur: 'Carte non trouvée' });
     }
 
-    // Vérifier la coordination pour les chefs d'équipe
     if (
       req.infosRole?.role === "Chef d'équipe" &&
       result.rows[0].coordination !== req.user?.coordination
@@ -349,10 +313,7 @@ const getCarteParId = async (req, res) => {
       });
     }
 
-    res.json({
-      success: true,
-      data: result.rows[0],
-    });
+    res.json({ success: true, data: result.rows[0] });
   } catch (error) {
     console.error('❌ Erreur getCarteParId:', error);
     res.status(500).json({
@@ -387,14 +348,10 @@ const createCarte = async (req, res) => {
       'DATE DE DELIVRANCE': dateDelivrance,
     } = req.body;
 
-    // Validation
     if (!nom || !prenoms) {
       await client.query('ROLLBACK');
       client.release();
-      return res.status(400).json({
-        success: false,
-        erreur: 'Nom et prénoms sont obligatoires',
-      });
+      return res.status(400).json({ success: false, erreur: 'Nom et prénoms sont obligatoires' });
     }
 
     if (nom.length > 255 || prenoms.length > 255) {
@@ -406,7 +363,6 @@ const createCarte = async (req, res) => {
       });
     }
 
-    // Ajouter la coordination depuis l'utilisateur connecté
     const coordination = req.user?.coordination || null;
 
     const insertQuery = `
@@ -455,11 +411,7 @@ const createCarte = async (req, res) => {
     await client.query('COMMIT');
     client.release();
 
-    res.status(201).json({
-      success: true,
-      message: 'Carte créée avec succès',
-      id: newId,
-    });
+    res.status(201).json({ success: true, message: 'Carte créée avec succès', id: newId });
   } catch (error) {
     await client.query('ROLLBACK');
     client.release();
@@ -484,24 +436,16 @@ const updateCarte = async (req, res) => {
 
     const { id } = req.params;
 
-    // Récupérer la carte existante
     const carteExistante = await client.query('SELECT * FROM cartes WHERE id = $1', [id]);
 
     if (carteExistante.rows.length === 0) {
       await client.query('ROLLBACK');
       client.release();
-      return res.status(404).json({
-        success: false,
-        erreur: 'Carte non trouvée',
-      });
+      return res.status(404).json({ success: false, erreur: 'Carte non trouvée' });
     }
 
     const ancienneCarte = carteExistante.rows[0];
 
-    // ✅ MAPPING camelCase → noms réels de colonnes PostgreSQL
-    // Le frontend peut envoyer des clés camelCase (lieuEnrolement, siteRetrait, etc.)
-    // ou des noms de colonnes réels ("LIEU D'ENROLEMENT", etc.)
-    // Ce mapping normalise tout avant de construire le UPDATE dynamique.
     const CAMEL_TO_DB = {
       lieuEnrolement: "LIEU D'ENROLEMENT",
       siteRetrait: 'SITE DE RETRAIT',
@@ -509,7 +453,6 @@ const updateCarte = async (req, res) => {
       lieuNaissance: 'LIEU NAISSANCE',
       contactRetrait: 'CONTACT DE RETRAIT',
       dateDelivrance: 'DATE DE DELIVRANCE',
-      // Colonnes directes (déjà au bon nom, listées pour exhaustivité)
       rangement: 'rangement',
       nom: 'nom',
       prenoms: 'prenoms',
@@ -518,7 +461,6 @@ const updateCarte = async (req, res) => {
       coordination: 'coordination',
     };
 
-    // ✅ Champs en lecture seule — jamais mis à jour (calculés, identifiants, métadonnées)
     const CHAMPS_LECTURE_SEULE = new Set([
       'id',
       'dateCreation',
@@ -526,25 +468,22 @@ const updateCarte = async (req, res) => {
       'dateModification',
       'createurId',
       'moderateurId',
-      'prenom', // alias frontend de prenoms, ne pas envoyer en double
+      'prenom',
     ]);
 
     const normaliserCles = (data) => {
       const normalise = {};
       for (const [key, value] of Object.entries(data)) {
-        // Ignorer les champs en lecture seule
         if (CHAMPS_LECTURE_SEULE.has(key)) continue;
-        const dbKey = CAMEL_TO_DB[key] || key; // fallback: utiliser la clé telle quelle
+        const dbKey = CAMEL_TO_DB[key] || key;
         normalise[dbKey] = value;
       }
       return normalise;
     };
 
-    // 🔍 FILTRER LES COLONNES SELON LE RÔLE
     let donneesAModifier = normaliserCles({ ...req.body });
 
     if (Array.isArray(req.colonnesAutorisees) && req.colonnesAutorisees.length > 0) {
-      // Les colonnesAutorisees peuvent être en camelCase ou en noms DB — normaliser les deux
       const colonnesAutoriseeNormalisees = req.colonnesAutorisees.map(
         (col) => CAMEL_TO_DB[col] || col
       );
@@ -568,7 +507,6 @@ const updateCarte = async (req, res) => {
       }
     }
 
-    // Construire la requête UPDATE dynamique
     const updates = [];
     const params = [];
     let paramCount = 0;
@@ -582,7 +520,6 @@ const updateCarte = async (req, res) => {
     paramCount++;
     updates.push(`dateimport = $${paramCount}`);
     params.push(new Date());
-
     params.push(id);
 
     const updateQuery = `
@@ -593,7 +530,6 @@ const updateCarte = async (req, res) => {
 
     await client.query(updateQuery, params);
 
-    // Récupérer la carte modifiée
     const carteModifiee = await client.query('SELECT * FROM cartes WHERE id = $1', [id]);
 
     await annulationService.enregistrerAction(
@@ -645,16 +581,12 @@ const deleteCarte = async (req, res) => {
 
     const { id } = req.params;
 
-    // Récupérer la carte avant suppression
     const carteASupprimer = await client.query('SELECT * FROM cartes WHERE id = $1', [id]);
 
     if (carteASupprimer.rows.length === 0) {
       await client.query('ROLLBACK');
       client.release();
-      return res.status(404).json({
-        success: false,
-        erreur: 'Carte non trouvée',
-      });
+      return res.status(404).json({ success: false, erreur: 'Carte non trouvée' });
     }
 
     if (
@@ -691,10 +623,7 @@ const deleteCarte = async (req, res) => {
     await client.query('COMMIT');
     client.release();
 
-    res.json({
-      success: true,
-      message: 'Carte supprimée avec succès',
-    });
+    res.json({ success: true, message: 'Carte supprimée avec succès' });
   } catch (error) {
     await client.query('ROLLBACK');
     client.release();
@@ -708,13 +637,69 @@ const deleteCarte = async (req, res) => {
 };
 
 // ====================================================
-// 🔹 ROUTES API PUBLIQUES
+// ✅ NOUVEAU — LISTE DES COORDINATIONS (CoordinationDropdown)
 // ====================================================
 
 /**
- * Vérification de santé du service
- * GET /api/external/health
+ * Retourne la liste distincte des coordinations présentes en base
+ * GET /api/cartes/coordinations
+ *
+ * - Administrateur       : toutes les coordinations
+ * - Gestionnaire         : sa coordination uniquement
+ * - Chef d'équipe        : sa coordination uniquement
+ * - Opérateur            : sa coordination uniquement
  */
+const getCoordinations = async (req, res) => {
+  try {
+    const { role, coordination: userCoord } = req.user || {};
+
+    const rolesLimites = ['Gestionnaire', "Chef d'équipe", 'Opérateur'];
+
+    let result;
+
+    if (rolesLimites.includes(role) && userCoord) {
+      // Rôle limité : retourner seulement sa coordination
+      result = await db.query(
+        `SELECT DISTINCT coordination
+         FROM cartes
+         WHERE coordination IS NOT NULL
+           AND coordination <> ''
+           AND LOWER(coordination) = LOWER($1)
+         ORDER BY coordination ASC`,
+        [userCoord]
+      );
+    } else {
+      // Administrateur : toutes les coordinations
+      result = await db.query(
+        `SELECT DISTINCT coordination
+         FROM cartes
+         WHERE coordination IS NOT NULL
+           AND coordination <> ''
+         ORDER BY coordination ASC`
+      );
+    }
+
+    const coordinations = result.rows.map((row) => row.coordination);
+
+    return res.json({
+      success: true,
+      coordinations,
+      count: coordinations.length,
+    });
+  } catch (error) {
+    console.error('❌ Erreur getCoordinations:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des coordinations',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+// ====================================================
+// 🔹 ROUTES API PUBLIQUES (SYNC EXTERNE)
+// ====================================================
+
 const healthCheck = async (req, res) => {
   try {
     const dbTest = await db.query(
@@ -801,10 +786,6 @@ const healthCheck = async (req, res) => {
   }
 };
 
-/**
- * Récupère les changements depuis une date
- * GET /api/external/changes?since=2024-01-01T00:00:00
- */
 const getChanges = async (req, res) => {
   try {
     const { since } = req.query;
@@ -847,7 +828,7 @@ const getChanges = async (req, res) => {
       success: true,
       data: result.rows,
       total: result.rows.length,
-      derniereModification: derniereModification,
+      derniereModification,
       since: sinceDate.toISOString(),
       timestamp: new Date().toISOString(),
     });
@@ -862,10 +843,6 @@ const getChanges = async (req, res) => {
   }
 };
 
-/**
- * Synchronisation avec fusion intelligente
- * POST /api/external/sync
- */
 const syncData = async (req, res) => {
   const client = await db.getClient();
 
@@ -955,7 +932,6 @@ const syncData = async (req, res) => {
 
             if (resultUpdate.updated) {
               updated++;
-
               await annulationService.enregistrerAction(
                 null,
                 'SYSTEM',
@@ -998,19 +974,16 @@ const syncData = async (req, res) => {
             };
 
             const insertResult = await client.query(
-              `
-              INSERT INTO cartes (
+              `INSERT INTO cartes (
                 "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
                 "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
                 "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", sourceimport, batch_id, coordination
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-              RETURNING id
-            `,
+              RETURNING id`,
               Object.values(insertData)
             );
 
             imported++;
-
             await annulationService.enregistrerAction(
               null,
               'SYSTEM',
@@ -1035,9 +1008,7 @@ const syncData = async (req, res) => {
         }
       }
 
-      if (global.gc) {
-        global.gc();
-      }
+      if (global.gc) global.gc();
     }
 
     await client.query('COMMIT');
@@ -1054,14 +1025,7 @@ const syncData = async (req, res) => {
     res.json({
       success: true,
       message: 'Synchronisation avec fusion intelligente réussie',
-      stats: {
-        imported,
-        updated,
-        duplicates,
-        errors,
-        totalProcessed: donnees.length,
-        successRate,
-      },
+      stats: { imported, updated, duplicates, errors, totalProcessed: donnees.length, successRate },
       fusion: {
         strategy: 'intelligente_multicolonnes',
         colonnes_traitees: Object.keys(getColonnesAFusionner()),
@@ -1073,11 +1037,7 @@ const syncData = async (req, res) => {
         total_batches: Math.ceil(donnees.length / BATCH_SIZE),
         records_per_second: Math.round(donnees.length / (duration / 1000)),
       },
-      batch_info: {
-        batch_id: batch_id || 'N/A',
-        source: source,
-        timestamp: new Date().toISOString(),
-      },
+      batch_info: { batch_id: batch_id || 'N/A', source, timestamp: new Date().toISOString() },
       errorDetails: errorDetails.slice(0, 10),
     });
   } catch (error) {
@@ -1093,9 +1053,6 @@ const syncData = async (req, res) => {
   }
 };
 
-/**
- * Retourne la configuration des colonnes à fusionner
- */
 const getColonnesAFusionner = () => ({
   "LIEU D'ENROLEMENT": 'texte',
   'SITE DE RETRAIT': 'texte',
@@ -1110,10 +1067,6 @@ const getColonnesAFusionner = () => ({
   'DATE DE DELIVRANCE': 'date',
 });
 
-/**
- * Récupère les cartes avec filtres
- * GET /api/external/cartes
- */
 const getCartes = async (req, res) => {
   try {
     const {
@@ -1166,43 +1119,36 @@ const getCartes = async (req, res) => {
       query += ` AND nom ILIKE $${paramCount}`;
       params.push(`%${nom}%`);
     }
-
     if (prenom) {
       paramCount++;
       query += ` AND prenoms ILIKE $${paramCount}`;
       params.push(`%${prenom}%`);
     }
-
     if (contact) {
       paramCount++;
       query += ` AND contact ILIKE $${paramCount}`;
       params.push(`%${contact}%`);
     }
-
     if (siteRetrait) {
       paramCount++;
       query += ` AND "SITE DE RETRAIT" ILIKE $${paramCount}`;
       params.push(`%${siteRetrait}%`);
     }
-
     if (lieuNaissance) {
       paramCount++;
       query += ` AND "LIEU NAISSANCE" ILIKE $${paramCount}`;
       params.push(`%${lieuNaissance}%`);
     }
-
     if (dateDebut) {
       paramCount++;
       query += ` AND dateimport >= $${paramCount}`;
       params.push(new Date(dateDebut));
     }
-
     if (dateFin) {
       paramCount++;
       query += ` AND dateimport <= $${paramCount}`;
       params.push(new Date(dateFin + ' 23:59:59'));
     }
-
     if (delivrance) {
       paramCount++;
       query += ` AND delivrance ILIKE $${paramCount}`;
@@ -1214,48 +1160,48 @@ const getCartes = async (req, res) => {
 
     const result = await db.query(query, params);
 
+    // Count séparé
     let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
     const countParams = [];
-
-    let countParamCount = 0;
+    let cp = 0;
     if (nom) {
-      countParamCount++;
-      countQuery += ` AND nom ILIKE $${countParamCount}`;
+      cp++;
+      countQuery += ` AND nom ILIKE $${cp}`;
       countParams.push(`%${nom}%`);
     }
     if (prenom) {
-      countParamCount++;
-      countQuery += ` AND prenoms ILIKE $${countParamCount}`;
+      cp++;
+      countQuery += ` AND prenoms ILIKE $${cp}`;
       countParams.push(`%${prenom}%`);
     }
     if (contact) {
-      countParamCount++;
-      countQuery += ` AND contact ILIKE $${countParamCount}`;
+      cp++;
+      countQuery += ` AND contact ILIKE $${cp}`;
       countParams.push(`%${contact}%`);
     }
     if (siteRetrait) {
-      countParamCount++;
-      countQuery += ` AND "SITE DE RETRAIT" ILIKE $${countParamCount}`;
+      cp++;
+      countQuery += ` AND "SITE DE RETRAIT" ILIKE $${cp}`;
       countParams.push(`%${siteRetrait}%`);
     }
     if (lieuNaissance) {
-      countParamCount++;
-      countQuery += ` AND "LIEU NAISSANCE" ILIKE $${countParamCount}`;
+      cp++;
+      countQuery += ` AND "LIEU NAISSANCE" ILIKE $${cp}`;
       countParams.push(`%${lieuNaissance}%`);
     }
     if (dateDebut) {
-      countParamCount++;
-      countQuery += ` AND dateimport >= $${countParamCount}`;
+      cp++;
+      countQuery += ` AND dateimport >= $${cp}`;
       countParams.push(new Date(dateDebut));
     }
     if (dateFin) {
-      countParamCount++;
-      countQuery += ` AND dateimport <= $${countParamCount}`;
+      cp++;
+      countQuery += ` AND dateimport <= $${cp}`;
       countParams.push(new Date(dateFin + ' 23:59:59'));
     }
     if (delivrance) {
-      countParamCount++;
-      countQuery += ` AND delivrance ILIKE $${countParamCount}`;
+      cp++;
+      countQuery += ` AND delivrance ILIKE $${cp}`;
       countParams.push(`%${delivrance}%`);
     }
 
@@ -1273,20 +1219,10 @@ const getCartes = async (req, res) => {
       pagination: {
         page: actualPage,
         limit: actualLimit,
-        total: total,
+        total,
         totalPages: Math.ceil(total / actualLimit),
         hasNext: actualPage < Math.ceil(total / actualLimit),
         hasPrev: actualPage > 1,
-      },
-      filters: {
-        nom: nom || null,
-        prenom: prenom || null,
-        contact: contact || null,
-        siteRetrait: siteRetrait || null,
-        lieuNaissance: lieuNaissance || null,
-        dateDebut: dateDebut || null,
-        dateFin: dateFin || null,
-        delivrance: delivrance || null,
       },
       timestamp: new Date().toISOString(),
     });
@@ -1301,10 +1237,6 @@ const getCartes = async (req, res) => {
   }
 };
 
-/**
- * Statistiques détaillées
- * GET /api/external/stats
- */
 const getStats = async (req, res) => {
   try {
     const globalStats = await db.query(`
@@ -1383,10 +1315,6 @@ const getStats = async (req, res) => {
   }
 };
 
-/**
- * Récupère les modifications par site
- * GET /api/external/modifications?site=ADJAME&derniereSync=2024-01-01T00:00:00
- */
 const getModifications = async (req, res) => {
   try {
     const { site, derniereSync, limit = 1000 } = req.query;
@@ -1442,8 +1370,8 @@ const getModifications = async (req, res) => {
       success: true,
       data: result.rows,
       total: result.rows.length,
-      derniereModification: derniereModification,
-      site: site,
+      derniereModification,
+      site,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -1457,10 +1385,6 @@ const getModifications = async (req, res) => {
   }
 };
 
-/**
- * Retourne la liste des sites configurés
- * GET /api/external/sites
- */
 const getSites = async (req, res) => {
   try {
     res.json({
@@ -1472,32 +1396,31 @@ const getSites = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur getSites:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Erreur serveur',
-      details: error.message,
-    });
+    res.status(500).json({ success: false, error: 'Erreur serveur', details: error.message });
   }
 };
 
 // ====================================================
-// EXPORT DES FONCTIONS
+// EXPORT
 // ====================================================
 module.exports = {
-  // Nouvelles fonctions internes
+  // CRUD application web
   getToutesCartes,
   getCarteParId,
   createCarte,
   updateCarte,
   deleteCarte,
 
-  // Fonctions de fusion
+  // ✅ NOUVEAU — coordinations pour CoordinationDropdown
+  getCoordinations,
+
+  // Fonctions de fusion intelligente
   mettreAJourCarte,
   estContactPlusComplet,
   estDatePlusRecente,
   estValeurPlusComplete,
 
-  // Routes API publiques
+  // API publique / sync externe
   healthCheck,
   getChanges,
   syncData,

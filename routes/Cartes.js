@@ -3,31 +3,27 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/db');
 const { verifyToken: verifierToken } = require('../middleware/auth');
-const role = require('../middleware/verificationRole'); // ✅ corrigé: était 'colonnes'
-const colonnes = require('../middleware/filtreColonnes'); // ✅ corrigé: était '../middleware/colonnes'
+const role = require('../middleware/verificationRole');
+const colonnes = require('../middleware/filtreColonnes');
 const permission = require('../middleware/permission');
 const cartesController = require('../Controllers/cartesController');
+
 // ============================================
-// MIDDLEWARE
+// MIDDLEWARE D'AUTHENTIFICATION
 // ============================================
 
-// Middleware de fallback pour l'authentification (en cas d'erreur)
 const authMiddleware = (req, res, next) => {
-  // Vérifier si verifierToken est une fonction
   if (typeof verifierToken === 'function') {
     return verifierToken(req, res, next);
   }
 
-  // Log détaillé de l'erreur
   console.error("❌ ERREUR CRITIQUE: verifierToken n'est pas une fonction!");
   console.error('Type reçu:', typeof verifierToken);
   console.error('Valeur:', verifierToken);
   console.error('Vérifiez que le fichier middleware/auth.js exporte bien verifyToken');
 
-  // En mode développement, on peut permettre l'accès sans token
   if (process.env.NODE_ENV !== 'production') {
     console.warn('⚠️ MODE DÉVELOPPEMENT: Authentification désactivée');
-    // Créer un utilisateur par défaut pour le développement
     req.user = {
       id: 1,
       NomUtilisateur: 'dev_user',
@@ -41,7 +37,6 @@ const authMiddleware = (req, res, next) => {
     return next();
   }
 
-  // En production, retourner une erreur
   return res.status(500).json({
     success: false,
     message: 'Erreur de configuration du serveur',
@@ -50,11 +45,10 @@ const authMiddleware = (req, res, next) => {
   });
 };
 
-// Appliquer le middleware d'authentification
 router.use(authMiddleware);
 
 // ============================================
-// ROUTES API DE SYNCHRONISATION (publiques)
+// ROUTES LÉGÈRES (sans paramètre :id) — DOIVENT être avant /:id
 // ============================================
 
 /**
@@ -71,6 +65,14 @@ router.get('/health', (req, res) => {
 });
 
 /**
+ * ✅ NOUVEAU — Liste des coordinations distinctes (pour CoordinationDropdown)
+ * GET /api/cartes/coordinations
+ * - Administrateur : toutes les coordinations
+ * - Gestionnaire / Chef d'équipe / Opérateur : leur coordination uniquement
+ */
+router.get('/coordinations', cartesController.getCoordinations);
+
+/**
  * Récupérer les changements depuis une date
  * GET /api/cartes/changes?since=2024-01-01T00:00:00
  */
@@ -79,10 +81,7 @@ router.get('/changes', async (req, res) => {
     const { since } = req.query;
 
     if (!since) {
-      return res.status(400).json({
-        success: false,
-        message: 'Paramètre "since" requis',
-      });
+      return res.status(400).json({ success: false, message: 'Paramètre "since" requis' });
     }
 
     const result = await db.query(
@@ -100,10 +99,7 @@ router.get('/changes', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur getChanges:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -122,35 +118,24 @@ router.post('/sync', async (req, res) => {
       });
     }
 
-    // Utiliser lastSync pour filtrer les données si nécessaire
     let itemsToSync = data;
 
     if (lastSync) {
-      // Filtrer uniquement les éléments modifiés après lastSync
       itemsToSync = data.filter((item) => {
         return !item.dateimport || new Date(item.dateimport) > new Date(lastSync);
       });
-
       console.log(
         `📅 Synchronisation depuis ${lastSync}: ${itemsToSync.length} éléments à traiter`
       );
     }
 
-    // Logique de synchronisation
-    const results = {
-      inserted: 0,
-      updated: 0,
-      errors: 0,
-      lastSync: new Date().toISOString(),
-    };
+    const results = { inserted: 0, updated: 0, errors: 0, lastSync: new Date().toISOString() };
 
     for (const item of itemsToSync) {
       try {
-        // Vérifier si la carte existe
         const existing = await db.query('SELECT id FROM cartes WHERE id = $1', [item.id]);
 
         if (existing.rows.length > 0) {
-          // Mise à jour
           await db.query(
             `UPDATE cartes SET 
              "LIEU D'ENROLEMENT" = $1,
@@ -185,7 +170,6 @@ router.post('/sync', async (req, res) => {
           );
           results.updated++;
         } else {
-          // Insertion
           await db.query(
             `INSERT INTO cartes (
               id, "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement,
@@ -225,10 +209,7 @@ router.post('/sync', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur sync:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -253,10 +234,8 @@ router.get('/sites', (req, res) => {
  */
 router.get('/stats', async (req, res) => {
   try {
-    // Statistiques globales
     const total = await db.query('SELECT COUNT(*) as count FROM cartes');
 
-    // Statistiques par site
     const parSite = await db.query(`
       SELECT 
         COALESCE("SITE DE RETRAIT", 'Non défini') as site,
@@ -266,7 +245,6 @@ router.get('/stats', async (req, res) => {
       ORDER BY nombre DESC
     `);
 
-    // Statistiques par mois
     const parMois = await db.query(`
       SELECT 
         TO_CHAR(dateimport, 'YYYY-MM') as mois,
@@ -289,10 +267,7 @@ router.get('/stats', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur stats:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -320,12 +295,10 @@ router.get('/modifications', async (req, res) => {
       params.push(site);
       query += ` AND "SITE DE RETRAIT" = $${params.length}`;
     }
-
     if (dateDebut) {
       params.push(dateDebut);
       query += ` AND dateimport >= $${params.length}`;
     }
-
     if (dateFin) {
       params.push(dateFin);
       query += ` AND dateimport <= $${params.length}`;
@@ -343,15 +316,12 @@ router.get('/modifications', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur modifications:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
- * Récupérer les cartes avec filtres (version simplifiée pour API externe)
+ * Récupérer les cartes avec filtres
  * GET /api/cartes
  */
 router.get('/', async (req, res) => {
@@ -459,7 +429,7 @@ router.get('/', async (req, res) => {
     }
 
     const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE 1=1${dataQuery.split('WHERE 1=1')[1]}`;
-    const [countResult] = await Promise.all([db.query(countQuery, params)]);
+    const countResult = await db.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
 
     dataQuery += ` ORDER BY nom, prenoms LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
@@ -482,10 +452,7 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur getCartes:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -494,7 +461,7 @@ router.get('/', async (req, res) => {
 // ============================================
 
 /**
- * Récupérer toutes les cartes (avec pagination avancée) - PROTÉGÉ PAR RÔLE
+ * Récupérer toutes les cartes (pagination avancée) - PROTÉGÉ PAR RÔLE
  * GET /api/cartes/list
  */
 router.get('/list', role.peutAccederPage('inventaire'), async (req, res) => {
@@ -513,19 +480,16 @@ router.get('/list', role.peutAccederPage('inventaire'), async (req, res) => {
       query += ` AND (nom ILIKE $1 OR prenoms ILIKE $1)`;
     }
 
-    // Appliquer filtre de coordination selon le rôle
     if (req.user?.role === 'Gestionnaire' && req.user?.coordination) {
       params.push(req.user.coordination);
       const paramIndex = recherche ? params.length : 1;
       query += ` AND coordination = $${paramIndex}`;
     }
 
-    // Compter le total
     const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE 1=1${query.split('WHERE')[1]}`;
     const countResult = await db.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
 
-    // Pagination
     query += ` ORDER BY nom, prenoms LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limitNum, offset);
 
@@ -544,10 +508,7 @@ router.get('/list', role.peutAccederPage('inventaire'), async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur getCartesList:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -577,36 +538,16 @@ router.get('/statistiques', permission.peutVoirStatistiques, async (req, res) =>
     }
 
     const result = await db.query(query, params);
-
     const stats = result.rows[0];
     stats.taux_retrait =
       stats.total_cartes > 0 ? Math.round((stats.cartes_retirees / stats.total_cartes) * 100) : 0;
 
-    res.json({
-      success: true,
-      data: stats,
-      timestamp: new Date().toISOString(),
-    });
+    res.json({ success: true, data: stats, timestamp: new Date().toISOString() });
   } catch (error) {
     console.error('❌ Erreur statistiques:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
-
-/**
- * Récupérer une carte par ID - PROTÉGÉ PAR RÔLE
- * GET /api/cartes/:id
- */
-router.get('/:id', role.peutAccederPage('inventaire'), cartesController.getCarteParId);
-
-/**
- * Créer une nouvelle carte - PROTÉGÉ PAR RÔLE
- * POST /api/cartes
- */
-router.post('/', role.peutModifierCarte, colonnes.filtrerColonnes, cartesController.createCarte);
 
 /**
  * Mise à jour batch de cartes - PROTÉGÉ PAR RÔLE
@@ -617,16 +558,10 @@ router.put('/batch', role.peutImporterExporter, async (req, res) => {
     const { cartes } = req.body;
 
     if (!cartes || !Array.isArray(cartes)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Liste de cartes invalide',
-      });
+      return res.status(400).json({ success: false, message: 'Liste de cartes invalide' });
     }
 
-    const results = {
-      success: 0,
-      errors: 0,
-    };
+    const results = { success: 0, errors: 0 };
 
     for (const carte of cartes) {
       try {
@@ -677,24 +612,9 @@ router.put('/batch', role.peutImporterExporter, async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur batch update:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
-
-/**
- * Mettre à jour une carte - PROTÉGÉ PAR RÔLE AVEC FILTRAGE
- * PUT /api/cartes/:id
- */
-router.put('/:id', role.peutModifierCarte, colonnes.filtrerColonnes, cartesController.updateCarte);
-
-/**
- * Supprimer une carte - PROTÉGÉ PAR RÔLE
- * DELETE /api/cartes/:id
- */
-router.delete('/:id', role.peutModifierCarte, cartesController.deleteCarte);
 
 /**
  * Test de connexion
@@ -707,10 +627,7 @@ router.get('/test/connection', async (req, res) => {
     res.json({
       success: true,
       message: 'Connexion à la base de données réussie',
-      database: {
-        version: result.rows[0].version,
-        server_time: result.rows[0].time,
-      },
+      database: { version: result.rows[0].version, server_time: result.rows[0].time },
       server: {
         time: new Date().toISOString(),
         node_version: process.version,
@@ -727,5 +644,33 @@ router.get('/test/connection', async (req, res) => {
     });
   }
 });
+
+// ============================================
+// ROUTES AVEC PARAMÈTRE :id — DOIVENT être après les routes nommées
+// ============================================
+
+/**
+ * Récupérer une carte par ID - PROTÉGÉ PAR RÔLE
+ * GET /api/cartes/:id
+ */
+router.get('/:id', role.peutAccederPage('inventaire'), cartesController.getCarteParId);
+
+/**
+ * Créer une nouvelle carte - PROTÉGÉ PAR RÔLE
+ * POST /api/cartes
+ */
+router.post('/', role.peutModifierCarte, colonnes.filtrerColonnes, cartesController.createCarte);
+
+/**
+ * Mettre à jour une carte - PROTÉGÉ PAR RÔLE AVEC FILTRAGE
+ * PUT /api/cartes/:id
+ */
+router.put('/:id', role.peutModifierCarte, colonnes.filtrerColonnes, cartesController.updateCarte);
+
+/**
+ * Supprimer une carte - PROTÉGÉ PAR RÔLE
+ * DELETE /api/cartes/:id
+ */
+router.delete('/:id', role.peutModifierCarte, cartesController.deleteCarte);
 
 module.exports = router;

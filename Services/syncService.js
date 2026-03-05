@@ -418,16 +418,54 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Récupérer les utilisateurs autorisés pour un site
+  // ✅ CORRIGÉ — Récupérer les utilisateurs autorisés pour un site
+  // Remplace l'appel à la fonction PL/pgSQL get_users_for_site()
+  // qui référençait des colonnes inexistantes (niveau_acces, us.site_id)
   // ----------------------------------------------------------
   async getUsersForSite(siteId) {
+    const client = await db.pool.connect();
     try {
-      const result = await db.query(`SELECT * FROM get_users_for_site($1)`, [siteId]);
-      console.log(`👥 Utilisateurs pour ${siteId}: ${result.rows.length}`);
+      // Étape 1 : récupérer la coordination du site
+      const siteResult = await client.query(`SELECT coordination_id FROM sites WHERE id = $1`, [
+        siteId,
+      ]);
+
+      if (siteResult.rows.length === 0) {
+        console.warn(`⚠️ Site introuvable: ${siteId}`);
+        return [];
+      }
+
+      const coordinationId = siteResult.rows[0].coordination_id;
+
+      // Étape 2 : récupérer les utilisateurs actifs de cette coordination
+      // + les Administrateurs (accès global)
+      const result = await client.query(
+        `SELECT
+           u.id,
+           u.nomutilisateur,
+           u.nomcomplet,
+           u.role,
+           u.coordination_id,
+           u.actif
+         FROM utilisateurs u
+         WHERE u.actif = true
+           AND (
+             u.role = 'Administrateur'
+             OR u.coordination_id = $1
+           )
+         ORDER BY u.nomcomplet ASC`,
+        [coordinationId]
+      );
+
+      console.log(
+        `👥 Utilisateurs pour ${siteId} (coordination ${coordinationId}): ${result.rows.length}`
+      );
       return result.rows;
     } catch (error) {
       console.error('❌ Erreur getUsersForSite:', error);
       throw error;
+    } finally {
+      client.release();
     }
   },
 };

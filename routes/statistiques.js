@@ -4,7 +4,7 @@ const router = express.Router();
 const { verifierToken } = require('../middleware/auth');
 const permission = require('../middleware/permission');
 const role = require('../middleware/verificationRole');
-const ctrl = require('../Controllers/statistiquesController');
+const ctrl = require('../Controllers/StatistiquesController');
 
 // ============================================
 // MIDDLEWARE GLOBAUX

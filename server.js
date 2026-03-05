@@ -45,7 +45,7 @@ const statistiquesRoutes = require('./routes/statistiques');
 const externalApiRoutes = require('./routes/externalApi');
 const backupRoutes = require('./routes/backupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
-const updatesRoutes = require('./routes/updatesroutes'); // ✅ Nouveau
+const updatesRoutes = require('./routes/Updatesroutes'); // ✅ Nouveau
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -278,7 +278,7 @@ app.get('/api/health', async (req, res) => {
       uptime: Math.round(process.uptime()) + 's',
       roles: {
         administrateur: 'Accès complet — toutes coordinations',
-        gestionnaire: 'Accès limité à sa coordination', // ✅ corrigé
+        gestionnaire: 'Accès limité à sa coordination',
         chef_equipe: 'Accès à sa coordination — inventaire et cartes',
         operateur: 'Accès à son site uniquement',
       },
@@ -344,7 +344,7 @@ app.get('/', (req, res) => {
     requestId: req.idRequete,
     roles_support: {
       administrateur: '✅ Accès complet — toutes coordinations',
-      gestionnaire: '✅ Stats et données de sa coordination', // ✅ corrigé
+      gestionnaire: '✅ Stats et données de sa coordination',
       chef_equipe: '✅ Données de sa coordination',
       operateur: '✅ Données de son site uniquement',
     },
@@ -403,7 +403,9 @@ app.use((req, res) => {
   });
 });
 
-app.use((err, req, res, next) => {
+// ✅ _next requis par Express pour reconnaître un middleware d'erreur (4 paramètres)
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
   console.error('❌ Error:', {
     message: err.message,
     url: req.url,
@@ -489,11 +491,11 @@ const server = app.listen(PORT, async () => {
   console.log('• Logs                : /logs/access.log');
   console.log('• Backups             : /backups/ + Google Drive');
   console.log('• Connexions DB max   : 50');
-  console.log("• Rôles               : Administrateur, Gestionnaire, Chef d'équipe, Opérateur"); // ✅ corrigé
+  console.log("• Rôles               : Administrateur, Gestionnaire, Chef d'équipe, Opérateur");
   console.log('• Sync sites          : ✅ ACTIVE (login/upload/download/confirm/status/users)');
   console.log('• Sync utilisateurs   : ✅ ACTIVE');
   console.log('• Statistiques        : ✅ ACTIVE (filtrées par rôle)');
-  console.log('• Auto-update logiciel: ✅ ACTIVE (/api/updates)'); // ✅ Nouveau
+  console.log('• Auto-update logiciel: ✅ ACTIVE (/api/updates)');
   console.log('• Sécurité            : ✅ ACTIVE\n');
 });
 

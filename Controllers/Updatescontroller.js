@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const db = require('../db/db');
 
 const DOWNLOADS_DIR = '/var/www/downloads';
 const VERSION_FILE = path.join(DOWNLOADS_DIR, 'version.json');
@@ -260,7 +259,9 @@ const publishVersion = async (req, res) => {
     if (req.file && fs.existsSync(req.file.path)) {
       try {
         fs.unlinkSync(req.file.path);
-      } catch {}
+      } catch (_e) {
+        /* nettoyage silencieux */
+      }
     }
     console.error('❌ Erreur publication version:', error);
     res.status(500).json({ success: false, error: error.message });
