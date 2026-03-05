@@ -274,10 +274,23 @@ const getToutesCartes = async (req, res) => {
 /**
  * Récupérer une carte par ID
  * GET /api/cartes/:id
+ *
+ * ✅ CORRECTIF : validation de l'ID avant la requête SQL
+ * Évite le crash PostgreSQL quand :id = 'coordinations' ou autre string
  */
 const getCarteParId = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // ✅ Validation : l'id doit être un entier positif
+    const idNum = parseInt(id, 10);
+    if (!id || isNaN(idNum) || idNum <= 0 || String(idNum) !== String(id).trim()) {
+      return res.status(404).json({
+        success: false,
+        erreur: `Ressource non trouvée`,
+        code: 'INVALID_ID',
+      });
+    }
 
     const result = await db.query(
       `SELECT 
@@ -296,7 +309,7 @@ const getCarteParId = async (req, res) => {
         coordination,
         dateimport
        FROM cartes WHERE id = $1`,
-      [id]
+      [idNum]
     );
 
     if (result.rows.length === 0) {
@@ -436,7 +449,15 @@ const updateCarte = async (req, res) => {
 
     const { id } = req.params;
 
-    const carteExistante = await client.query('SELECT * FROM cartes WHERE id = $1', [id]);
+    // ✅ Validation ID
+    const idNum = parseInt(id, 10);
+    if (!id || isNaN(idNum) || idNum <= 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(400).json({ success: false, erreur: 'ID invalide' });
+    }
+
+    const carteExistante = await client.query('SELECT * FROM cartes WHERE id = $1', [idNum]);
 
     if (carteExistante.rows.length === 0) {
       await client.query('ROLLBACK');
@@ -520,7 +541,7 @@ const updateCarte = async (req, res) => {
     paramCount++;
     updates.push(`dateimport = $${paramCount}`);
     params.push(new Date());
-    params.push(id);
+    params.push(idNum);
 
     const updateQuery = `
       UPDATE cartes 
@@ -530,7 +551,7 @@ const updateCarte = async (req, res) => {
 
     await client.query(updateQuery, params);
 
-    const carteModifiee = await client.query('SELECT * FROM cartes WHERE id = $1', [id]);
+    const carteModifiee = await client.query('SELECT * FROM cartes WHERE id = $1', [idNum]);
 
     await annulationService.enregistrerAction(
       req.user?.id || null,
@@ -538,10 +559,10 @@ const updateCarte = async (req, res) => {
       req.user?.nomComplet || req.user?.nomUtilisateur || 'Système',
       req.user?.role || 'SYSTEM',
       req.user?.agence || '',
-      `Modification de la carte #${id}`,
+      `Modification de la carte #${idNum}`,
       'UPDATE',
       'cartes',
-      id,
+      idNum,
       ancienneCarte,
       carteModifiee.rows[0],
       req.ip,
@@ -581,7 +602,15 @@ const deleteCarte = async (req, res) => {
 
     const { id } = req.params;
 
-    const carteASupprimer = await client.query('SELECT * FROM cartes WHERE id = $1', [id]);
+    // ✅ Validation ID
+    const idNum = parseInt(id, 10);
+    if (!id || isNaN(idNum) || idNum <= 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(400).json({ success: false, erreur: 'ID invalide' });
+    }
+
+    const carteASupprimer = await client.query('SELECT * FROM cartes WHERE id = $1', [idNum]);
 
     if (carteASupprimer.rows.length === 0) {
       await client.query('ROLLBACK');
@@ -601,7 +630,7 @@ const deleteCarte = async (req, res) => {
       });
     }
 
-    await client.query('DELETE FROM cartes WHERE id = $1', [id]);
+    await client.query('DELETE FROM cartes WHERE id = $1', [idNum]);
 
     await annulationService.enregistrerAction(
       req.user?.id || null,
@@ -609,10 +638,10 @@ const deleteCarte = async (req, res) => {
       req.user?.nomComplet || req.user?.nomUtilisateur || 'Système',
       req.user?.role || 'SYSTEM',
       req.user?.agence || '',
-      `Suppression de la carte #${id}`,
+      `Suppression de la carte #${idNum}`,
       'DELETE',
       'cartes',
-      id,
+      idNum,
       carteASupprimer.rows[0],
       null,
       req.ip,
@@ -637,7 +666,7 @@ const deleteCarte = async (req, res) => {
 };
 
 // ====================================================
-// ✅ NOUVEAU — LISTE DES COORDINATIONS (CoordinationDropdown)
+// ✅ LISTE DES COORDINATIONS (CoordinationDropdown)
 // ====================================================
 
 /**
@@ -658,7 +687,6 @@ const getCoordinations = async (req, res) => {
     let result;
 
     if (rolesLimites.includes(role) && userCoord) {
-      // Rôle limité : retourner seulement sa coordination
       result = await db.query(
         `SELECT DISTINCT coordination
          FROM cartes
@@ -669,7 +697,6 @@ const getCoordinations = async (req, res) => {
         [userCoord]
       );
     } else {
-      // Administrateur : toutes les coordinations
       result = await db.query(
         `SELECT DISTINCT coordination
          FROM cartes
@@ -1160,7 +1187,6 @@ const getCartes = async (req, res) => {
 
     const result = await db.query(query, params);
 
-    // Count séparé
     let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
     const countParams = [];
     let cp = 0;
@@ -1336,8 +1362,8 @@ const getModifications = async (req, res) => {
 
     const actualLimit = Math.min(parseInt(limit), API_CONFIG.maxResults);
 
-    const query = `
-      SELECT 
+    const result = await db.query(
+      `SELECT 
         id,
         "LIEU D'ENROLEMENT",
         "SITE DE RETRAIT",
@@ -1354,23 +1380,18 @@ const getModifications = async (req, res) => {
         dateimport
       FROM cartes 
       WHERE "SITE DE RETRAIT" = $1 
-      AND dateimport > $2
+        AND dateimport > $2
       ORDER BY dateimport ASC
-      LIMIT $3
-    `;
-
-    const result = await db.query(query, [site, new Date(derniereSync), actualLimit]);
-
-    let derniereModification = derniereSync;
-    if (result.rows.length > 0) {
-      derniereModification = result.rows[result.rows.length - 1].dateimport;
-    }
+      LIMIT $3`,
+      [site, new Date(derniereSync), actualLimit]
+    );
 
     res.json({
       success: true,
       data: result.rows,
       total: result.rows.length,
-      derniereModification,
+      derniereModification:
+        result.rows.length > 0 ? result.rows[result.rows.length - 1].dateimport : derniereSync,
       site,
       timestamp: new Date().toISOString(),
     });
@@ -1404,23 +1425,16 @@ const getSites = async (req, res) => {
 // EXPORT
 // ====================================================
 module.exports = {
-  // CRUD application web
   getToutesCartes,
   getCarteParId,
   createCarte,
   updateCarte,
   deleteCarte,
-
-  // ✅ NOUVEAU — coordinations pour CoordinationDropdown
   getCoordinations,
-
-  // Fonctions de fusion intelligente
   mettreAJourCarte,
   estContactPlusComplet,
   estDatePlusRecente,
   estValeurPlusComplete,
-
-  // API publique / sync externe
   healthCheck,
   getChanges,
   syncData,
