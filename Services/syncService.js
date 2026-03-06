@@ -309,7 +309,7 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // ✅ CORRIGÉ — Download différentiel (limit 5000)
+  // ✅ CORRIGÉ — Download différentiel (limit 5000 par défaut)
   // ----------------------------------------------------------
   async prepareDownload(site, since, limit = 5000) {
     try {
@@ -420,8 +420,8 @@ const syncService = {
   // ----------------------------------------------------------
   // ✅ CORRIGÉ — Récupérer les utilisateurs d'un site
   // Filtre uniquement par coordination_id du site
-  // (suppression du filtre role='Administrateur' global
-  //  qui renvoyait des utilisateurs d'autres coordinations)
+  // Suppression de sync_timestamp (colonne inexistante)
+  // Suppression du filtre role='Administrateur' global
   // ----------------------------------------------------------
   async getUsersForSite(siteId) {
     const client = await db.pool.connect();
@@ -451,7 +451,6 @@ const syncService = {
            u.actif,
            u.niveau_acces,
            u.peut_voir_stats,
-           u.sync_timestamp,
            u.updated_at
          FROM utilisateurs u
          WHERE u.actif = true
