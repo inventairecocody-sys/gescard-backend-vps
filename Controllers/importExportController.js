@@ -159,7 +159,7 @@ class OptimizedImportExportController {
 
       client = await db.getClient();
 
-      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
+      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
       let countParams = [];
 
       const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
@@ -168,7 +168,7 @@ class OptimizedImportExportController {
 
       console.log(`📊 ${totalRows} cartes accessibles, export limité à ${limit}`);
 
-      let dataQuery = 'SELECT * FROM cartes WHERE 1=1';
+      let dataQuery = 'SELECT * FROM cartes WHERE deleted_at IS NULL AND 1=1';
       let dataParams = [];
 
       const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
@@ -394,7 +394,7 @@ class OptimizedImportExportController {
 
       client = await db.getClient();
 
-      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
+      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
       let countParams = [];
 
       const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
@@ -435,7 +435,7 @@ class OptimizedImportExportController {
 
         if (currentLimit <= 0) break;
 
-        let dataQuery = 'SELECT * FROM cartes WHERE 1=1';
+        let dataQuery = 'SELECT * FROM cartes WHERE deleted_at IS NULL AND 1=1';
         let dataParams = [];
 
         const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
@@ -611,7 +611,7 @@ class OptimizedImportExportController {
 
       client = await db.getClient();
 
-      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
+      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
       let countParams = [];
 
       const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
@@ -735,7 +735,7 @@ class OptimizedImportExportController {
       // Remplacer while (true) par une boucle avec break condition
       let hasMoreData = true;
       for (let page = 0; hasMoreData; page++) {
-        let dataQuery = 'SELECT * FROM cartes WHERE 1=1';
+        let dataQuery = 'SELECT * FROM cartes WHERE deleted_at IS NULL AND 1=1';
         let dataParams = [];
 
         const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
@@ -947,7 +947,7 @@ class OptimizedImportExportController {
 
       client = await db.getClient();
 
-      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
+      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
       let countParams = [];
 
       const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
@@ -1005,7 +1005,7 @@ class OptimizedImportExportController {
       // Remplacer while (true) par une boucle avec break condition
       let hasMoreData = true;
       for (let page = 0; hasMoreData; page++) {
-        let dataQuery = 'SELECT * FROM cartes WHERE 1=1';
+        let dataQuery = 'SELECT * FROM cartes WHERE deleted_at IS NULL AND 1=1';
         let dataParams = [];
 
         const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
@@ -1179,7 +1179,7 @@ class OptimizedImportExportController {
     try {
       client = await db.getClient();
 
-      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
+      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
       let countParams = [];
 
       const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
@@ -2584,7 +2584,7 @@ class OptimizedImportExportController {
       const hours = Math.floor(uptime / 3600);
       const minutes = Math.floor((uptime % 3600) / 60);
 
-      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
+      let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
       let countParams = [];
 
       const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);

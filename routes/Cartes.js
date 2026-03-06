@@ -65,10 +65,8 @@ router.get('/health', (req, res) => {
 });
 
 /**
- * ✅ NOUVEAU — Liste des coordinations distinctes (pour CoordinationDropdown)
+ * ✅ Liste des coordinations distinctes (pour CoordinationDropdown)
  * GET /api/cartes/coordinations
- * - Administrateur : toutes les coordinations
- * - Gestionnaire / Chef d'équipe / Opérateur : leur coordination uniquement
  */
 router.get('/coordinations', cartesController.getCoordinations);
 
@@ -85,8 +83,9 @@ router.get('/changes', async (req, res) => {
     }
 
     const result = await db.query(
-      `SELECT * FROM cartes 
-       WHERE dateimport > $1 
+      `SELECT * FROM cartes
+       WHERE dateimport > $1
+         AND deleted_at IS NULL
        ORDER BY dateimport DESC`,
       [since]
     );
@@ -121,9 +120,9 @@ router.post('/sync', async (req, res) => {
     let itemsToSync = data;
 
     if (lastSync) {
-      itemsToSync = data.filter((item) => {
-        return !item.dateimport || new Date(item.dateimport) > new Date(lastSync);
-      });
+      itemsToSync = data.filter(
+        (item) => !item.dateimport || new Date(item.dateimport) > new Date(lastSync)
+      );
       console.log(
         `📅 Synchronisation depuis ${lastSync}: ${itemsToSync.length} éléments à traiter`
       );
@@ -137,21 +136,21 @@ router.post('/sync', async (req, res) => {
 
         if (existing.rows.length > 0) {
           await db.query(
-            `UPDATE cartes SET 
-             "LIEU D'ENROLEMENT" = $1,
-             "SITE DE RETRAIT" = $2,
-             rangement = $3,
-             nom = $4,
-             prenoms = $5,
-             "DATE DE NAISSANCE" = $6,
-             "LIEU NAISSANCE" = $7,
-             contact = $8,
-             delivrance = $9,
-             "CONTACT DE RETRAIT" = $10,
-             "DATE DE DELIVRANCE" = $11,
-             coordination = $12,
-             dateimport = NOW()
-             WHERE id = $13`,
+            `UPDATE cartes SET
+              "LIEU D'ENROLEMENT" = $1,
+              "SITE DE RETRAIT" = $2,
+              rangement = $3,
+              nom = $4,
+              prenoms = $5,
+              "DATE DE NAISSANCE" = $6,
+              "LIEU NAISSANCE" = $7,
+              contact = $8,
+              delivrance = $9,
+              "CONTACT DE RETRAIT" = $10,
+              "DATE DE DELIVRANCE" = $11,
+              coordination = $12,
+              dateimport = NOW()
+            WHERE id = $13`,
             [
               item["LIEU D'ENROLEMENT"],
               item['SITE DE RETRAIT'],
@@ -229,28 +228,30 @@ router.get('/sites', (req, res) => {
 });
 
 /**
- * Statistiques détaillées
+ * ✅ CORRIGÉ : Statistiques détaillées — ajout deleted_at IS NULL
  * GET /api/cartes/stats
  */
 router.get('/stats', async (req, res) => {
   try {
-    const total = await db.query('SELECT COUNT(*) as count FROM cartes');
+    const total = await db.query('SELECT COUNT(*) as count FROM cartes WHERE deleted_at IS NULL');
 
     const parSite = await db.query(`
-      SELECT 
+      SELECT
         COALESCE("SITE DE RETRAIT", 'Non défini') as site,
         COUNT(*) as nombre
       FROM cartes
+      WHERE deleted_at IS NULL
       GROUP BY "SITE DE RETRAIT"
       ORDER BY nombre DESC
     `);
 
     const parMois = await db.query(`
-      SELECT 
+      SELECT
         TO_CHAR(dateimport, 'YYYY-MM') as mois,
         COUNT(*) as nombre
       FROM cartes
       WHERE dateimport IS NOT NULL
+        AND deleted_at IS NULL
       GROUP BY TO_CHAR(dateimport, 'YYYY-MM')
       ORDER BY mois DESC
       LIMIT 12
@@ -280,13 +281,13 @@ router.get('/modifications', async (req, res) => {
     const { site, dateDebut, dateFin } = req.query;
 
     let query = `
-      SELECT 
+      SELECT
         "SITE DE RETRAIT",
         COUNT(*) as total,
         MIN(dateimport) as premiere_modification,
         MAX(dateimport) as derniere_modification
       FROM cartes
-      WHERE 1=1
+      WHERE deleted_at IS NULL
     `;
 
     const params = [];
@@ -321,7 +322,7 @@ router.get('/modifications', async (req, res) => {
 });
 
 /**
- * Récupérer les cartes avec filtres
+ * ✅ CORRIGÉ : Récupérer les cartes avec filtres — ajout deleted_at IS NULL
  * GET /api/cartes
  */
 router.get('/', async (req, res) => {
@@ -365,7 +366,7 @@ router.get('/', async (req, res) => {
         TO_CHAR("DATE DE DELIVRANCE", 'YYYY-MM-DD') AS "dateDelivrance",
         TO_CHAR(dateimport, 'YYYY-MM-DD HH24:MI:SS') AS "dateCreation"
       FROM cartes
-      WHERE 1=1
+      WHERE deleted_at IS NULL
     `;
 
     const params = [];
@@ -428,7 +429,8 @@ router.get('/', async (req, res) => {
       dataQuery += ` AND coordination = $${params.length}`;
     }
 
-    const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE 1=1${dataQuery.split('WHERE 1=1')[1]}`;
+    // ✅ countQuery hérite du filtre deleted_at IS NULL de dataQuery
+    const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL${dataQuery.split('WHERE deleted_at IS NULL')[1]}`;
     const countResult = await db.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
 
@@ -461,7 +463,7 @@ router.get('/', async (req, res) => {
 // ============================================
 
 /**
- * Récupérer toutes les cartes (pagination avancée) - PROTÉGÉ PAR RÔLE
+ * ✅ CORRIGÉ : Récupérer toutes les cartes (pagination avancée)
  * GET /api/cartes/list
  */
 router.get('/list', role.peutAccederPage('inventaire'), async (req, res) => {
@@ -472,21 +474,21 @@ router.get('/list', role.peutAccederPage('inventaire'), async (req, res) => {
     const limitNum = parseInt(limit);
     const offset = (pageNum - 1) * limitNum;
 
-    let query = 'SELECT * FROM cartes WHERE 1=1';
+    let query = 'SELECT * FROM cartes WHERE deleted_at IS NULL';
     const params = [];
 
     if (recherche) {
       params.push(`%${recherche}%`);
-      query += ` AND (nom ILIKE $1 OR prenoms ILIKE $1)`;
+      query += ` AND (nom ILIKE $${params.length} OR prenoms ILIKE $${params.length})`;
     }
 
     if (req.user?.role === 'Gestionnaire' && req.user?.coordination) {
       params.push(req.user.coordination);
-      const paramIndex = recherche ? params.length : 1;
-      query += ` AND coordination = $${paramIndex}`;
+      query += ` AND coordination = $${params.length}`;
     }
 
-    const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE 1=1${query.split('WHERE')[1]}`;
+    // ✅ countQuery hérite du filtre deleted_at IS NULL
+    const countQuery = `SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL${query.split('WHERE deleted_at IS NULL')[1]}`;
     const countResult = await db.query(countQuery, params);
     const total = parseInt(countResult.rows[0].total);
 
@@ -513,7 +515,7 @@ router.get('/list', role.peutAccederPage('inventaire'), async (req, res) => {
 });
 
 /**
- * Statistiques globales - PROTÉGÉ PAR RÔLE
+ * ✅ CORRIGÉ : Statistiques globales — ajout deleted_at IS NULL
  * GET /api/cartes/statistiques
  */
 router.get('/statistiques', permission.peutVoirStatistiques, async (req, res) => {
@@ -522,12 +524,12 @@ router.get('/statistiques', permission.peutVoirStatistiques, async (req, res) =>
     const coordination = req.user?.coordination;
 
     let query = `
-      SELECT 
+      SELECT
         COUNT(*) as total_cartes,
         COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as cartes_retirees,
         COUNT(DISTINCT "SITE DE RETRAIT") as sites_actifs
       FROM cartes
-      WHERE 1=1
+      WHERE deleted_at IS NULL
     `;
 
     const params = [];
@@ -550,7 +552,7 @@ router.get('/statistiques', permission.peutVoirStatistiques, async (req, res) =>
 });
 
 /**
- * Mise à jour batch de cartes - PROTÉGÉ PAR RÔLE
+ * Mise à jour batch de cartes
  * PUT /api/cartes/batch
  */
 router.put('/batch', role.peutImporterExporter, async (req, res) => {
@@ -650,25 +652,25 @@ router.get('/test/connection', async (req, res) => {
 // ============================================
 
 /**
- * Récupérer une carte par ID - PROTÉGÉ PAR RÔLE
+ * Récupérer une carte par ID
  * GET /api/cartes/:id
  */
 router.get('/:id', role.peutAccederPage('inventaire'), cartesController.getCarteParId);
 
 /**
- * Créer une nouvelle carte - PROTÉGÉ PAR RÔLE
+ * Créer une nouvelle carte
  * POST /api/cartes
  */
 router.post('/', role.peutModifierCarte, colonnes.filtrerColonnes, cartesController.createCarte);
 
 /**
- * Mettre à jour une carte - PROTÉGÉ PAR RÔLE AVEC FILTRAGE
+ * Mettre à jour une carte
  * PUT /api/cartes/:id
  */
 router.put('/:id', role.peutModifierCarte, colonnes.filtrerColonnes, cartesController.updateCarte);
 
 /**
- * Supprimer une carte - PROTÉGÉ PAR RÔLE
+ * Supprimer une carte
  * DELETE /api/cartes/:id
  */
 router.delete('/:id', role.peutModifierCarte, cartesController.deleteCarte);

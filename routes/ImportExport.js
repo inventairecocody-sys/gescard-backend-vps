@@ -306,7 +306,9 @@ if (process.env.NODE_ENV !== 'production') {
   router.get('/test/export', async (req, res) => {
     try {
       const db = require('../db/db');
-      const result = await db.query('SELECT COUNT(*) as total FROM cartes');
+      const result = await db.query(
+        'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL'
+      );
       const totalRows = parseInt(result.rows[0].total);
 
       res.json({

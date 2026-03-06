@@ -316,7 +316,9 @@ const waitForPostgres = async (maxAttempts = 15, delay = 2000) => {
       // Récupérer quelques infos utiles
       try {
         const versionResult = await pool.query('SELECT version()');
-        const countResult = await pool.query('SELECT COUNT(*) FROM cartes');
+        const countResult = await pool.query(
+          'SELECT COUNT(*) FROM cartes WHERE deleted_at IS NULL'
+        );
         console.log(`📊 Version: ${versionResult.rows[0].version.split(' ')[0]}`);
         console.log(`📊 Cartes dans la base: ${countResult.rows[0].count}`);
       } catch (e) {

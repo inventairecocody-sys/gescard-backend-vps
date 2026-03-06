@@ -348,7 +348,9 @@ router.get('/status', authenticate, async (req, res) => {
     });
 
     await client.connect();
-    const countResult = await client.query('SELECT COUNT(*) as total FROM cartes');
+    const countResult = await client.query(
+      'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL'
+    );
     const totalCartes = parseInt(countResult.rows[0].total);
 
     // Récupérer la taille de la DB
@@ -741,7 +743,7 @@ router.get('/info', async (req, res) => {
     // Statistiques DB
     const dbStats = await client.query(`
       SELECT 
-        (SELECT COUNT(*) FROM cartes) as cartes,
+        (SELECT COUNT(*) FROM cartes WHERE deleted_at IS NULL) as cartes,
         (SELECT COUNT(*) FROM utilisateurs) as utilisateurs,
         (SELECT COUNT(*) FROM journal) as journal,
         pg_database_size(current_database()) as db_size_bytes,

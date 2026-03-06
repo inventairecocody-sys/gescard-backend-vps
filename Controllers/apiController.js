@@ -250,7 +250,7 @@ exports.healthCheck = async (req, res) => {
 
     const statsResult = await db.query(`
       SELECT 
-        COUNT(*) as total_cartes,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL) as total_cartes,
         COUNT(DISTINCT "SITE DE RETRAIT") as sites_actifs,
         COUNT(DISTINCT nom) as beneficiaires_uniques,
         COUNT(CASE WHEN dateimport > NOW() - INTERVAL '24 hours' THEN 1 END) as imports_24h,
@@ -261,7 +261,7 @@ exports.healthCheck = async (req, res) => {
     const sitesStats = await db.query(`
       SELECT 
         "SITE DE RETRAIT" as site,
-        COUNT(*) as total_cartes,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL) as total_cartes,
         COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as cartes_retirees
       FROM cartes 
       WHERE "SITE DE RETRAIT" IS NOT NULL 
@@ -771,7 +771,7 @@ exports.getCartes = async (req, res) => {
     const result = await db.query(query, params);
 
     // Compter le total
-    let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE 1=1';
+    let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
     const countParams = [];
 
     let countParamCount = 0;
@@ -863,7 +863,7 @@ exports.getStats = async (req, res) => {
   try {
     const globalStats = await db.query(`
       SELECT 
-        COUNT(*) as total_cartes,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL) as total_cartes,
         COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as cartes_retirees,
         COUNT(DISTINCT "SITE DE RETRAIT") as sites_actifs,
         COUNT(DISTINCT nom) as beneficiaires_uniques,
@@ -878,7 +878,7 @@ exports.getStats = async (req, res) => {
     const topSites = await db.query(`
       SELECT 
         "SITE DE RETRAIT" as site,
-        COUNT(*) as total_cartes,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL) as total_cartes,
         COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as cartes_retirees,
         ROUND(COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) * 100.0 / COUNT(*), 2) as taux_retrait
       FROM cartes 
@@ -891,7 +891,7 @@ exports.getStats = async (req, res) => {
     const statsByCoordination = await db.query(`
       SELECT 
         coordination,
-        COUNT(*) as total_cartes,
+        COUNT(*) FILTER (WHERE deleted_at IS NULL) as total_cartes,
         COUNT(CASE WHEN delivrance IS NOT NULL AND delivrance != '' THEN 1 END) as cartes_retirees
       FROM cartes 
       WHERE coordination IS NOT NULL AND coordination != ''

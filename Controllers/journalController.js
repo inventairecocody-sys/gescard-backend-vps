@@ -103,7 +103,7 @@ const getImports = async (req, res) => {
         COUNT(DISTINCT "SITE DE RETRAIT") as sites,
         MIN(coordination) as coordination
       FROM cartes
-      WHERE importbatchid IS NOT NULL
+      WHERE importbatchid IS NOT NULL AND deleted_at IS NULL
       GROUP BY importbatchid
       ORDER BY date_debut DESC
       LIMIT 100
