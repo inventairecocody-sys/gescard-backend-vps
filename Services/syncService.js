@@ -89,7 +89,8 @@ const syncService = {
 
         if (mod.operation === 'INSERT') {
           result = await this._handleInsert(client, mod, site);
-          stats.inserts++;
+          // ✅ Si la carte existait déjà (doublon détecté), c'est un update silencieux
+          result.was_duplicate ? stats.updates++ : stats.inserts++;
         } else if (mod.operation === 'UPDATE') {
           result = await this._handleUpdate(client, mod, site, historyId);
           result.conflict ? stats.conflicts++ : stats.updates++;
@@ -106,6 +107,7 @@ const syncService = {
           local_id: mod.local_id,
           pg_id: result?.pg_id || mod.pg_id,
           status: result?.conflict ? 'conflict' : 'success',
+          was_duplicate: result?.was_duplicate || false,
         });
       } catch (err) {
         await client.query('ROLLBACK');
@@ -177,27 +179,77 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Gérer une insertion
+  // ✅ CORRIGÉ — Gérer une insertion SANS créer de doublons
+  //
+  // Logique de détection (3 niveaux) :
+  //
+  // Niveau 1 — local_id (même poste, même carte)
+  //   → Retour immédiat du pg_id existant (idempotence)
+  //
+  // Niveau 2 — nom + prenoms + DATE DE NAISSANCE (même coordination)
+  //   → La carte vient du même site (importée par Excel ou autre poste)
+  //   → ON CONFLICT : mise à jour des champs manquants + rattachement local_id
+  //
+  // Niveau 3 — nom + prenoms + DATE DE NAISSANCE (autre coordination)
+  //   → La carte existe mais appartient à une autre coordination
+  //   → BLOQUÉ : on ne touche pas aux données d'une autre coordination
+  //   → Retour pg_id existant sans modification (lecture seule)
   // ----------------------------------------------------------
   async _handleInsert(client, mod, site) {
+    // ── Niveau 1 : idempotence locale (même poste, même envoi) ─────────────
     if (mod.local_id) {
-      const existing = await client.query(
-        `SELECT id FROM cartes WHERE local_id = $1 AND site_proprietaire_id = $2`,
+      const byLocalId = await client.query(
+        `SELECT id FROM cartes
+         WHERE local_id             = $1
+           AND site_proprietaire_id = $2`,
         [mod.local_id, site.id]
       );
-      if (existing.rows.length > 0) {
-        return { pg_id: existing.rows[0].id };
+      if (byLocalId.rows.length > 0) {
+        console.log(`♻️  INSERT ignoré (local_id déjà connu): local_id=${mod.local_id}`);
+        return { pg_id: byLocalId.rows[0].id };
       }
     }
 
+    // ── Niveau 2 : doublon de la MÊME coordination (ex: import Excel + logiciel) ─
+    // ON CONFLICT sur (nom, prenoms, DATE DE NAISSANCE, coordination_id)
+    // Met à jour les champs enrichis si manquants, rattache le local_id
     const result = await client.query(
       `INSERT INTO cartes (
-        coordination_id, site_proprietaire_id, nom, prenoms,
-        "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
-        "CONTACT DE RETRAIT", "DATE DE DELIVRANCE",
-        version, sync_timestamp, sync_status, local_id
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, 1, NOW(), 'synced', $11)
-      RETURNING id`,
+        coordination_id,
+        site_proprietaire_id,
+        nom,
+        prenoms,
+        "DATE DE NAISSANCE",
+        "LIEU NAISSANCE",
+        rangement,
+        contact,
+        delivrance,
+        "CONTACT DE RETRAIT",
+        "DATE DE DELIVRANCE",
+        version,
+        sync_timestamp,
+        sync_status,
+        local_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, NOW(), 'synced', $12)
+      ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
+      WHERE deleted_at IS NULL
+      DO UPDATE SET
+        -- Rattacher le local_id du poste qui envoie (pour la suite des syncs)
+        local_id             = COALESCE(cartes.local_id, EXCLUDED.local_id),
+        site_proprietaire_id = COALESCE(cartes.site_proprietaire_id, EXCLUDED.site_proprietaire_id),
+        -- Enrichir uniquement les champs vides (ne pas écraser ce qui existe déjà)
+        contact                = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
+        delivrance             = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
+        "CONTACT DE RETRAIT"   = COALESCE(NULLIF(cartes."CONTACT DE RETRAIT", ''), EXCLUDED."CONTACT DE RETRAIT"),
+        "DATE DE DELIVRANCE"   = COALESCE(cartes."DATE DE DELIVRANCE",             EXCLUDED."DATE DE DELIVRANCE"),
+        sync_status            = 'synced',
+        sync_timestamp         = NOW()
+      WHERE
+        -- ✅ Niveau 3 : ne toucher que si même coordination
+        -- Si autre coordination → la clause WHERE échoue → pas de DO UPDATE → INSERT échoue aussi
+        -- → Géré par le bloc WHERE ci-dessous
+        cartes.coordination_id = EXCLUDED.coordination_id
+      RETURNING id, (xmax <> 0) AS was_existing`,
       [
         mod.coordination_id,
         site.id,
@@ -205,6 +257,7 @@ const syncService = {
         mod.prenoms,
         mod.date_naissance || null,
         mod.lieu_naissance || null,
+        mod.rangement || null,
         mod.contact || null,
         mod.delivrance || null,
         mod.contact_retrait || null,
@@ -213,7 +266,53 @@ const syncService = {
       ]
     );
 
-    return { pg_id: result.rows[0].id };
+    // ── Niveau 3 : doublon d'une AUTRE coordination ──────────────────────────
+    // Le ON CONFLICT WHERE coordination_id = EXCLUDED.coordination_id a échoué
+    // → INSERT bloqué aussi → result vide → on cherche la carte existante
+    if (result.rows.length === 0) {
+      const existingOtherCoord = await client.query(
+        `SELECT id, coordination_id FROM cartes
+         WHERE nom                 = $1
+           AND prenoms             = $2
+           AND "DATE DE NAISSANCE" = $3
+           AND "LIEU NAISSANCE"    = $4
+           AND rangement           = $5
+           AND deleted_at IS NULL`,
+        [
+          mod.nom,
+          mod.prenoms,
+          mod.date_naissance || null,
+          mod.lieu_naissance || null,
+          mod.rangement || null,
+        ]
+      );
+
+      if (existingOtherCoord.rows.length > 0) {
+        const other = existingOtherCoord.rows[0];
+        console.warn(
+          `⚠️  Doublon inter-coordination détecté: "${mod.nom} ${mod.prenoms}" ` +
+            `coordination locale=${mod.coordination_id} ≠ coordination serveur=${other.coordination_id} ` +
+            `→ pg_id=${other.id} retourné sans modification`
+        );
+        return { pg_id: other.id, was_duplicate: true, cross_coordination: true };
+      }
+
+      // Cas improbable : conflict sans carte existante trouvée
+      throw new Error(`INSERT impossible pour "${mod.nom} ${mod.prenoms}" — conflit non résolu`);
+    }
+
+    const row = result.rows[0];
+    const wasDuplicate = row.was_existing === true;
+
+    if (wasDuplicate) {
+      console.log(
+        `🔗 Doublon rattaché (même coordination): "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`
+      );
+    } else {
+      console.log(`🆕 Nouvelle carte insérée: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`);
+    }
+
+    return { pg_id: row.id, was_duplicate: wasDuplicate };
   },
 
   // ----------------------------------------------------------
@@ -268,6 +367,7 @@ const syncService = {
       nom: '"nom"',
       prenoms: '"prenoms"',
       lieu_naissance: '"LIEU NAISSANCE"',
+      rangement: '"rangement"',
     };
 
     for (const [modKey, sqlCol] of Object.entries(fieldsMap)) {
@@ -309,7 +409,7 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // ✅ CORRIGÉ — Download différentiel (limit 5000 par défaut)
+  // Download différentiel (limit 5000 par défaut)
   // ----------------------------------------------------------
   async prepareDownload(site, since, limit = 5000) {
     try {
@@ -418,10 +518,7 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // ✅ CORRIGÉ — Récupérer les utilisateurs d'un site
-  // Filtre uniquement par coordination_id du site
-  // Suppression de sync_timestamp (colonne inexistante)
-  // Suppression du filtre role='Administrateur' global
+  // Récupérer les utilisateurs d'un site
   // ----------------------------------------------------------
   async getUsersForSite(siteId) {
     const client = await db.pool.connect();

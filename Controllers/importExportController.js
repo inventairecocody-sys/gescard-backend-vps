@@ -5,15 +5,9 @@ const { v4: uuidv4 } = require('uuid');
 const csv = require('csv-parser');
 const annulationService = require('../Services/annulationService');
 
-// ============================================
-// CONFIGURATION GLOBALE OPTIMISÉE POUR LWS
-// ============================================
 const CONFIG = {
-  // Formats supportés
   supportedFormats: ['.csv', '.xlsx', '.xls'],
-  csvDelimiter: ';', // Point-virgule pour Excel français
-
-  // Colonnes standard
+  csvDelimiter: ';',
   csvHeaders: [
     "LIEU D'ENROLEMENT",
     'SITE DE RETRAIT',
@@ -28,12 +22,8 @@ const CONFIG = {
     'DATE DE DELIVRANCE',
     'COORDINATION',
   ],
-
-  // Contrôles
   requiredHeaders: ['NOM', 'PRENOMS'],
   isLWS: true,
-
-  // Configuration export
   maxExportRows: 1000000,
   maxExportRowsRecommended: 500000,
   exportTimeout: 600000,
@@ -45,9 +35,6 @@ const CONFIG = {
   compressionLevel: 6,
 };
 
-// ============================================
-// CONTROLEUR PRINCIPAL OPTIMISÉ POUR LWS
-// ============================================
 class OptimizedImportExportController {
   constructor() {
     this.activeExports = new Map();
@@ -63,14 +50,9 @@ class OptimizedImportExportController {
     console.log(`   - Mémoire max: ${CONFIG.memoryLimitMB}MB`);
   }
 
-  // ============================================
-  // GESTION DE LA FILE D'ATTENTE
-  // ============================================
-
   async processExportQueue() {
     if (this.processingQueue) return;
     this.processingQueue = true;
-
     while (this.exportQueue.length > 0 && this.activeExports.size < CONFIG.maxConcurrent) {
       const nextExport = this.exportQueue.shift();
       try {
@@ -79,21 +61,12 @@ class OptimizedImportExportController {
         console.error("❌ Erreur dans la file d'attente:", error);
       }
     }
-
     this.processingQueue = false;
   }
 
-  // ============================================
-  // FONCTIONS DE VÉRIFICATION DES DROITS
-  // ============================================
-
   verifierDroitsImportExport(req) {
     const role = req.user?.role;
-
-    if (role === 'Administrateur' || role === 'Gestionnaire') {
-      return { autorise: true };
-    }
-
+    if (role === 'Administrateur' || role === 'Gestionnaire') return { autorise: true };
     return {
       autorise: false,
       message: 'Seuls les administrateurs et gestionnaires peuvent importer/exporter',
@@ -104,14 +77,12 @@ class OptimizedImportExportController {
     const role = req.user?.role;
     const coordination = req.user?.coordination;
     const newParams = [...params];
-
     if ((role === 'Gestionnaire' || role === "Chef d'équipe") && coordination) {
       return {
         query: query + ` AND ${colonne} = $${params.length + 1}`,
         params: [...params, coordination],
       };
     }
-
     return { query, params: newParams };
   }
 
@@ -120,23 +91,16 @@ class OptimizedImportExportController {
   // ============================================
   async exportExcel(req, res) {
     const droits = this.verifierDroitsImportExport(req);
-    if (!droits.autorise) {
-      return res.status(403).json({
-        success: false,
-        error: droits.message,
-      });
-    }
+    if (!droits.autorise) return res.status(403).json({ success: false, error: droits.message });
 
     const exportId = `excel_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const startTime = Date.now();
-
     console.log(
       `📤 Export Excel limité demandé (ID: ${exportId}) par ${req.user?.nomUtilisateur} (${req.user?.role})`
     );
 
     const isTest = req.query.test === 'true' || req.query.limit === '5';
     const limit = isTest ? 5 : 5000;
-
     let client;
 
     try {
@@ -160,39 +124,25 @@ class OptimizedImportExportController {
       client = await db.getClient();
 
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
-      let countParams = [];
-
-      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
+      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, []);
       const countResult = await client.query(filtreCount.query, filtreCount.params);
       const totalRows = parseInt(countResult.rows[0].total);
-
       console.log(`📊 ${totalRows} cartes accessibles, export limité à ${limit}`);
 
       let dataQuery = 'SELECT * FROM cartes WHERE deleted_at IS NULL AND 1=1';
-      let dataParams = [];
-
-      const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
-
+      const filtreData = this.ajouterFiltreCoordination(req, dataQuery, []);
       const finalQuery = filtreData.query + ' ORDER BY id LIMIT $' + (filtreData.params.length + 1);
-      const finalParams = [...filtreData.params, limit];
-
-      const result = await client.query(finalQuery, finalParams);
-
+      const result = await client.query(finalQuery, [...filtreData.params, limit]);
       const rows = result.rows;
 
-      if (rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          error: 'Aucune donnée à exporter',
-        });
-      }
+      if (rows.length === 0)
+        return res.status(404).json({ success: false, error: 'Aucune donnée à exporter' });
 
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'GESCARD Cocody';
       workbook.created = new Date();
       workbook.modified = new Date();
       workbook.lastPrinted = new Date();
-
       workbook.views = [
         {
           x: 0,
@@ -224,22 +174,9 @@ class OptimizedImportExportController {
       const headerRow = worksheet.getRow(1);
       headerRow.height = 30;
       headerRow.eachCell((cell) => {
-        cell.font = {
-          bold: true,
-          color: { argb: 'FFFFFFFF' },
-          size: 12,
-          name: 'Calibri',
-        };
-        cell.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FF2E75B5' },
-        };
-        cell.alignment = {
-          vertical: 'middle',
-          horizontal: 'center',
-          wrapText: true,
-        };
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12, name: 'Calibri' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2E75B5' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
         cell.border = {
           top: { style: 'thin' },
           left: { style: 'thin' },
@@ -250,22 +187,14 @@ class OptimizedImportExportController {
 
       rows.forEach((row, index) => {
         const excelRow = worksheet.addRow(row);
-
         if (index % 2 === 0) {
           excelRow.eachCell((cell) => {
-            cell.fill = {
-              type: 'pattern',
-              pattern: 'solid',
-              fgColor: { argb: 'FFF2F2F2' },
-            };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
           });
         }
-
         if (row.delivrance && row.delivrance.toString().toUpperCase() === 'OUI') {
           const delivranceCell = excelRow.getCell('delivrance');
-          if (delivranceCell) {
-            delivranceCell.font = { bold: true, color: { argb: 'FF00B050' } };
-          }
+          if (delivranceCell) delivranceCell.font = { bold: true, color: { argb: 'FF00B050' } };
         }
       });
 
@@ -283,20 +212,13 @@ class OptimizedImportExportController {
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       );
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-Export-Limit', limit.toString());
       res.setHeader('X-Total-Rows', rows.length);
-      res.setHeader('X-Export-Type', 'limited');
       res.setHeader('X-Export-ID', exportId);
-      res.setHeader('X-User-Role', req.user?.role || 'unknown');
-      if (req.user?.coordination) {
-        res.setHeader('X-User-Coordination', req.user.coordination);
-      }
+      if (req.user?.coordination) res.setHeader('X-User-Coordination', req.user.coordination);
 
       await workbook.xlsx.write(res);
-
       const duration = Date.now() - startTime;
-
       await annulationService.enregistrerAction(
         req.user?.id,
         req.user?.nomUtilisateur,
@@ -313,37 +235,16 @@ class OptimizedImportExportController {
         null,
         req.user?.coordination
       );
-
       console.log(`✅ Export Excel limité réussi: ${rows.length} lignes en ${duration}ms`);
     } catch (error) {
       console.error(`❌ Erreur export Excel:`, error);
-
-      if (!res.headersSent) {
+      if (!res.headersSent)
         res.status(500).json({
           success: false,
           error: "Erreur lors de l'export Excel",
           message: error.message,
-          duration: `${Date.now() - startTime}ms`,
           exportId,
         });
-      }
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Erreur export Excel: ${error.message}`,
-        'EXPORT_ERROR',
-        'Cartes',
-        null,
-        null,
-        { error: error.message },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
     } finally {
       if (client?.release) client.release();
       this.activeExports.delete(exportId);
@@ -355,52 +256,20 @@ class OptimizedImportExportController {
   // ============================================
   async exportCSV(req, res) {
     const droits = this.verifierDroitsImportExport(req);
-    if (!droits.autorise) {
-      return res.status(403).json({
-        success: false,
-        error: droits.message,
-      });
-    }
+    if (!droits.autorise) return res.status(403).json({ success: false, error: droits.message });
 
     const exportId = `csv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const startTime = Date.now();
-
-    console.log(
-      `📤 Export CSV limité demandé (ID: ${exportId}) par ${req.user?.nomUtilisateur} (${req.user?.role})`
-    );
-
     const isTest = req.query.test === 'true' || req.query.limit === '5';
     const limit = isTest ? 5 : 5000;
-
     let client;
 
     try {
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Export CSV limité (max ${limit}) démarré`,
-        'EXPORT_START',
-        'Cartes',
-        null,
-        null,
-        { type: 'csv_limited', limit },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
-
       client = await db.getClient();
-
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
-      let countParams = [];
-
-      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
+      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, []);
       const countResult = await client.query(filtreCount.query, filtreCount.params);
       const totalRows = parseInt(countResult.rows[0].total);
-
       console.log(`📊 ${totalRows} cartes accessibles, export CSV limité à ${limit}`);
 
       const timestamp = new Date().toISOString().split('T')[0];
@@ -409,150 +278,67 @@ class OptimizedImportExportController {
 
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-Export-Limit', limit.toString());
-      res.setHeader('X-Export-Type', 'limited');
       res.setHeader('X-Export-ID', exportId);
-      res.setHeader('X-User-Role', req.user?.role || 'unknown');
-      if (req.user?.coordination) {
-        res.setHeader('X-User-Coordination', req.user.coordination);
-      }
-
+      if (req.user?.coordination) res.setHeader('X-User-Coordination', req.user.coordination);
       res.write('\uFEFF');
-
-      const headers = CONFIG.csvHeaders.map((h) => `"${h}"`).join(CONFIG.csvDelimiter) + '\n';
-      res.write(headers);
+      res.write(CONFIG.csvHeaders.map((h) => `"${h}"`).join(CONFIG.csvDelimiter) + '\n');
 
       let offset = 0;
-      const chunkSize = CONFIG.chunkSize;
       let totalWritten = 0;
-      let iterationCount = 0;
-
-      // Remplacer while (offset < limit) par une boucle avec break condition
-      for (let page = 0; page < Math.ceil(limit / chunkSize); page++) {
-        iterationCount++;
-        const currentLimit = Math.min(chunkSize, limit - offset);
-
+      for (let page = 0; page < Math.ceil(limit / CONFIG.chunkSize); page++) {
+        const currentLimit = Math.min(CONFIG.chunkSize, limit - offset);
         if (currentLimit <= 0) break;
-
         let dataQuery = 'SELECT * FROM cartes WHERE deleted_at IS NULL AND 1=1';
-        let dataParams = [];
-
-        const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
-
+        const filtreData = this.ajouterFiltreCoordination(req, dataQuery, []);
         const finalQuery =
           filtreData.query +
           ' ORDER BY id LIMIT $' +
           (filtreData.params.length + 1) +
           ' OFFSET $' +
           (filtreData.params.length + 2);
-
-        const finalParams = [...filtreData.params, currentLimit, offset];
-
-        const result = await client.query(finalQuery, finalParams);
-
-        const rows = result.rows;
-        if (rows.length === 0) break;
-
+        const result = await client.query(finalQuery, [...filtreData.params, currentLimit, offset]);
+        if (result.rows.length === 0) break;
         let batchCSV = '';
-        for (const row of rows) {
+        for (const row of result.rows) {
           const csvRow = CONFIG.csvHeaders
             .map((header) => {
               let value = row[header] || '';
-
               if (typeof value === 'string') {
                 value = value.replace(/"/g, '""');
-
                 if (
                   value.includes(CONFIG.csvDelimiter) ||
                   value.includes('"') ||
-                  value.includes('\n') ||
-                  value.includes('\r')
-                ) {
+                  value.includes('\n')
+                )
                   value = `"${value}"`;
-                }
-              } else if (value instanceof Date) {
-                value = value.toISOString().split('T')[0];
-              }
-
+              } else if (value instanceof Date) value = value.toISOString().split('T')[0];
               return value;
             })
             .join(CONFIG.csvDelimiter);
-
           batchCSV += csvRow + '\n';
           totalWritten++;
         }
-
         res.write(batchCSV);
-        offset += rows.length;
-
-        if (iterationCount % 5 === 0) {
-          console.log(`📝 CSV limité: ${totalWritten}/${limit} lignes écrites`);
-        }
-
-        if (rows.length < currentLimit) break;
+        offset += result.rows.length;
+        if (result.rows.length < currentLimit) break;
       }
-
       res.end();
-
-      const duration = Date.now() - startTime;
-      const speed = totalWritten > 0 ? Math.round(totalWritten / (duration / 1000)) : 0;
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Export CSV limité terminé: ${totalWritten} lignes en ${duration}ms (${speed} lignes/sec)`,
-        'EXPORT_COMPLETE',
-        'Cartes',
-        null,
-        null,
-        { type: 'csv_limited', rows: totalWritten, duration, speed },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
-
       console.log(
-        `✅ Export CSV limité réussi: ${totalWritten} lignes en ${duration}ms (${speed} lignes/sec)`
+        `✅ Export CSV limité réussi: ${totalWritten} lignes en ${Date.now() - startTime}ms`
       );
     } catch (error) {
       console.error(`❌ Erreur export CSV:`, error);
-
-      if (!res.headersSent) {
-        res.status(500).json({
-          success: false,
-          error: "Erreur lors de l'export CSV",
-          message: error.message,
-          duration: `${Date.now() - startTime}ms`,
-          exportId,
-        });
-      } else {
+      if (!res.headersSent)
+        res
+          .status(500)
+          .json({ success: false, error: "Erreur lors de l'export CSV", message: error.message });
+      else {
         try {
           res.end();
         } catch (e) {
-          // Ignorer les erreurs de fin de réponse
+          /* ignorer */
         }
       }
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Erreur export CSV: ${error.message}`,
-        'EXPORT_ERROR',
-        'Cartes',
-        null,
-        null,
-        { error: error.message },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
     } finally {
       if (client?.release) client.release();
       this.activeExports.delete(exportId);
@@ -564,102 +350,35 @@ class OptimizedImportExportController {
   // ============================================
   async exportCompleteExcel(req, res) {
     const droits = this.verifierDroitsImportExport(req);
-    if (!droits.autorise) {
-      return res.status(403).json({
-        success: false,
-        error: droits.message,
-      });
-    }
+    if (!droits.autorise) return res.status(403).json({ success: false, error: droits.message });
 
     const exportId = `excel_complete_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const startTime = Date.now();
-
-    console.log(
-      `🚀 EXPORT EXCEL COMPLET demandé par ${req.user?.nomUtilisateur} (${req.user?.role}) (ID: ${exportId})`
-    );
-
-    if (this.activeExports.size >= CONFIG.maxConcurrent) {
-      return res.status(429).json({
-        success: false,
-        error: "Trop d'exports en cours",
-        message: `Maximum ${CONFIG.maxConcurrent} exports simultanés`,
-        queueLength: this.exportQueue.length,
-      });
-    }
-
+    if (this.activeExports.size >= CONFIG.maxConcurrent)
+      return res.status(429).json({ success: false, error: "Trop d'exports en cours" });
     this.activeExports.set(exportId, { startTime, type: 'excel_complete' });
-
     let client;
 
     try {
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        'Export Excel COMPLET démarré',
-        'EXPORT_START',
-        'Cartes',
-        null,
-        null,
-        { type: 'excel_complete' },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
-
       client = await db.getClient();
-
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
-      let countParams = [];
-
-      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
+      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, []);
       const countResult = await client.query(filtreCount.query, filtreCount.params);
       const totalRows = parseInt(countResult.rows[0].total);
-
       console.log(`📊 TOTAL DES DONNÉES ACCESSIBLES: ${totalRows} cartes`);
-
       if (totalRows === 0) {
         this.activeExports.delete(exportId);
-        return res.status(404).json({
-          success: false,
-          error: 'Aucune donnée à exporter',
-        });
+        return res.status(404).json({ success: false, error: 'Aucune donnée à exporter' });
       }
 
-      if (totalRows > CONFIG.maxExportRows) {
-        console.warn(
-          `⚠️ Export très volumineux: ${totalRows} lignes (max: ${CONFIG.maxExportRows})`
-        );
-
-        await annulationService.enregistrerAction(
-          req.user?.id,
-          req.user?.nomUtilisateur,
-          req.user?.nomComplet || req.user?.nomUtilisateur,
-          req.user?.role,
-          req.user?.agence || '',
-          `Export très volumineux: ${totalRows} lignes, peut être lent`,
-          'EXPORT_WARNING',
-          'Cartes',
-          null,
-          null,
-          { rows: totalRows, warning: 'large_export' },
-          req.ip,
-          null,
-          req.user?.coordination
-        );
-      }
-
-      const sampleResult = await client.query('SELECT * FROM cartes LIMIT 1');
+      const sampleResult = await client.query(
+        'SELECT * FROM cartes WHERE deleted_at IS NULL LIMIT 1'
+      );
       const firstRow = sampleResult.rows[0] || {};
-
       const excludedColumns = ['importbatchid', 'dateimport', 'created_at', 'updated_at', 'id'];
       const headers = Object.keys(firstRow).filter(
         (key) => !excludedColumns.includes(key.toLowerCase())
       );
-
-      console.log(`📋 ${headers.length} colonnes détectées`);
 
       const timestamp = new Date().toISOString().split('T')[0];
       const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
@@ -670,14 +389,9 @@ class OptimizedImportExportController {
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       );
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-Export-Complete', 'true');
       res.setHeader('X-Total-Rows', totalRows);
       res.setHeader('X-Export-ID', exportId);
-      res.setHeader('X-User-Role', req.user?.role || 'unknown');
-      if (req.user?.coordination) {
-        res.setHeader('X-User-Coordination', req.user.coordination);
-      }
 
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'GESCARD Cocody';
@@ -690,7 +404,6 @@ class OptimizedImportExportController {
         pageSetup: { paperSize: 9, orientation: 'landscape' },
         views: [{ state: 'frozen', xSplit: 0, ySplit: 1 }],
       });
-
       worksheet.columns = headers.map((header) => ({
         header: header.replace(/_/g, ' ').toUpperCase(),
         key: header,
@@ -700,22 +413,9 @@ class OptimizedImportExportController {
       const headerRow = worksheet.getRow(1);
       headerRow.height = 30;
       headerRow.eachCell((cell) => {
-        cell.font = {
-          bold: true,
-          color: { argb: 'FFFFFFFF' },
-          size: 12,
-          name: 'Calibri',
-        };
-        cell.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FF2E75B5' },
-        };
-        cell.alignment = {
-          vertical: 'middle',
-          horizontal: 'center',
-          wrapText: true,
-        };
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12, name: 'Calibri' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2E75B5' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
         cell.border = {
           top: { style: 'thin' },
           left: { style: 'thin' },
@@ -724,87 +424,50 @@ class OptimizedImportExportController {
         };
       });
 
-      console.log(`⏳ Récupération et écriture des données...`);
-
-      let offset = 0;
-      const chunkSize = 2000;
-      let totalWritten = 0;
-      let lastProgressLog = Date.now();
-      let rowOffset = 0;
-
-      // Remplacer while (true) par une boucle avec break condition
+      let offset = 0,
+        totalWritten = 0,
+        rowOffset = 0,
+        lastProgressLog = Date.now();
       let hasMoreData = true;
       for (let page = 0; hasMoreData; page++) {
         let dataQuery = 'SELECT * FROM cartes WHERE deleted_at IS NULL AND 1=1';
-        let dataParams = [];
-
-        const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
-
+        const filtreData = this.ajouterFiltreCoordination(req, dataQuery, []);
         const finalQuery =
           filtreData.query +
           ' ORDER BY id LIMIT $' +
           (filtreData.params.length + 1) +
           ' OFFSET $' +
           (filtreData.params.length + 2);
-
-        const finalParams = [...filtreData.params, chunkSize, offset];
-
-        const result = await client.query(finalQuery, finalParams);
-
-        const rows = result.rows;
-        if (rows.length === 0) {
+        const result = await client.query(finalQuery, [...filtreData.params, 2000, offset]);
+        if (result.rows.length === 0) {
           hasMoreData = false;
           break;
         }
-
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i];
+        for (let i = 0; i < result.rows.length; i++) {
+          const row = result.rows[i];
           const rowData = {};
-
           headers.forEach((header) => {
             let value = row[header];
-
-            if (value instanceof Date) {
-              value = value.toLocaleDateString('fr-FR');
-            }
-
+            if (value instanceof Date) value = value.toLocaleDateString('fr-FR');
             rowData[header] = value || '';
           });
-
           const excelRow = worksheet.addRow(rowData);
-
           if ((rowOffset + i) % 2 === 0) {
             excelRow.eachCell((cell) => {
-              cell.fill = {
-                type: 'pattern',
-                pattern: 'solid',
-                fgColor: { argb: 'FFF2F2F2' },
-              };
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
             });
           }
-
           if (row.delivrance && row.delivrance.toString().toUpperCase() === 'OUI') {
-            const delivranceCell = excelRow.getCell('delivrance');
-            if (delivranceCell) {
-              delivranceCell.font = { bold: true, color: { argb: 'FF00B050' } };
-            }
+            const c = excelRow.getCell('delivrance');
+            if (c) c.font = { bold: true, color: { argb: 'FF00B050' } };
           }
         }
-
-        totalWritten += rows.length;
-        offset += rows.length;
-        rowOffset += rows.length;
-
-        const now = Date.now();
-        if (now - lastProgressLog > 5000) {
-          const progress = Math.round((totalWritten / totalRows) * 100);
-          const elapsed = (now - startTime) / 1000;
-          const speed = Math.round(totalWritten / elapsed);
-
-          console.log(
-            `📊 Progression Excel: ${totalWritten}/${totalRows} lignes (${progress}%) - ${speed} lignes/sec`
-          );
-          lastProgressLog = now;
+        totalWritten += result.rows.length;
+        offset += result.rows.length;
+        rowOffset += result.rows.length;
+        if (Date.now() - lastProgressLog > 5000) {
+          console.log(`📊 Excel: ${totalWritten}/${totalRows} lignes`);
+          lastProgressLog = Date.now();
         }
       }
 
@@ -812,84 +475,18 @@ class OptimizedImportExportController {
         from: { row: 1, column: 1 },
         to: { row: 1, column: headers.length },
       };
-
-      worksheet.columns.forEach((column) => {
-        let maxLength = 0;
-        column.eachCell({ includeEmpty: true }, (cell) => {
-          const columnLength = cell.value ? cell.value.toString().length : 0;
-          if (columnLength > maxLength) {
-            maxLength = columnLength;
-          }
-        });
-        column.width = Math.min(50, maxLength + 2);
-      });
-
-      console.log(`⏳ Génération finale du fichier Excel...`);
-
       await workbook.xlsx.write(res);
-
-      const totalTime = Date.now() - startTime;
-      const speed = totalWritten > 0 ? Math.round(totalWritten / (totalTime / 1000)) : 0;
-      const memoryUsed = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Export Excel COMPLET terminé: ${totalWritten} lignes en ${totalTime}ms (${speed} lignes/sec)`,
-        'EXPORT_COMPLETE',
-        'Cartes',
-        null,
-        null,
-        { type: 'excel_complete', rows: totalWritten, duration: totalTime, speed },
-        req.ip,
-        null,
-        req.user?.coordination
+      console.log(
+        `🎉 Export Excel COMPLET réussi: ${totalWritten} lignes en ${(Date.now() - startTime) / 1000}s`
       );
-
-      console.log(`🎉 Export Excel COMPLET réussi !`);
-      console.log(`📊 Statistiques:`);
-      console.log(`   - Lignes exportées: ${totalWritten.toLocaleString()}`);
-      console.log(`   - Colonnes: ${headers.length}`);
-      console.log(`   - Temps total: ${(totalTime / 1000).toFixed(1)}s`);
-      console.log(`   - Vitesse: ${speed} lignes/sec`);
-      console.log(`   - Mémoire max: ${memoryUsed}MB`);
     } catch (error) {
-      console.error(`❌ ERREUR export Excel complet (ID: ${exportId}):`, error);
-
-      if (!res.headersSent) {
+      console.error(`❌ ERREUR export Excel complet:`, error);
+      if (!res.headersSent)
         res.status(500).json({
           success: false,
           error: "Erreur lors de l'export Excel complet",
           message: error.message,
-          duration: `${Date.now() - startTime}ms`,
-          exportId,
-          advice: [
-            'Le fichier peut être trop volumineux pour Excel',
-            "Essayez d'exporter en CSV pour les très gros fichiers",
-            'Divisez vos données en plusieurs exports si nécessaire',
-          ],
         });
-      }
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Erreur export Excel complet: ${error.message}`,
-        'EXPORT_ERROR',
-        'Cartes',
-        null,
-        null,
-        { error: error.message },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
     } finally {
       if (client?.release) client.release();
       this.activeExports.delete(exportId);
@@ -901,521 +498,238 @@ class OptimizedImportExportController {
   // ============================================
   async exportCompleteCSV(req, res) {
     const droits = this.verifierDroitsImportExport(req);
-    if (!droits.autorise) {
-      return res.status(403).json({
-        success: false,
-        error: droits.message,
-      });
-    }
+    if (!droits.autorise) return res.status(403).json({ success: false, error: droits.message });
 
     const exportId = `csv_complete_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const startTime = Date.now();
-
-    console.log(
-      `🚀 EXPORT CSV COMPLET demandé par ${req.user?.nomUtilisateur} (${req.user?.role}) (ID: ${exportId})`
-    );
-
-    if (this.activeExports.size >= CONFIG.maxConcurrent) {
-      return res.status(429).json({
-        success: false,
-        error: "Trop d'exports en cours",
-        message: `Maximum ${CONFIG.maxConcurrent} exports simultanés`,
-      });
-    }
-
+    if (this.activeExports.size >= CONFIG.maxConcurrent)
+      return res.status(429).json({ success: false, error: "Trop d'exports en cours" });
     this.activeExports.set(exportId, { startTime, type: 'csv_complete' });
-
     let client;
 
     try {
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        'Export CSV COMPLET démarré',
-        'EXPORT_START',
-        'Cartes',
-        null,
-        null,
-        { type: 'csv_complete' },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
-
       client = await db.getClient();
-
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
-      let countParams = [];
-
-      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
+      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, []);
       const countResult = await client.query(filtreCount.query, filtreCount.params);
       const totalRows = parseInt(countResult.rows[0].total);
-
-      console.log(`📊 TOTAL DES DONNÉES ACCESSIBLES: ${totalRows} cartes`);
-
       if (totalRows === 0) {
         this.activeExports.delete(exportId);
-        return res.status(404).json({
-          success: false,
-          error: 'Aucune donnée à exporter',
-        });
+        return res.status(404).json({ success: false, error: 'Aucune donnée à exporter' });
       }
 
       const timestamp = new Date().toISOString().split('T')[0];
       const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
       const filename = `export-complet-cartes-${timestamp}-${time}.csv`;
-
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-Export-Complete', 'true');
       res.setHeader('X-Total-Rows', totalRows);
-      res.setHeader('X-Export-ID', exportId);
-      res.setHeader('X-User-Role', req.user?.role || 'unknown');
-      if (req.user?.coordination) {
-        res.setHeader('X-User-Coordination', req.user.coordination);
-      }
-
       res.write('\uFEFF');
 
-      const sampleResult = await client.query('SELECT * FROM cartes LIMIT 1');
+      const sampleResult = await client.query(
+        'SELECT * FROM cartes WHERE deleted_at IS NULL LIMIT 1'
+      );
       const firstRow = sampleResult.rows[0] || {};
-
       const excludedColumns = ['importbatchid', 'dateimport', 'created_at', 'updated_at'];
       const headers = Object.keys(firstRow).filter(
         (key) => !excludedColumns.includes(key.toLowerCase())
       );
+      res.write(
+        headers
+          .map((h) => `"${h.replace(/"/g, '""').replace(/_/g, ' ').toUpperCase()}"`)
+          .join(CONFIG.csvDelimiter) + '\n'
+      );
 
-      const csvHeaders = headers
-        .map((header) => `"${header.replace(/"/g, '""').replace(/_/g, ' ').toUpperCase()}"`)
-        .join(CONFIG.csvDelimiter);
-
-      res.write(csvHeaders + '\n');
-
-      let offset = 0;
-      const chunkSize = CONFIG.chunkSize;
-      let totalWritten = 0;
-      let lastProgressLog = Date.now();
-
-      console.log(`⏳ Début de l'export streaming CSV...`);
-
-      // Remplacer while (true) par une boucle avec break condition
+      let offset = 0,
+        totalWritten = 0,
+        lastProgressLog = Date.now();
       let hasMoreData = true;
       for (let page = 0; hasMoreData; page++) {
         let dataQuery = 'SELECT * FROM cartes WHERE deleted_at IS NULL AND 1=1';
-        let dataParams = [];
-
-        const filtreData = this.ajouterFiltreCoordination(req, dataQuery, dataParams);
-
+        const filtreData = this.ajouterFiltreCoordination(req, dataQuery, []);
         const finalQuery =
           filtreData.query +
           ' ORDER BY id LIMIT $' +
           (filtreData.params.length + 1) +
           ' OFFSET $' +
           (filtreData.params.length + 2);
-
-        const finalParams = [...filtreData.params, chunkSize, offset];
-
-        const result = await client.query(finalQuery, finalParams);
-
-        const rows = result.rows;
-        if (rows.length === 0) {
+        const result = await client.query(finalQuery, [
+          ...filtreData.params,
+          CONFIG.chunkSize,
+          offset,
+        ]);
+        if (result.rows.length === 0) {
           hasMoreData = false;
           break;
         }
-
         let batchCSV = '';
-        for (const row of rows) {
+        for (const row of result.rows) {
           const csvRow = headers
             .map((header) => {
               let value = row[header];
-
-              if (value === null || value === undefined) {
-                return '';
-              }
-
-              let stringValue;
-              if (value instanceof Date) {
-                stringValue = value.toLocaleDateString('fr-FR');
-              } else {
-                stringValue = String(value);
-              }
-
-              if (
-                stringValue.includes(CONFIG.csvDelimiter) ||
-                stringValue.includes('"') ||
-                stringValue.includes('\n') ||
-                stringValue.includes('\r')
-              ) {
-                stringValue = `"${stringValue.replace(/"/g, '""')}"`;
-              }
-
-              return stringValue;
+              if (value === null || value === undefined) return '';
+              let s = value instanceof Date ? value.toLocaleDateString('fr-FR') : String(value);
+              if (s.includes(CONFIG.csvDelimiter) || s.includes('"') || s.includes('\n'))
+                s = `"${s.replace(/"/g, '""')}"`;
+              return s;
             })
             .join(CONFIG.csvDelimiter);
-
           batchCSV += csvRow + '\n';
           totalWritten++;
         }
-
         res.write(batchCSV);
-        offset += rows.length;
-
-        const now = Date.now();
-        if (now - lastProgressLog > 5000) {
-          const progress = Math.round((totalWritten / totalRows) * 100);
-          const elapsed = (now - startTime) / 1000;
-          const speed = Math.round(totalWritten / elapsed);
-
-          console.log(
-            `📊 Progression CSV: ${totalWritten}/${totalRows} lignes (${progress}%) - ${speed} lignes/sec`
-          );
-          lastProgressLog = now;
-
+        offset += result.rows.length;
+        if (Date.now() - lastProgressLog > 5000) {
+          console.log(`📊 CSV: ${totalWritten}/${totalRows} lignes`);
+          lastProgressLog = Date.now();
           if (res.flush) res.flush();
         }
-
-        const memUsage = process.memoryUsage().heapUsed / 1024 / 1024;
-        if (memUsage > CONFIG.memoryLimitMB * 0.8) {
-          console.warn(`⚠️ Mémoire élevée: ${Math.round(memUsage)}MB, pause de 100ms`);
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
       }
-
       res.end();
-
-      const duration = Date.now() - startTime;
-      const speed = totalWritten > 0 ? Math.round(totalWritten / (duration / 1000)) : 0;
-      const memoryUsed = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Export CSV COMPLET terminé: ${totalWritten} lignes en ${duration}ms (${speed} lignes/sec)`,
-        'EXPORT_COMPLETE',
-        'Cartes',
-        null,
-        null,
-        { type: 'csv_complete', rows: totalWritten, duration, speed },
-        req.ip,
-        null,
-        req.user?.coordination
+      console.log(
+        `🎉 Export CSV COMPLET réussi: ${totalWritten} lignes en ${(Date.now() - startTime) / 1000}s`
       );
-
-      console.log(`🎉 Export CSV COMPLET réussi !`);
-      console.log(`📊 Statistiques:`);
-      console.log(`   - Lignes exportées: ${totalWritten.toLocaleString()}`);
-      console.log(`   - Colonnes: ${headers.length}`);
-      console.log(`   - Temps total: ${(duration / 1000).toFixed(1)}s`);
-      console.log(`   - Vitesse: ${speed} lignes/sec`);
-      console.log(`   - Mémoire max: ${memoryUsed}MB`);
     } catch (error) {
-      console.error(`❌ ERREUR export CSV complet (ID: ${exportId}):`, error);
-
-      if (!res.headersSent) {
+      console.error(`❌ ERREUR export CSV complet:`, error);
+      if (!res.headersSent)
         res.status(500).json({
           success: false,
           error: "Erreur lors de l'export CSV complet",
           message: error.message,
-          duration: `${Date.now() - startTime}ms`,
-          exportId,
         });
-      } else {
+      else {
         try {
           res.end();
         } catch (e) {
-          // Ignorer les erreurs de fin de réponse
+          /* ignorer */
         }
       }
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Erreur export CSV complet: ${error.message}`,
-        'EXPORT_ERROR',
-        'Cartes',
-        null,
-        null,
-        { error: error.message },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
     } finally {
       if (client?.release) client.release();
       this.activeExports.delete(exportId);
     }
   }
 
-  // ============================================
-  // EXPORT TOUT EN UN CLIC
-  // ============================================
   async exportAllData(req, res) {
     const droits = this.verifierDroitsImportExport(req);
-    if (!droits.autorise) {
-      return res.status(403).json({
-        success: false,
-        error: droits.message,
-      });
-    }
-
-    const exportId = `all_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    console.log(
-      `🚀 Export "TOUT EN UN" demandé par ${req.user?.nomUtilisateur} (${req.user?.role}) (ID: ${exportId})`
-    );
-
+    if (!droits.autorise) return res.status(403).json({ success: false, error: droits.message });
     let client;
-
     try {
       client = await db.getClient();
-
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
-      let countParams = [];
-
-      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
+      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, []);
       const countResult = await client.query(filtreCount.query, filtreCount.params);
       const totalRows = parseInt(countResult.rows[0].total);
-
-      console.log(`📊 TOTAL ACCESSIBLE: ${totalRows} cartes`);
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Export "TOUT EN UN" démarré: ${totalRows} cartes`,
-        'EXPORT_START',
-        'Cartes',
-        null,
-        null,
-        { type: 'auto_select', rows: totalRows },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
-
-      let chosenFormat;
-
-      if (totalRows > CONFIG.maxExportRowsRecommended) {
-        chosenFormat = 'csv';
-      } else {
-        chosenFormat = 'excel';
-      }
-
-      console.log(`🤔 Format choisi: ${chosenFormat.toUpperCase()}`);
-
-      req.exportId = exportId;
-
-      if (chosenFormat === 'excel') {
-        await this.exportCompleteExcel(req, res);
-      } else {
-        await this.exportCompleteCSV(req, res);
-      }
+      const chosenFormat = totalRows > CONFIG.maxExportRowsRecommended ? 'csv' : 'excel';
+      if (client?.release) client.release();
+      if (chosenFormat === 'excel') await this.exportCompleteExcel(req, res);
+      else await this.exportCompleteCSV(req, res);
     } catch (error) {
       console.error('❌ Erreur export tout en un:', error);
-
-      if (!res.headersSent) {
+      if (!res.headersSent)
         res.status(500).json({
           success: false,
           error: "Erreur lors du choix de la méthode d'export",
           message: error.message,
-          advice: [
-            "Essayez d'utiliser directement /export/complete pour Excel",
-            'Ou /export/complete/csv pour CSV',
-            'Vérifiez que la base de données est accessible',
-          ],
         });
-      }
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Erreur export tout en un: ${error.message}`,
-        'EXPORT_ERROR',
-        'Cartes',
-        null,
-        null,
-        { error: error.message },
-        req.ip,
-        null,
-        req.user?.coordination
-      );
-    } finally {
-      if (client?.release) client.release();
     }
   }
 
-  // ============================================
-  // EXPORT CSV PAR SITE
-  // ============================================
   async exportCSVBySite(req, res) {
     const droits = this.verifierDroitsImportExport(req);
-    if (!droits.autorise) {
-      return res.status(403).json({
-        success: false,
-        error: droits.message,
-      });
-    }
-
+    if (!droits.autorise) return res.status(403).json({ success: false, error: droits.message });
     const { siteRetrait } = req.query;
-
-    if (!siteRetrait) {
-      return res.status(400).json({
-        success: false,
-        error: 'Paramètre siteRetrait requis',
-      });
-    }
-
+    if (!siteRetrait)
+      return res.status(400).json({ success: false, error: 'Paramètre siteRetrait requis' });
     const decodedSite = decodeURIComponent(siteRetrait).replace(/\+/g, ' ').trim();
-
-    console.log(
-      `📤 Export CSV pour site: ${decodedSite} par ${req.user?.nomUtilisateur} (${req.user?.role})`
-    );
-
     let client;
-
     try {
       client = await db.getClient();
-
       let countQuery = 'SELECT COUNT(*) as count FROM cartes WHERE "SITE DE RETRAIT" = $1';
-      let countParams = [decodedSite];
-
       const filtreCount = this.ajouterFiltreCoordination(
         req,
         countQuery,
-        countParams,
+        [decodedSite],
         'coordination'
       );
-
       const siteCheck = await client.query(filtreCount.query, filtreCount.params);
       const count = parseInt(siteCheck.rows[0].count);
-
-      if (count === 0) {
-        return res.status(404).json({
-          success: false,
-          error: `Aucune donnée pour le site: ${decodedSite}`,
-        });
-      }
+      if (count === 0)
+        return res
+          .status(404)
+          .json({ success: false, error: `Aucune donnée pour le site: ${decodedSite}` });
 
       const safeSiteName = decodedSite.replace(/[^a-z0-9]/gi, '-').toLowerCase();
       const timestamp = new Date().toISOString().split('T')[0];
       const filename = `export-${safeSiteName}-${timestamp}.csv`;
-
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-Site', decodedSite);
-      res.setHeader('X-Total-Rows', count);
-      res.setHeader('X-User-Role', req.user?.role || 'unknown');
-      if (req.user?.coordination) {
-        res.setHeader('X-User-Coordination', req.user.coordination);
-      }
-
       res.write('\uFEFF');
+      res.write(CONFIG.csvHeaders.map((h) => `"${h}"`).join(CONFIG.csvDelimiter) + '\n');
 
-      const headers = CONFIG.csvHeaders.map((h) => `"${h}"`).join(CONFIG.csvDelimiter) + '\n';
-      res.write(headers);
-
-      let offset = 0;
-      const chunkSize = CONFIG.chunkSize;
-      let totalWritten = 0;
-
-      // Remplacer while (true) par une boucle avec break condition
-      let hasMoreData = true;
+      let offset = 0,
+        totalWritten = 0,
+        hasMoreData = true;
       for (let page = 0; hasMoreData; page++) {
         let dataQuery = 'SELECT * FROM cartes WHERE "SITE DE RETRAIT" = $1';
-        let dataParams = [decodedSite];
-
         const filtreData = this.ajouterFiltreCoordination(
           req,
           dataQuery,
-          dataParams,
+          [decodedSite],
           'coordination'
         );
-
         const finalQuery =
           filtreData.query +
           ' ORDER BY id LIMIT $' +
           (filtreData.params.length + 1) +
           ' OFFSET $' +
           (filtreData.params.length + 2);
-
-        const finalParams = [...filtreData.params, chunkSize, offset];
-
-        const result = await client.query(finalQuery, finalParams);
-
-        const rows = result.rows;
-        if (rows.length === 0) {
+        const result = await client.query(finalQuery, [
+          ...filtreData.params,
+          CONFIG.chunkSize,
+          offset,
+        ]);
+        if (result.rows.length === 0) {
           hasMoreData = false;
           break;
         }
-
         let batchCSV = '';
-        for (const row of rows) {
+        for (const row of result.rows) {
           const csvRow = CONFIG.csvHeaders
             .map((header) => {
               let value = row[header] || '';
-
               if (typeof value === 'string') {
                 value = value.replace(/"/g, '""');
                 if (
                   value.includes(CONFIG.csvDelimiter) ||
                   value.includes('"') ||
                   value.includes('\n')
-                ) {
+                )
                   value = `"${value}"`;
-                }
-              } else if (value instanceof Date) {
-                value = value.toLocaleDateString('fr-FR');
-              }
-
+              } else if (value instanceof Date) value = value.toLocaleDateString('fr-FR');
               return value;
             })
             .join(CONFIG.csvDelimiter);
-
           batchCSV += csvRow + '\n';
           totalWritten++;
         }
-
         res.write(batchCSV);
-        offset += rows.length;
-
-        console.log(`📝 Site ${decodedSite}: ${totalWritten}/${count} lignes`);
+        offset += result.rows.length;
       }
-
       res.end();
-
       console.log(`✅ Export CSV site terminé: ${decodedSite} - ${totalWritten} lignes`);
     } catch (error) {
       console.error('❌ Erreur export CSV site:', error);
-
-      if (!res.headersSent) {
-        res.status(500).json({
-          success: false,
-          error: 'Erreur export CSV site: ' + error.message,
-        });
-      }
+      if (!res.headersSent)
+        res.status(500).json({ success: false, error: 'Erreur export CSV site: ' + error.message });
     } finally {
       if (client?.release) client.release();
     }
   }
 
   // ============================================
-  // IMPORT CSV
+  // IMPORT CSV / EXCEL
   // ============================================
   async importCSV(req, res) {
     const droits = this.verifierDroitsImportExport(req);
@@ -1424,41 +738,25 @@ class OptimizedImportExportController {
         try {
           fs.unlinkSync(req.file.path);
         } catch (e) {
-          // Ignorer les erreurs de nettoyage
+          /* ignorer */
         }
       }
-      return res.status(403).json({
-        success: false,
-        error: droits.message,
-      });
+      return res.status(403).json({ success: false, error: droits.message });
     }
-
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: 'Aucun fichier uploadé',
-      });
-    }
+    if (!req.file) return res.status(400).json({ success: false, error: 'Aucun fichier uploadé' });
 
     const importId = `import_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const importBatchId = uuidv4();
     const startTime = Date.now();
-
     console.log(
       `📥 Import CSV: ${req.file.originalname} (ID: ${importId}) par ${req.user?.nomUtilisateur} (${req.user?.role})`
     );
 
     if (this.activeImports.size >= 2) {
       fs.unlinkSync(req.file.path);
-      return res.status(429).json({
-        success: false,
-        error: "Trop d'imports en cours",
-        message: 'Maximum 2 imports simultanés',
-      });
+      return res.status(429).json({ success: false, error: "Trop d'imports en cours" });
     }
-
     this.activeImports.set(importId, { startTime, file: req.file.originalname });
-
     const client = await db.getClient();
 
     try {
@@ -1478,32 +776,19 @@ class OptimizedImportExportController {
         importBatchId,
         req.user?.coordination
       );
-
       await client.query('BEGIN');
 
       const stats = fs.statSync(req.file.path);
       const fileSizeMB = stats.size / (1024 * 1024);
-
-      if (fileSizeMB > 100) {
+      if (fileSizeMB > 100)
         throw new Error(`Fichier trop volumineux: ${Math.round(fileSizeMB)}MB (max 100MB)`);
-      }
-
-      console.log(`📊 Taille fichier: ${Math.round(fileSizeMB)}MB`);
 
       const csvData = await this.parseFile(req.file.path, req.file.originalname);
+      if (csvData.length === 0) throw new Error('Le fichier CSV est vide');
 
-      console.log(`📋 ${csvData.length} lignes à traiter`);
-
-      if (csvData.length === 0) {
-        throw new Error('Le fichier CSV est vide');
-      }
-
-      // ✅ Log des en-têtes détectés pour diagnostic
       const headersDetected = Object.keys(csvData[0]);
       console.log(`📋 En-têtes détectés: ${headersDetected.join(' | ')}`);
 
-      // ✅ Mapping flexible des en-têtes alternatifs vers les noms standards
-      // Permet d'accepter des variantes de noms de colonnes dans le fichier
       const HEADER_ALIASES = {
         NOM: ['NOM', 'NAME', 'LASTNAME', 'LAST NAME', 'FAMILLE'],
         PRENOMS: ['PRENOMS', 'PRENOM', 'FIRSTNAME', 'FIRST NAME', 'PRÉNOMS', 'PRÉNOM'],
@@ -1551,7 +836,7 @@ class OptimizedImportExportController {
       const normaliserLigne = (row) => {
         const normalised = { ...row };
         for (const [standard, aliases] of Object.entries(HEADER_ALIASES)) {
-          if (normalised[standard] !== undefined) continue; // déjà présent
+          if (normalised[standard] !== undefined) continue;
           for (const alias of aliases) {
             if (row[alias] !== undefined) {
               normalised[standard] = row[alias];
@@ -1563,29 +848,24 @@ class OptimizedImportExportController {
       };
 
       const csvDataNormalisee = csvData.map(normaliserLigne);
-
-      // ✅ Vérifier les en-têtes requis sur les données NORMALISÉES
       const firstRowNorm = csvDataNormalisee[0];
       const missingHeaders = CONFIG.requiredHeaders.filter(
         (h) => !Object.keys(firstRowNorm).some((key) => key.toUpperCase() === h)
       );
-
-      if (missingHeaders.length > 0) {
+      if (missingHeaders.length > 0)
         throw new Error(
           `En-têtes requis manquants: ${missingHeaders.join(', ')}. En-têtes détectés: ${headersDetected.join(', ')}`
         );
-      }
 
-      const batchSize = CONFIG.batchSize;
-      let imported = 0;
-      let updated = 0;
-      let duplicates = 0;
-      let errors = 0;
+      let imported = 0,
+        updated = 0,
+        duplicates = 0,
+        errors = 0;
       const errorDetails = [];
       let processedRows = 0;
 
-      for (let i = 0; i < csvDataNormalisee.length; i += batchSize) {
-        const batch = csvDataNormalisee.slice(i, i + batchSize);
+      for (let i = 0; i < csvDataNormalisee.length; i += CONFIG.batchSize) {
+        const batch = csvDataNormalisee.slice(i, i + CONFIG.batchSize);
         const batchResult = await this.processCSVBatchOptimized(
           client,
           batch,
@@ -1595,32 +875,19 @@ class OptimizedImportExportController {
           req.user?.role,
           req.user?.coordination
         );
-
         imported += batchResult.imported;
         updated += batchResult.updated;
         duplicates += batchResult.duplicates || 0;
         errors += batchResult.errors;
         processedRows += batch.length;
-
-        const progress = Math.round((processedRows / csvDataNormalisee.length) * 100);
+        if (batchResult.errors > 0) errorDetails.push(...batchResult.errorDetails.slice(0, 10));
         const elapsed = (Date.now() - startTime) / 1000;
-        const speed = Math.round(processedRows / elapsed);
-
         console.log(
-          `📈 Progression: ${progress}% (${processedRows}/${csvDataNormalisee.length}) - ${speed} lignes/sec`
+          `📈 Progression: ${Math.round((processedRows / csvDataNormalisee.length) * 100)}% (${processedRows}/${csvDataNormalisee.length}) - ${Math.round(processedRows / elapsed)} lignes/sec`
         );
-
-        if (batchResult.errors > 0) {
-          errorDetails.push(...batchResult.errorDetails.slice(0, 10));
-        }
-
-        if (i % (batchSize * 5) === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
       }
 
       await client.query('COMMIT');
-
       const duration = Date.now() - startTime;
       const speed =
         csvDataNormalisee.length > 0 ? Math.round(csvDataNormalisee.length / (duration / 1000)) : 0;
@@ -1663,33 +930,26 @@ class OptimizedImportExportController {
           lines_per_second: speed,
           file_size_mb: Math.round(fileSizeMB * 10) / 10,
         },
-        // ✅ Erreurs lisibles : max 20 renvoyées au frontend
         errors: errorDetails.slice(0, 20),
       });
     } catch (error) {
       console.error('❌ Erreur import CSV:', error);
-
       try {
         await client.query('ROLLBACK');
-      } catch (rollbackError) {
-        console.warn('⚠️ Erreur rollback:', rollbackError.message);
+      } catch (e) {
+        /* ignorer */
       }
-
-      res.status(500).json({
-        success: false,
-        error: 'Erreur import CSV',
-        message: error.message,
-        importId,
-      });
+      res
+        .status(500)
+        .json({ success: false, error: 'Erreur import CSV', message: error.message, importId });
     } finally {
       if (req.file?.path) {
         try {
           fs.unlinkSync(req.file.path);
         } catch (e) {
-          console.warn('⚠️ Impossible supprimer fichier:', e.message);
+          /* ignorer */
         }
       }
-
       if (client?.release) client.release();
       this.activeImports.delete(importId);
     }
@@ -1705,32 +965,21 @@ class OptimizedImportExportController {
         try {
           fs.unlinkSync(req.file.path);
         } catch (e) {
-          // Ignorer les erreurs de nettoyage
+          /* ignorer */
         }
       }
-      return res.status(403).json({
-        success: false,
-        error: droits.message,
-      });
+      return res.status(403).json({ success: false, error: droits.message });
     }
-
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: 'Aucun fichier uploadé',
-      });
-    }
+    if (!req.file) return res.status(400).json({ success: false, error: 'Aucun fichier uploadé' });
 
     const importId = `smart_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const importBatchId = uuidv4();
     const startTime = Date.now();
-
     console.log(
       `🧠 Import Smart Sync: ${req.file.originalname} (ID: ${importId}) par ${req.user?.nomUtilisateur} (${req.user?.role})`
     );
 
     const client = await db.getClient();
-
     try {
       await annulationService.enregistrerAction(
         req.user?.id,
@@ -1748,14 +997,9 @@ class OptimizedImportExportController {
         importBatchId,
         req.user?.coordination
       );
-
       await client.query('BEGIN');
 
       const csvDataRaw = await this.parseFile(req.file.path, req.file.originalname);
-      const headersDetectedSmart = Object.keys(csvDataRaw[0] || {});
-      console.log(`📋 En-têtes Smart Sync: ${headersDetectedSmart.join(' | ')}`);
-
-      // Même normalisation des en-têtes que pour l'import standard
       const HEADER_ALIASES_SMART = {
         NOM: ['NOM', 'NAME', 'LASTNAME', 'LAST NAME', 'FAMILLE'],
         PRENOMS: ['PRENOMS', 'PRENOM', 'FIRSTNAME', 'FIRST NAME', 'PRÉNOMS', 'PRÉNOM'],
@@ -1814,21 +1058,17 @@ class OptimizedImportExportController {
       });
 
       console.log(`📋 ${csvData.length} lignes à traiter avec fusion intelligente`);
-
-      let imported = 0;
-      let updated = 0;
-      let duplicates = 0;
-      let errors = 0;
+      let imported = 0,
+        updated = 0,
+        duplicates = 0,
+        errors = 0;
       const errorDetails = [];
 
       for (let i = 0; i < csvData.length; i++) {
         try {
           const item = csvData[i];
-
-          if (!item.COORDINATION && req.user?.coordination && req.user?.role === 'Gestionnaire') {
+          if (!item.COORDINATION && req.user?.coordination && req.user?.role === 'Gestionnaire')
             item.COORDINATION = req.user.coordination;
-          }
-
           if (!item.NOM || !item.PRENOMS) {
             errors++;
             errorDetails.push(`Ligne ${i + 2}: NOM et PRENOMS obligatoires`);
@@ -1837,26 +1077,27 @@ class OptimizedImportExportController {
 
           const nom = item.NOM.toString().trim();
           const prenoms = item.PRENOMS.toString().trim();
-          const dateNaissanceSmartRaw = this.formatDate(item['DATE DE NAISSANCE']);
-          const lieuNaissanceSmartRaw = this.sanitizeString(item['LIEU NAISSANCE']);
+          const dateNaissance = this.formatDate(item['DATE DE NAISSANCE']);
+          const lieuNaissance = this.sanitizeString(item['LIEU NAISSANCE']);
+          const rangement = this.sanitizeString(item['RANGEMENT']);
 
-          // ✅ Doublon = même nom + mêmes prénoms + même date de naissance + même lieu de naissance
+          // ✅ CORRIGÉ : 5 champs identitaires pour détecter un doublon
           const existingCarte = await client.query(
             `SELECT * FROM cartes
-             WHERE LOWER(TRIM(nom)) = LOWER($1)
-               AND LOWER(TRIM(prenoms)) = LOWER($2)
-               AND "DATE DE NAISSANCE" = $3
-               AND LOWER(TRIM("LIEU NAISSANCE")) = LOWER($4)`,
-            [nom, prenoms, dateNaissanceSmartRaw, lieuNaissanceSmartRaw]
+             WHERE LOWER(TRIM(nom))                  = LOWER($1)
+               AND LOWER(TRIM(prenoms))              = LOWER($2)
+               AND "DATE DE NAISSANCE"               = $3
+               AND LOWER(TRIM("LIEU NAISSANCE"))     = LOWER($4)
+               AND LOWER(TRIM(COALESCE(rangement,''))) = LOWER($5)
+               AND deleted_at IS NULL`,
+            [nom, prenoms, dateNaissance, lieuNaissance, rangement]
           );
 
           if (existingCarte.rows.length > 0) {
             const carteExistante = existingCarte.rows[0];
             const updatedRecord = await this.smartUpdateCarte(client, carteExistante, item);
-
             if (updatedRecord) {
               updated++;
-
               await annulationService.enregistrerAction(
                 req.user?.id,
                 req.user?.nomUtilisateur,
@@ -1885,7 +1126,6 @@ class OptimizedImportExportController {
               req.user?.coordination
             );
             imported++;
-
             await annulationService.enregistrerAction(
               req.user?.id,
               req.user?.nomUtilisateur,
@@ -1907,34 +1147,14 @@ class OptimizedImportExportController {
           errors++;
           errorDetails.push(`Ligne ${i + 2}: ${error.message}`);
         }
-
-        if ((i + 1) % 1000 === 0) {
-          const progress = Math.round(((i + 1) / csvData.length) * 100);
-          console.log(`📊 Progression smart: ${progress}% (${i + 1}/${csvData.length})`);
-        }
+        if ((i + 1) % 1000 === 0)
+          console.log(
+            `📊 Progression smart: ${Math.round(((i + 1) / csvData.length) * 100)}% (${i + 1}/${csvData.length})`
+          );
       }
 
       await client.query('COMMIT');
-
       const duration = Date.now() - startTime;
-
-      await annulationService.enregistrerAction(
-        req.user?.id,
-        req.user?.nomUtilisateur,
-        req.user?.nomComplet || req.user?.nomUtilisateur,
-        req.user?.role,
-        req.user?.agence || '',
-        `Import Smart Sync terminé: ${imported} nouvelles, ${updated} mises à jour, ${duplicates} identiques, ${errors} erreurs`,
-        'IMPORT_COMPLETE',
-        'Cartes',
-        null,
-        null,
-        { imported, updated, duplicates, errors, duration },
-        req.ip,
-        importBatchId,
-        req.user?.coordination
-      );
-
       console.log(`✅ Import Smart Sync terminé en ${duration}ms`);
       console.log(
         `📊 Résultats: ${imported} nouvelles, ${updated} mises à jour, ${duplicates} identiques, ${errors} erreurs`
@@ -1959,27 +1179,22 @@ class OptimizedImportExportController {
       });
     } catch (error) {
       console.error('❌ Erreur import smart sync:', error);
-
       try {
         await client.query('ROLLBACK');
-      } catch (rollbackError) {
-        console.warn('⚠️ Erreur rollback:', rollbackError.message);
+      } catch (e) {
+        /* ignorer */
       }
-
-      res.status(500).json({
-        success: false,
-        error: 'Erreur import smart sync',
-        message: error.message,
-      });
+      res
+        .status(500)
+        .json({ success: false, error: 'Erreur import smart sync', message: error.message });
     } finally {
       if (req.file?.path) {
         try {
           fs.unlinkSync(req.file.path);
         } catch (e) {
-          console.warn('⚠️ Impossible supprimer fichier:', e.message);
+          /* ignorer */
         }
       }
-
       if (client?.release) client.release();
     }
   }
@@ -1992,35 +1207,24 @@ class OptimizedImportExportController {
     return new Promise((resolve, reject) => {
       const results = [];
       let rowCount = 0;
-
       fs.createReadStream(filePath, { encoding: 'utf8' })
         .pipe(
           csv({
             separator: CONFIG.csvDelimiter,
-            mapHeaders: ({ header }) => {
-              return (
-                header
-                  .trim()
-                  .toUpperCase()
-                  // ✅ Garder les apostrophes (LIEU D'ENROLEMENT) et tirets
-                  .replace(/[^\w\s'-]/g, '')
-                  .replace(/\s+/g, ' ')
-              );
-            },
-            mapValues: ({ value }) => {
-              if (!value) return '';
-              return value.toString().trim();
-            },
+            mapHeaders: ({ header }) =>
+              header
+                .trim()
+                .toUpperCase()
+                .replace(/[^\w\s'-]/g, '')
+                .replace(/\s+/g, ' '),
+            mapValues: ({ value }) => (value ? value.toString().trim() : ''),
             skipLines: 0,
           })
         )
         .on('data', (data) => {
           results.push(data);
           rowCount++;
-
-          if (rowCount % 10000 === 0) {
-            console.log(`📖 CSV parsing: ${rowCount} lignes lues`);
-          }
+          if (rowCount % 10000 === 0) console.log(`📖 CSV parsing: ${rowCount} lignes lues`);
         })
         .on('end', () => {
           console.log(`✅ CSV parsing terminé: ${rowCount} lignes`);
@@ -2032,39 +1236,29 @@ class OptimizedImportExportController {
     });
   }
 
-  // ✅ Parsing Excel (.xlsx / .xls) → même format de données que parseCSVStream
   async parseExcelFile(filePath) {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(filePath);
-
     const worksheet = workbook.worksheets[0];
     if (!worksheet) throw new Error('Le fichier Excel ne contient aucune feuille');
-
-    // ✅ Extraire la valeur brute d'une cellule ExcelJS (gère tous les types)
     const getCellValue = (cell) => {
       if (cell === null || cell === undefined) return '';
-      // ExcelJS peut retourner un objet { text, hyperlink } pour les cellules riches
       if (typeof cell === 'object') {
         if (cell.text !== undefined) return String(cell.text).trim();
-        if (cell.result !== undefined) return String(cell.result).trim(); // formule
+        if (cell.result !== undefined) return String(cell.result).trim();
         if (cell.value !== undefined) return getCellValue(cell.value);
       }
       return String(cell).trim();
     };
-
     const results = [];
-    let headers = [];
-    let headerRowFound = false;
-
+    let headers = [],
+      headerRowFound = false;
     worksheet.eachRow({ includeEmpty: false }, (row) => {
-      // Extraire toutes les valeurs de la ligne
       const rawValues = [];
       row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
         rawValues[colNumber - 1] = getCellValue(cell.value);
       });
-
       if (!headerRowFound) {
-        // Normaliser les en-têtes exactement comme parseCSVStream
         headers = rawValues.map((h) =>
           String(h || '')
             .trim()
@@ -2073,28 +1267,18 @@ class OptimizedImportExportController {
             .replace(/\s+/g, ' ')
         );
         headerRowFound = true;
-        console.log(`📋 En-têtes Excel lus: ${headers.filter(Boolean).join(' | ')}`);
       } else {
-        // Construire l'objet de données
         const obj = {};
         headers.forEach((header, i) => {
           if (header) obj[header] = rawValues[i] || '';
         });
-        // Ignorer les lignes complètement vides
-        if (Object.values(obj).some((v) => v !== '')) {
-          results.push(obj);
-        }
+        if (Object.values(obj).some((v) => v !== '')) results.push(obj);
       }
     });
-
     console.log(`✅ Excel parsing terminé: ${results.length} lignes`);
-    if (results.length > 0) {
-      console.log(`📋 Exemple ligne 1: NOM=${results[0].NOM}, PRENOMS=${results[0].PRENOMS}`);
-    }
     return results;
   }
 
-  // ✅ Détecte automatiquement le format (CSV ou Excel) selon l'extension du fichier
   async parseFile(filePath, originalName) {
     const ext = (originalName || filePath).toLowerCase().split('.').pop();
     if (ext === 'xlsx' || ext === 'xls') {
@@ -2114,26 +1298,21 @@ class OptimizedImportExportController {
     userRole,
     userCoordination
   ) {
-    const result = {
-      imported: 0,
-      updated: 0,
-      duplicates: 0,
-      errors: 0,
-      errorDetails: [],
-    };
+    const result = { imported: 0, updated: 0, duplicates: 0, errors: 0, errorDetails: [] };
+
+    const insertValues = [];
+    const insertParams = [];
+    let paramIndex = 0;
 
     for (let i = 0; i < batch.length; i++) {
       const data = batch[i];
       const lineNum = startLine + i;
-      // ✅ Déclarés avant le try pour être accessibles dans le catch
-      let nom = '';
-      let prenoms = '';
+      let nom = '',
+        prenoms = '';
 
       try {
-        if (!data.COORDINATION && userCoordination && userRole === 'Gestionnaire') {
+        if (!data.COORDINATION && userCoordination && userRole === 'Gestionnaire')
           data.COORDINATION = userCoordination;
-        }
-
         if (!data.NOM || !data.PRENOMS) {
           result.errors++;
           result.errorDetails.push(`Ligne ${lineNum}: NOM et PRENOMS obligatoires`);
@@ -2145,25 +1324,28 @@ class OptimizedImportExportController {
         const siteRetrait = data['SITE DE RETRAIT']?.toString().trim() || '';
         const dateNaissanceRaw = this.formatDate(data['DATE DE NAISSANCE']);
         const lieuNaissanceRaw = this.sanitizeString(data['LIEU NAISSANCE']);
+        const rangementRaw = this.sanitizeString(data['RANGEMENT']);
 
-        // ✅ Doublon = même nom + mêmes prénoms + même date de naissance + même lieu de naissance
+        // ✅ CORRIGÉ : 5 champs identitaires pour détecter un doublon
         const existing = await client.query(
           `SELECT id, coordination, "SITE DE RETRAIT" as site FROM cartes
-           WHERE LOWER(TRIM(nom)) = LOWER($1)
-             AND LOWER(TRIM(prenoms)) = LOWER($2)
-             AND "DATE DE NAISSANCE" = $3
-             AND LOWER(TRIM("LIEU NAISSANCE")) = LOWER($4)`,
-          [nom, prenoms, dateNaissanceRaw, lieuNaissanceRaw]
+           WHERE LOWER(TRIM(nom))                    = LOWER($1)
+             AND LOWER(TRIM(prenoms))                = LOWER($2)
+             AND "DATE DE NAISSANCE"                 = $3
+             AND LOWER(TRIM("LIEU NAISSANCE"))       = LOWER($4)
+             AND LOWER(TRIM(COALESCE(rangement,''))) = LOWER($5)
+             AND deleted_at IS NULL`,
+          [nom, prenoms, dateNaissanceRaw, lieuNaissanceRaw, rangementRaw]
         );
 
         const insertData = {
           "LIEU D'ENROLEMENT": this.sanitizeString(data["LIEU D'ENROLEMENT"]),
           'SITE DE RETRAIT': siteRetrait,
-          RANGEMENT: this.sanitizeString(data['RANGEMENT']),
+          RANGEMENT: rangementRaw,
           NOM: nom,
           PRENOMS: prenoms,
-          'DATE DE NAISSANCE': this.formatDate(data['DATE DE NAISSANCE']),
-          'LIEU NAISSANCE': this.sanitizeString(data['LIEU NAISSANCE']),
+          'DATE DE NAISSANCE': dateNaissanceRaw,
+          'LIEU NAISSANCE': lieuNaissanceRaw,
           CONTACT: this.formatPhone(data['CONTACT']),
           DELIVRANCE: this.formatDelivrance(data['DELIVRANCE']),
           'CONTACT DE RETRAIT': this.formatPhone(data['CONTACT DE RETRAIT']),
@@ -2172,7 +1354,7 @@ class OptimizedImportExportController {
         };
 
         if (existing.rows.length > 0) {
-          // Doublon trouvé — bloquer si Gestionnaire et coordination différente
+          // ✅ Doublon inter-coordination : bloquer si Gestionnaire
           if (
             userRole === 'Gestionnaire' &&
             existing.rows[0].coordination &&
@@ -2180,27 +1362,18 @@ class OptimizedImportExportController {
           ) {
             result.duplicates++;
             result.errorDetails.push(
-              `⛔ Ligne ${lineNum} [DOUBLON BLOQUÉ] "${nom} ${prenoms}" (né le ${dateNaissanceRaw || '?'} à ${lieuNaissanceRaw || '?'}) existe déjà dans la coordination "${existing.rows[0].coordination}" — modification non autorisée`
+              `⛔ Ligne ${lineNum} [DOUBLON BLOQUÉ] "${nom} ${prenoms}" existe déjà dans la coordination "${existing.rows[0].coordination}" — modification non autorisée`
             );
             continue;
           }
 
-          // Mise à jour de la carte existante
           await client.query(
-            `
-            UPDATE cartes SET
-              "LIEU D'ENROLEMENT" = $1,
-              rangement = $2,
-              "DATE DE NAISSANCE" = $3,
-              "LIEU NAISSANCE" = $4,
-              contact = $5,
-              delivrance = $6,
-              "CONTACT DE RETRAIT" = $7,
-              "DATE DE DELIVRANCE" = $8,
-              coordination = $9,
-              dateimport = NOW()
-            WHERE id = $10
-          `,
+            `UPDATE cartes SET
+              "LIEU D'ENROLEMENT" = $1, rangement = $2, "DATE DE NAISSANCE" = $3,
+              "LIEU NAISSANCE" = $4, contact = $5, delivrance = $6,
+              "CONTACT DE RETRAIT" = $7, "DATE DE DELIVRANCE" = $8,
+              coordination = $9, dateimport = NOW()
+             WHERE id = $10`,
             [
               insertData["LIEU D'ENROLEMENT"],
               insertData['RANGEMENT'],
@@ -2214,71 +1387,64 @@ class OptimizedImportExportController {
               existing.rows[0].id,
             ]
           );
-
-          result.updated++; // mise à jour réussie — pas un doublon bloqué
+          result.updated++;
         } else {
-          // ✅ Nouvelle carte — colonnes en minuscules sans guillemets
-          await client.query(
-            `
-            INSERT INTO cartes (
-              "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
-              "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
-              "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, dateimport
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-          `,
-            [
-              insertData["LIEU D'ENROLEMENT"],
-              insertData['SITE DE RETRAIT'],
-              insertData['RANGEMENT'],
-              insertData['NOM'],
-              insertData['PRENOMS'],
-              insertData['DATE DE NAISSANCE'],
-              insertData['LIEU NAISSANCE'],
-              insertData['CONTACT'],
-              insertData['DELIVRANCE'],
-              insertData['CONTACT DE RETRAIT'],
-              insertData['DATE DE DELIVRANCE'],
-              insertData['COORDINATION'],
-            ]
+          // ✅ CORRIGÉ : ON CONFLICT sur 5 champs identitaires avec WHERE deleted_at IS NULL
+          const p = paramIndex;
+          insertValues.push(
+            `($${p + 1},$${p + 2},$${p + 3},$${p + 4},$${p + 5},$${p + 6},$${p + 7},$${p + 8},$${p + 9},$${p + 10},$${p + 11},$${p + 12},NOW())`
           );
-
+          insertParams.push(
+            insertData["LIEU D'ENROLEMENT"],
+            insertData['SITE DE RETRAIT'],
+            insertData['RANGEMENT'],
+            insertData['NOM'],
+            insertData['PRENOMS'],
+            insertData['DATE DE NAISSANCE'],
+            insertData['LIEU NAISSANCE'],
+            insertData['CONTACT'],
+            insertData['DELIVRANCE'],
+            insertData['CONTACT DE RETRAIT'],
+            insertData['DATE DE DELIVRANCE'],
+            insertData['COORDINATION']
+          );
+          paramIndex += 12;
           result.imported++;
         }
       } catch (error) {
         result.errors++;
-        // ✅ Message d'erreur détaillé et compréhensible
         let messageErreur = error.message;
-
         if (error.message.includes("n'existe pas")) {
-          // Erreur colonne PostgreSQL — extraire le nom de la colonne
           const match = error.message.match(/«\s*(.+?)\s*»/);
-          const colonne = match ? match[1] : '?';
-          messageErreur = `Colonne inconnue en base de données: "${colonne}" — contactez l'administrateur`;
-        } else if (
-          error.message.includes('violates not-null') ||
-          error.message.includes('null value')
-        ) {
-          messageErreur = `Champ obligatoire manquant (NOM ou PRENOMS vide)`;
-        } else if (error.message.includes('duplicate key') || error.message.includes('unique')) {
-          messageErreur = `Doublon détecté — cette carte existe déjà`;
-        } else if (error.message.includes('invalid input syntax')) {
-          const match = error.message.match(/type "(.+?)"/);
-          const type = match ? match[1] : 'inconnu';
-          messageErreur = `Format de données invalide pour le type "${type}" — vérifiez les dates et numéros`;
-        }
-
+          messageErreur = `Colonne inconnue: "${match ? match[1] : '?'}"`;
+        } else if (error.message.includes('duplicate key') || error.message.includes('unique'))
+          messageErreur = `Doublon détecté`;
         result.errorDetails.push(
           `❌ Ligne ${lineNum} [${nom || '?'} ${prenoms || '?'}]: ${messageErreur}`
         );
-
-        // Logger en détail dans la console serveur
-        if (result.errors <= 3) {
+        if (result.errors <= 3)
           console.error(`❌ Erreur import ligne ${lineNum} (${nom} ${prenoms}):`, error.message);
-          console.error(`   Data:`, JSON.stringify(data).substring(0, 200));
-        } else if (result.errors === 4) {
-          console.error(`❌ ... (autres erreurs supprimées des logs)`);
-        }
       }
+    }
+
+    // ✅ CORRIGÉ : INSERT batch avec ON CONFLICT sur 5 champs
+    if (insertValues.length > 0) {
+      const query = `
+        INSERT INTO cartes (
+          "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
+          "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
+          "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, dateimport
+        ) VALUES ${insertValues.join(', ')}
+        ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
+        WHERE deleted_at IS NULL
+        DO UPDATE SET
+          delivrance             = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
+          "CONTACT DE RETRAIT"   = COALESCE(NULLIF(cartes."CONTACT DE RETRAIT", ''), EXCLUDED."CONTACT DE RETRAIT"),
+          "DATE DE DELIVRANCE"   = COALESCE(cartes."DATE DE DELIVRANCE",             EXCLUDED."DATE DE DELIVRANCE"),
+          contact                = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
+          dateimport             = NOW()
+      `;
+      await client.query(query, insertParams);
     }
 
     return result;
@@ -2286,10 +1452,9 @@ class OptimizedImportExportController {
 
   async smartUpdateCarte(client, existingCarte, newData) {
     let updated = false;
-    const updates = [];
-    const params = [];
+    const updates = [],
+      params = [];
     let paramCount = 0;
-
     const columnsToCheck = [
       "LIEU D'ENROLEMENT",
       'RANGEMENT',
@@ -2301,26 +1466,20 @@ class OptimizedImportExportController {
       'DATE DE DELIVRANCE',
       'COORDINATION',
     ];
-
     for (const col of columnsToCheck) {
       const oldVal = existingCarte[col] || '';
       const newVal = newData[col] || '';
-
       if (newVal && newVal !== oldVal) {
         let shouldUpdate = true;
-
         if (col === 'CONTACT' || col === 'CONTACT DE RETRAIT') {
           if (oldVal.length > newVal.length) shouldUpdate = false;
         }
-
         if (
           col === 'DELIVRANCE' &&
           oldVal.toString().toUpperCase() === 'OUI' &&
           newVal.toString().toUpperCase() !== 'OUI'
-        ) {
+        )
           shouldUpdate = false;
-        }
-
         if (shouldUpdate) {
           paramCount++;
           updates.push(`"${col}" = $${paramCount}`);
@@ -2329,22 +1488,15 @@ class OptimizedImportExportController {
         }
       }
     }
-
     if (updated) {
       paramCount++;
       updates.push(`dateimport = NOW()`);
       params.push(existingCarte.id);
-
       await client.query(
-        `
-        UPDATE cartes 
-        SET ${updates.join(', ')}
-        WHERE id = $${paramCount}
-      `,
+        `UPDATE cartes SET ${updates.join(', ')} WHERE id = $${paramCount}`,
         params
       );
     }
-
     return updated;
   }
 
@@ -2364,15 +1516,22 @@ class OptimizedImportExportController {
       COORDINATION: data.COORDINATION || userCoordination,
     };
 
+    // ✅ CORRIGÉ : ON CONFLICT sur 5 champs identitaires
     const result = await client.query(
-      `
-      INSERT INTO cartes (
+      `INSERT INTO cartes (
         "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
         "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
         "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, dateimport
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-      RETURNING id
-    `,
+      ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
+      WHERE deleted_at IS NULL
+      DO UPDATE SET
+        delivrance           = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
+        "CONTACT DE RETRAIT" = COALESCE(NULLIF(cartes."CONTACT DE RETRAIT", ''), EXCLUDED."CONTACT DE RETRAIT"),
+        "DATE DE DELIVRANCE" = COALESCE(cartes."DATE DE DELIVRANCE",             EXCLUDED."DATE DE DELIVRANCE"),
+        contact              = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
+        dateimport           = NOW()
+      RETURNING id`,
       [
         insertData["LIEU D'ENROLEMENT"],
         insertData['SITE DE RETRAIT'],
@@ -2388,7 +1547,6 @@ class OptimizedImportExportController {
         insertData['COORDINATION'],
       ]
     );
-
     return result.rows[0].id;
   }
 
@@ -2399,31 +1557,18 @@ class OptimizedImportExportController {
 
   formatDate(value) {
     if (!value) return null;
-
     try {
       let date;
-
-      if (value instanceof Date) {
-        date = value;
-      } else if (typeof value === 'string') {
+      if (value instanceof Date) date = value;
+      else if (typeof value === 'string') {
         if (value.includes('/')) {
           const parts = value.split('/');
-          if (parts.length === 3) {
-            date = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-          }
-        } else if (value.includes('-')) {
-          date = new Date(value);
-        } else if (!isNaN(parseInt(value))) {
-          date = new Date(parseInt(value));
-        } else {
-          date = new Date(value);
-        }
-      } else {
-        date = new Date(value);
-      }
-
+          if (parts.length === 3) date = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+        } else if (value.includes('-')) date = new Date(value);
+        else if (!isNaN(parseInt(value))) date = new Date(parseInt(value));
+        else date = new Date(value);
+      } else date = new Date(value);
       if (isNaN(date.getTime())) return null;
-
       return date.toISOString().split('T')[0];
     } catch {
       return null;
@@ -2432,71 +1577,40 @@ class OptimizedImportExportController {
 
   formatPhone(value) {
     if (!value) return '';
-
     const digits = value.toString().replace(/\D/g, '');
-
-    if (digits.length === 10 && digits.startsWith('0')) {
-      return digits;
-    } else if (digits.length === 8) {
-      return '0' + digits;
-    } else if (digits.length === 12 && digits.startsWith('225')) {
-      return '0' + digits.substring(3);
-    }
-
+    if (digits.length === 10 && digits.startsWith('0')) return digits;
+    else if (digits.length === 8) return '0' + digits;
+    else if (digits.length === 12 && digits.startsWith('225')) return '0' + digits.substring(3);
     return digits.substring(0, 8);
   }
 
   formatDelivrance(value) {
     if (!value) return '';
     const upper = value.toString().trim().toUpperCase();
-    if (upper === 'OUI' || upper === 'NON') {
-      return upper;
-    }
+    if (upper === 'OUI' || upper === 'NON') return upper;
     return value.toString().trim();
   }
 
   formatValue(column, value) {
     if (!value) return '';
-
-    if (column.includes('DATE')) {
-      return this.formatDate(value);
-    } else if (column.includes('CONTACT')) {
-      return this.formatPhone(value);
-    } else if (column === 'DELIVRANCE') {
-      return this.formatDelivrance(value);
-    } else {
-      return this.sanitizeString(value);
-    }
+    if (column.includes('DATE')) return this.formatDate(value);
+    else if (column.includes('CONTACT')) return this.formatPhone(value);
+    else if (column === 'DELIVRANCE') return this.formatDelivrance(value);
+    else return this.sanitizeString(value);
   }
-
-  // ============================================
-  // ROUTES UTILITAIRES
-  // ============================================
 
   async getSitesList(req, res) {
     try {
       let query =
-        'SELECT DISTINCT "SITE DE RETRAIT" as site FROM cartes WHERE "SITE DE RETRAIT" IS NOT NULL';
-      let params = [];
-
-      const filtre = this.ajouterFiltreCoordination(req, query, params);
-
+        'SELECT DISTINCT "SITE DE RETRAIT" as site FROM cartes WHERE "SITE DE RETRAIT" IS NOT NULL AND deleted_at IS NULL';
+      const filtre = this.ajouterFiltreCoordination(req, query, []);
       const result = await db.query(filtre.query + ' ORDER BY site', filtre.params);
-
       const sites = result.rows.map((row) => row.site).filter((site) => site && site.trim() !== '');
-
-      res.json({
-        success: true,
-        sites,
-        count: sites.length,
-        timestamp: new Date().toISOString(),
-      });
+      res.json({ success: true, sites, count: sites.length, timestamp: new Date().toISOString() });
     } catch (error) {
-      console.error('❌ Erreur récupération sites:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Erreur récupération sites: ' + error.message,
-      });
+      res
+        .status(500)
+        .json({ success: false, error: 'Erreur récupération sites: ' + error.message });
     }
   }
 
@@ -2506,26 +1620,19 @@ class OptimizedImportExportController {
       const worksheet = workbook.addWorksheet('Template', {
         properties: { tabColor: { argb: 'FF2E75B5' } },
       });
-
       worksheet.columns = CONFIG.csvHeaders.map((header) => ({
         header,
         key: header.replace(/\s+/g, '_'),
         width: 25,
       }));
-
       const headerRow = worksheet.getRow(1);
       headerRow.height = 30;
       headerRow.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-        cell.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FF2E75B5' },
-        };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2E75B5' } };
         cell.alignment = { vertical: 'middle', horizontal: 'center' };
       });
-
-      const exampleData = {
+      const exampleRow = worksheet.addRow({
         "LIEU D'ENROLEMENT": 'Abidjan Plateau',
         'SITE DE RETRAIT': 'Yopougon',
         RANGEMENT: 'A1-001',
@@ -2538,42 +1645,27 @@ class OptimizedImportExportController {
         'CONTACT DE RETRAIT': '07654321',
         'DATE DE DELIVRANCE': '20/11/2024',
         COORDINATION: req.user?.coordination || 'Exemple',
-      };
-
-      const exampleRow = worksheet.addRow(exampleData);
-      exampleRow.eachCell((cell) => {
-        cell.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFF2F2F2' },
-        };
       });
-
+      exampleRow.eachCell((cell) => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+      });
       worksheet.addRow([]);
-      const instructions = worksheet.addRow(['INSTRUCTIONS IMPORTANTES:']);
-      instructions.getCell(1).font = { bold: true };
-
+      worksheet.addRow(['INSTRUCTIONS IMPORTANTES:']).getCell(1).font = { bold: true };
       worksheet.addRow(['- NOM et PRENOMS sont obligatoires']);
       worksheet.addRow(['- Formats date: JJ/MM/AAAA ou AAAA-MM-JJ']);
       worksheet.addRow(['- Téléphone: 8 chiffres (sera formaté automatiquement)']);
       worksheet.addRow(['- DELIVRANCE: OUI ou NON (vide si non délivrée)']);
-      worksheet.addRow(['- COORDINATION: (optionnel) sera automatiquement attribuée si vide']);
-
+      worksheet.addRow(['- RANGEMENT: requis pour la détection des doublons (ex: A1-001)']);
       res.setHeader(
         'Content-Type',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       );
       res.setHeader('Content-Disposition', 'attachment; filename="template-import-cartes.xlsx"');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-User-Role', req.user?.role || 'unknown');
-
       await workbook.xlsx.write(res);
     } catch (error) {
-      console.error('❌ Erreur génération template:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Erreur génération template: ' + error.message,
-      });
+      res
+        .status(500)
+        .json({ success: false, error: 'Erreur génération template: ' + error.message });
     }
   }
 
@@ -2581,101 +1673,34 @@ class OptimizedImportExportController {
     try {
       const memoryUsage = process.memoryUsage();
       const uptime = process.uptime();
-      const hours = Math.floor(uptime / 3600);
-      const minutes = Math.floor((uptime % 3600) / 60);
-
       let countQuery = 'SELECT COUNT(*) as total FROM cartes WHERE deleted_at IS NULL AND 1=1';
-      let countParams = [];
-
-      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, countParams);
+      const filtreCount = this.ajouterFiltreCoordination(req, countQuery, []);
       const countResult = await db.query(filtreCount.query, filtreCount.params);
       const totalRows = parseInt(countResult.rows[0].total);
-
-      const sitesResult = await db.query(
-        'SELECT COUNT(DISTINCT "SITE DE RETRAIT") as sites FROM cartes'
+      const coordinationStats = await db.query(
+        `SELECT coordination, COUNT(*) as total FROM cartes WHERE coordination IS NOT NULL AND deleted_at IS NULL GROUP BY coordination ORDER BY total DESC`
       );
-      const sitesCount = parseInt(sitesResult.rows[0].sites);
-
-      const recentResult = await db.query(`
-        SELECT COUNT(*) as recent 
-        FROM cartes 
-        WHERE dateimport > NOW() - INTERVAL '24 hours'
-      `);
-      const recentImports = parseInt(recentResult.rows[0].recent);
-
-      const coordinationStats = await db.query(`
-        SELECT coordination, COUNT(*) as total 
-        FROM cartes 
-        WHERE coordination IS NOT NULL 
-        GROUP BY coordination 
-        ORDER BY total DESC
-      `);
-
       res.json({
         success: true,
         timestamp: new Date().toISOString(),
         service: 'import-export-lws',
-        environment: 'lws-optimized',
-        version: '4.0.0-lws',
-        user: {
-          role: req.user?.role,
-          coordination: req.user?.coordination,
-          nom: req.user?.nomUtilisateur,
-        },
+        version: '4.1.0-lws',
+        user: { role: req.user?.role, coordination: req.user?.coordination },
         data: {
           total_cartes_accessibles: totalRows,
-          sites_actifs: sitesCount,
-          imports_24h: recentImports,
           exports_en_cours: this.activeExports.size,
           imports_en_cours: this.activeImports.size,
-          file_d_attente: this.exportQueue.length,
         },
         coordination_stats: coordinationStats.rows,
-        config: {
-          maxExportRows: CONFIG.maxExportRows,
-          maxExportRowsRecommended: CONFIG.maxExportRowsRecommended,
-          exportTimeout: CONFIG.exportTimeout,
-          importTimeout: CONFIG.importTimeout,
-          chunkSize: CONFIG.chunkSize,
-          batchSize: CONFIG.batchSize,
-          memoryLimitMB: CONFIG.memoryLimitMB,
-          maxConcurrent: CONFIG.maxConcurrent,
-        },
+        config: CONFIG,
         memory: {
           heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024) + 'MB',
           heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024) + 'MB',
-          rss: Math.round(memoryUsage.rss / 1024 / 1024) + 'MB',
-          external: Math.round(memoryUsage.external / 1024 / 1024) + 'MB',
         },
-        uptime: `${hours}h ${minutes}m`,
-        endpoints: {
-          export_complet_excel: '/api/import-export/export/complete',
-          export_complet_csv: '/api/import-export/export/complete/csv',
-          export_tout_en_un: '/api/import-export/export/all',
-          export_limite_excel: '/api/import-export/export',
-          export_limite_csv: '/api/import-export/export/csv',
-          export_par_site: '/api/import-export/export/site?siteRetrait=...',
-          import_csv: '/api/import-export/import/csv',
-          import_smart: '/api/import-export/import/smart-sync',
-          template: '/api/import-export/template',
-          sites: '/api/import-export/sites',
-          diagnostic: '/api/import-export/diagnostic',
-        },
-        recommendations: [
-          totalRows > CONFIG.maxExportRowsRecommended
-            ? `⚠️ Base volumineuse (${totalRows.toLocaleString()} lignes accessibles) - Utilisez CSV pour les exports`
-            : `✅ Base optimale (${totalRows.toLocaleString()} lignes accessibles) - Excel ou CSV disponibles`,
-          `📊 Export recommandé: ${totalRows > CONFIG.maxExportRowsRecommended ? 'CSV' : 'Excel'}`,
-          `⚡ Vitesse max théorique: ${Math.round(CONFIG.chunkSize / 10)}K lignes/sec`,
-          `💾 Mémoire disponible: ${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB/${CONFIG.memoryLimitMB}MB`,
-        ],
+        uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`,
       });
     } catch (error) {
-      console.error('❌ Erreur diagnostic:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Erreur diagnostic: ' + error.message,
-      });
+      res.status(500).json({ success: false, error: 'Erreur diagnostic: ' + error.message });
     }
   }
 
@@ -2699,9 +1724,6 @@ class OptimizedImportExportController {
   }
 }
 
-// ============================================
-// EXPORT
-// ============================================
 const controller = new OptimizedImportExportController();
 
 module.exports = {
