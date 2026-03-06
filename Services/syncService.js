@@ -171,7 +171,7 @@ const syncService = {
 
     await db.query(`SELECT refresh_site_sync_stats($1)`, [site.id]);
 
-    const download = await this.prepareDownload(site, lastSync, 1000);
+    const download = await this.prepareDownload(site, lastSync, 5000);
 
     return { historyId, uploaded: stats, download, processed };
   },
@@ -309,9 +309,9 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Download différentiel
+  // ✅ CORRIGÉ — Download différentiel (limit 5000)
   // ----------------------------------------------------------
-  async prepareDownload(site, since, limit = 1000) {
+  async prepareDownload(site, since, limit = 5000) {
     try {
       const sinceDate = since
         ? new Date(since).toISOString()
@@ -418,14 +418,14 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // ✅ CORRIGÉ — Récupérer les utilisateurs autorisés pour un site
-  // Remplace l'appel à la fonction PL/pgSQL get_users_for_site()
-  // qui référençait des colonnes inexistantes (niveau_acces, us.site_id)
+  // ✅ CORRIGÉ — Récupérer les utilisateurs d'un site
+  // Filtre uniquement par coordination_id du site
+  // (suppression du filtre role='Administrateur' global
+  //  qui renvoyait des utilisateurs d'autres coordinations)
   // ----------------------------------------------------------
   async getUsersForSite(siteId) {
     const client = await db.pool.connect();
     try {
-      // Étape 1 : récupérer la coordination du site
       const siteResult = await client.query(`SELECT coordination_id FROM sites WHERE id = $1`, [
         siteId,
       ]);
@@ -437,22 +437,25 @@ const syncService = {
 
       const coordinationId = siteResult.rows[0].coordination_id;
 
-      // Étape 2 : récupérer les utilisateurs actifs de cette coordination
-      // + les Administrateurs (accès global)
       const result = await client.query(
         `SELECT
            u.id,
            u.nomutilisateur,
            u.nomcomplet,
+           u.email,
+           u.motdepasse,
            u.role,
+           u.agence,
+           u.coordination,
            u.coordination_id,
-           u.actif
+           u.actif,
+           u.niveau_acces,
+           u.peut_voir_stats,
+           u.sync_timestamp,
+           u.updated_at
          FROM utilisateurs u
          WHERE u.actif = true
-           AND (
-             u.role = 'Administrateur'
-             OR u.coordination_id = $1
-           )
+           AND u.coordination_id = $1
          ORDER BY u.nomcomplet ASC`,
         [coordinationId]
       );
