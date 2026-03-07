@@ -397,88 +397,67 @@ const syncService = {
   // ----------------------------------------------------------
   async prepareDownload(site, since, options = {}) {
     try {
-      const limit = parseInt(options.limit) || 5000;
-      const last_id = parseInt(options.last_id) || 0;
+      const limit = Math.min(parseInt(options.limit) || 5000, 10000);
+      const last_id = Math.max(parseInt(options.last_id) || 0, 0);
       const sinceDate = since
         ? new Date(since).toISOString()
         : new Date('2000-01-01').toISOString();
 
-      // ── Requête keyset : (sync_timestamp >= since AND id > last_id)
-      //    OU (sync_timestamp > since)
-      //    → Garantit l'ordre strict sans doublon entre les batches
-      // ─────────────────────────────────────────────────────────────
+      // ── TECHNIQUE limit+1 : on demande un enregistrement de plus que nécessaire.
+      //    Si on reçoit limit+1 résultats → has_more=true (on coupe le dernier).
+      //    Si on reçoit <= limit résultats → has_more=false, c'est terminé.
+      //    Avantage : zéro ambiguïté, pas de batch vide en fin de séquence.
+      //
+      // ── KEYSET pagination (sync_timestamp, id) :
+      //    Batch 1 : id > 0       → WHERE ts >= since           ORDER BY ts ASC, id ASC
+      //    Batch N : id > last_id → WHERE ts > since OR (ts = since AND id > last_id)
+      //    → Seek direct sur index composite → O(log n) même à 1M+ lignes
+      // ────────────────────────────────────────────────────────────────────────────
+      const fetchLimit = limit + 1; // +1 pour détecter has_more sans COUNT(*)
+
       let query, params;
 
-      // Index recommandé : CREATE INDEX idx_cartes_keyset ON cartes (sync_timestamp ASC, id ASC) WHERE deleted_at IS NULL;
-      const KEYSET_WHERE =
-        last_id > 0
-          ? `AND (
-             sync_timestamp > $2::TIMESTAMP
-             OR (sync_timestamp = $2::TIMESTAMP AND id > $3)
-           )`
-          : `AND sync_timestamp >= $2::TIMESTAMP`;
-
-      const KEYSET_PARAMS_COUNT = last_id > 0 ? 3 : 2;
-
-      if (site.id === SIEGE_SITE_ID) {
-        // Siège → toutes les coordinations
-        console.log(
-          `🏛️  Download SIEGE (${site.id}): keyset since=${sinceDate} last_id=${last_id}`
-        );
+      if (last_id > 0) {
+        // Batch suivant — curseur composite
         query = `
-          SELECT *
-          FROM cartes
+          SELECT * FROM cartes
           WHERE deleted_at IS NULL
-            ${KEYSET_WHERE}
+            AND (
+              sync_timestamp > $1::TIMESTAMP
+              OR (sync_timestamp = $1::TIMESTAMP AND id > $2)
+            )
           ORDER BY sync_timestamp ASC, id ASC
-          LIMIT $${KEYSET_PARAMS_COUNT + 1}
+          LIMIT $3
         `;
-        params = last_id > 0 ? [site.id, sinceDate, last_id, limit] : [site.id, sinceDate, limit];
-
-        // Simplifier — le site.id n'est pas utilisé dans le WHERE ici
-        params = last_id > 0 ? [sinceDate, sinceDate, last_id, limit] : [sinceDate, limit];
-
-        query = `
-          SELECT *
-          FROM cartes
-          WHERE deleted_at IS NULL
-            ${
-              last_id > 0
-                ? `AND (sync_timestamp > $1::TIMESTAMP OR (sync_timestamp = $1::TIMESTAMP AND id > $2))`
-                : `AND sync_timestamp >= $1::TIMESTAMP`
-            }
-          ORDER BY sync_timestamp ASC, id ASC
-          LIMIT $${last_id > 0 ? 3 : 2}
-        `;
-        params = last_id > 0 ? [sinceDate, last_id, limit] : [sinceDate, limit];
+        params = [sinceDate, last_id, fetchLimit];
       } else {
-        // Autres sites → via get_changes_since ou requête directe
-        // On vérifie si la fonction SQL existe, sinon on requête directement
-        console.log(`📍 Download site ${site.id}: keyset since=${sinceDate} last_id=${last_id}`);
+        // Premier batch
         query = `
-          SELECT *
-          FROM cartes
+          SELECT * FROM cartes
           WHERE deleted_at IS NULL
-            ${
-              last_id > 0
-                ? `AND (sync_timestamp > $1::TIMESTAMP OR (sync_timestamp = $1::TIMESTAMP AND id > $2))`
-                : `AND sync_timestamp >= $1::TIMESTAMP`
-            }
+            AND sync_timestamp >= $1::TIMESTAMP
           ORDER BY sync_timestamp ASC, id ASC
-          LIMIT $${last_id > 0 ? 3 : 2}
+          LIMIT $2
         `;
-        params = last_id > 0 ? [sinceDate, last_id, limit] : [sinceDate, limit];
+        params = [sinceDate, fetchLimit];
       }
 
-      const result = await db.query(query, params);
-      const records = result.rows;
-      const count = records.length;
-      const hasMore = count === limit;
+      console.log(`📥 Download ${site.id}: keyset since=${sinceDate} last_id=${last_id}`);
 
-      // Curseur du prochain batch
-      const lastRecord = records[count - 1] || null;
-      const next_since = lastRecord ? lastRecord.sync_timestamp || sinceDate : sinceDate;
+      const result = await db.query(query, params);
+      const allRows = result.rows;
+
+      // ── Détection has_more via l'enregistrement sonde ────────────────────
+      const hasMore = allRows.length > limit;
+      const records = hasMore ? allRows.slice(0, limit) : allRows;
+      const count = records.length;
+
+      // ── Curseurs pour le prochain batch ──────────────────────────────────
+      const lastRecord = count > 0 ? records[count - 1] : null;
       const next_last_id = lastRecord ? lastRecord.id : last_id;
+      const next_since = lastRecord
+        ? new Date(lastRecord.sync_timestamp || sinceDate).toISOString()
+        : sinceDate;
 
       console.log(
         `📥 Download ${site.id}: ${count} enregistrements` +
@@ -490,7 +469,7 @@ const syncService = {
         records,
         count,
         has_more: hasMore,
-        next_since: hasMore ? new Date(next_since).toISOString() : null,
+        next_since: hasMore ? next_since : null,
         next_last_id: hasMore ? next_last_id : null,
         since: sinceDate,
       };
