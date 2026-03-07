@@ -104,9 +104,11 @@ const syncController = {
         details: `Erreur pour site ${site?.id}: ${error.message}`,
         ip: req.ip,
       });
-      res
-        .status(500)
-        .json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
     }
   },
 
@@ -114,38 +116,38 @@ const syncController = {
    * Envoi des mises à jour aux sites
    * GET /api/sync/download?since=...&limit=5000&last_id=0
    *
-   * Pagination par curseur composite (since + last_id) :
-   * - Performant à 2 millions+ de cartes (index seek, pas de OFFSET lent)
-   * - Le client incrémente last_id à chaque batch
-   * - has_more=false signale la fin du téléchargement
+   * Pagination keyset (since + last_id) — scalable à 1M+ cartes :
+   *   - Pas d'OFFSET → index seek direct → O(log n)
+   *   - has_more=true  → le client rappelle avec next_since + next_last_id
+   *   - has_more=false → tout reçu, arrêt de la boucle
    */
   async download(req, res) {
     const { since, limit = 5000, last_id = 0 } = req.query;
     const site = req.site;
 
     try {
-      const { rows, hasMore, until, lastId } = await syncService.prepareDownload(
-        site,
-        since,
-        parseInt(limit),
-        parseInt(last_id)
-      );
+      const result = await syncService.prepareDownload(site, since, {
+        limit: parseInt(limit) || 5000,
+        last_id: parseInt(last_id) || 0,
+      });
 
       res.json({
         success: true,
-        count: rows.length,
-        since: since || '2000-01-01',
-        until,
-        last_id: lastId, // ← le client renvoie cette valeur au prochain appel
-        has_more: hasMore,
-        records: rows,
+        count: result.count,
+        has_more: result.has_more,
+        next_since: result.next_since,
+        next_last_id: result.next_last_id,
+        since: result.since,
+        records: result.records,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
       console.error('❌ Erreur download:', error);
-      res
-        .status(500)
-        .json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
     }
   },
 
@@ -162,9 +164,11 @@ const syncController = {
       res.json({ success: true, status: 'confirmed', timestamp: new Date().toISOString() });
     } catch (error) {
       console.error('❌ Erreur confirmation:', error);
-      res
-        .status(500)
-        .json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
     }
   },
 
@@ -184,9 +188,11 @@ const syncController = {
       });
     } catch (error) {
       console.error('❌ Erreur status:', error);
-      res
-        .status(500)
-        .json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
     }
   },
 
@@ -218,12 +224,19 @@ const syncController = {
         ip: req.ip,
       });
 
-      res.json({ success: true, count: users.length, users, timestamp: new Date().toISOString() });
+      res.json({
+        success: true,
+        count: users.length,
+        users,
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       console.error('❌ Erreur getUsers:', error);
-      res
-        .status(500)
-        .json({ success: false, error: error.message, timestamp: new Date().toISOString() });
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
     }
   },
 };
