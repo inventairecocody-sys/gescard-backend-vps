@@ -1156,6 +1156,49 @@ const getCoordinations = async (req, res) => {
 };
 
 // ============================================
+// GET SITES LIST (pour formulaire web)
+// ============================================
+const getSitesList = async (req, res) => {
+  try {
+    const acteur = req.user;
+
+    // Filtre selon le rôle
+    let query = `
+      SELECT s.id, s.nom, s.coordination_id, c.nom as coordination_nom, c.code as coordination_code
+      FROM sites s
+      JOIN coordinations c ON c.id = s.coordination_id
+      WHERE s.is_active = true
+    `;
+    const params = [];
+
+    // Gestionnaire → uniquement les sites de sa coordination
+    if (acteur.role === 'Gestionnaire' && acteur.coordination_id) {
+      params.push(acteur.coordination_id);
+      query += ` AND s.coordination_id = $${params.length}`;
+    }
+
+    // Chef d'équipe → uniquement son propre site
+    if (acteur.role === "Chef d'équipe" && acteur.agence) {
+      params.push(acteur.agence);
+      query += ` AND s.nom = $${params.length}`;
+    }
+
+    query += ` ORDER BY c.nom, s.nom`;
+
+    const result = await db.query(query, params);
+
+    res.json({
+      success: true,
+      sites: result.rows,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('❌ Erreur getSitesList:', error);
+    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+  }
+};
+
+// ============================================
 // CLEAR STATS CACHE
 // ============================================
 const clearStatsCache = async (req, res) => {
@@ -1245,6 +1288,7 @@ module.exports = {
   checkUsernameAvailability,
   getRoles,
   getCoordinations,
+  getSitesList, // ← AJOUTÉ
   clearStatsCache,
   diagnostic,
 };

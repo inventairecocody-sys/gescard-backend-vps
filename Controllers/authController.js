@@ -166,6 +166,17 @@ const loginUser = async (req, res) => {
       details: `Connexion réussie depuis ${clientIp}`,
     });
 
+    // Récupérer le site principal de l'utilisateur (pour auto-config Python)
+    const siteResult = await db.query(
+      `SELECT s.id as site_id, s.api_key
+       FROM utilisateur_sites us
+       JOIN sites s ON us.site_id = s.id
+       WHERE us.utilisateur_id = $1 AND us.est_site_principal = true
+       LIMIT 1`,
+      [utilisateur.id]
+    );
+    const sitePrincipal = siteResult.rows[0] || null;
+
     const duration = Date.now() - startTime;
 
     res.json({
@@ -181,6 +192,8 @@ const loginUser = async (req, res) => {
         role: utilisateur.role,
         coordination: utilisateur.coordination,
         coordination_id: utilisateur.coordination_id,
+        site_id: sitePrincipal?.site_id || null,
+        site_api_key: sitePrincipal?.api_key || null,
       },
       performance: { durationMs: duration },
       timestamp: new Date().toISOString(),

@@ -116,6 +116,12 @@ router.get('/export', RATE.sensitive, ctrl.exportUsers);
 router.get('/coordinations', RATE.standard, ctrl.getCoordinations);
 
 /**
+ * Liste des sites pour le formulaire utilisateur — filtrée selon le rôle
+ * GET /api/utilisateurs/sites-list
+ */
+router.get('/sites-list', RATE.standard, ctrl.getSitesList);
+
+/**
  * Diagnostic — Administrateur uniquement (vérifié dans le contrôleur)
  * GET /api/utilisateurs/diagnostic
  */
@@ -153,6 +159,7 @@ router.get('/home', (req, res) => {
         'GET /stats': 'Statistiques (Admin)',
         'GET /export': 'Export CSV/JSON (Admin)',
         'GET /coordinations': 'Liste coordinations (Admin)',
+        'GET /sites-list': 'Liste sites (filtrée selon rôle)',
       },
       creation_modification: {
         'POST /': 'Créer utilisateur',

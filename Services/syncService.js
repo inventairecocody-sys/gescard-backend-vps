@@ -548,8 +548,13 @@ const syncService = {
            u.actif,
            u.niveau_acces,
            u.peut_voir_stats,
-           u.updated_at
+           u.updated_at,
+           us_main.site_id   AS site_id,
+           s.api_key          AS site_api_key
          FROM utilisateurs u
+         LEFT JOIN utilisateur_sites us_main
+           ON us_main.utilisateur_id = u.id AND us_main.est_site_principal = true
+         LEFT JOIN sites s ON s.id = us_main.site_id
          WHERE u.actif = true
            AND u.coordination_id = $1
          ORDER BY u.nomcomplet ASC`,
