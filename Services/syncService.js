@@ -186,7 +186,6 @@ const syncService = {
   // ✅ CORRIGÉ — Gérer une insertion SANS créer de doublons
   // ----------------------------------------------------------
   async _handleInsert(client, mod, site) {
-    // ── Niveau 1 : idempotence locale ───────────────────────
     if (mod.local_id) {
       const byLocalId = await client.query(
         `SELECT id FROM cartes
@@ -200,7 +199,6 @@ const syncService = {
       }
     }
 
-    // ── Niveau 2 : doublon même coordination ────────────────
     const result = await client.query(
       `INSERT INTO cartes (
         coordination_id,
@@ -249,7 +247,6 @@ const syncService = {
       ]
     );
 
-    // ── Niveau 3 : doublon autre coordination ───────────────
     if (result.rows.length === 0) {
       const existingOtherCoord = await client.query(
         `SELECT id, coordination_id FROM cartes
@@ -271,9 +268,7 @@ const syncService = {
       if (existingOtherCoord.rows.length > 0) {
         const other = existingOtherCoord.rows[0];
         console.warn(
-          `⚠️  Doublon inter-coordination: "${mod.nom} ${mod.prenoms}" ` +
-            `coord locale=${mod.coordination_id} ≠ coord serveur=${other.coordination_id} ` +
-            `→ pg_id=${other.id} retourné sans modification`
+          `⚠️  Doublon inter-coordination: "${mod.nom} ${mod.prenoms}" → pg_id=${other.id}`
         );
         return { pg_id: other.id, was_duplicate: true, cross_coordination: true };
       }
@@ -384,9 +379,8 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // ✅ Download différentiel
-  // SIE-001 (siège) → toutes les cartes, toutes coordinations
-  // Autres sites    → seulement leur coordination (comportement normal)
+  // Download différentiel
+  // Tout le monde reçoit toutes les cartes
   // ----------------------------------------------------------
   async prepareDownload(site, since, limit = 5000) {
     try {
@@ -397,7 +391,6 @@ const syncService = {
       let result;
 
       if (site.id === SIEGE_SITE_ID) {
-        // ✅ Siège : toutes les cartes sans filtre coordination
         console.log(`🏛️  Download SIEGE (${site.id}): toutes coordinations confondues`);
         result = await db.query(
           `SELECT * FROM cartes
@@ -408,7 +401,7 @@ const syncService = {
           [sinceDate, limit]
         );
       } else {
-        // Comportement normal : filtrage par coordination via fonction SQL
+        // Tous les sites reçoivent toutes les cartes via get_changes_since
         result = await db.query(`SELECT * FROM get_changes_since($1, $2::TIMESTAMP, $3)`, [
           site.id,
           sinceDate,
@@ -511,11 +504,22 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // ✅ Récupérer les utilisateurs d'un site
-  // SIE-001 → tous les utilisateurs actifs (toutes coordinations)
-  // Autres  → uniquement les utilisateurs de leur coordination
+  // ✅ Récupérer les utilisateurs selon le RÔLE de l'utilisateur connecté
+  //
+  // Appelé depuis la route GET /api/sync/users
+  // Le logiciel Python envoie le rôle via le header : X-User-Role
+  // Le logiciel Python envoie son site via le header : X-User-Site
+  //
+  // Opérateur    → comptes du site uniquement (role = Opérateur)
+  // Chef         → son compte + opérateurs de ses sites
+  // Gestionnaire → son compte + chefs + opérateurs de sa coordination
+  // Admin/Siège  → tous les comptes de toutes les coordinations
+  //
+  // SÉCURITÉ HORS-LIGNE :
+  // Le SQLite local ne contiendra QUE les comptes autorisés.
+  // Lors de la déconnexion, les comptes étrangers au site sont nettoyés.
   // ----------------------------------------------------------
-  async getUsersForSite(siteId) {
+  async getUsersForSite(siteId, userRole, userSiteId) {
     const client = await db.pool.connect();
     try {
       const siteResult = await client.query(`SELECT coordination_id FROM sites WHERE id = $1`, [
@@ -528,66 +532,92 @@ const syncService = {
       }
 
       const coordinationId = siteResult.rows[0].coordination_id;
+      const role = (userRole || 'Opérateur').toLowerCase().trim();
+      const effectiveSiteId = userSiteId || siteId;
+
+      console.log(`👥 getUsersForSite: site=${siteId} rôle="${role}" userSite=${effectiveSiteId}`);
+
+      // Colonnes SELECT communes
+      const SELECT_COLS = `
+        u.id, u.nomutilisateur, u.nomcomplet, u.email, u.motdepasse,
+        u.role, u.agence, u.coordination, u.coordination_id,
+        u.actif, u.niveau_acces, u.peut_voir_stats, u.updated_at,
+        us_main.site_id AS site_id,
+        s.api_key       AS site_api_key
+      `;
+      const FROM_JOINS = `
+        FROM utilisateurs u
+        LEFT JOIN utilisateur_sites us_main
+          ON us_main.utilisateur_id = u.id AND us_main.est_site_principal = true
+        LEFT JOIN sites s ON s.id = us_main.site_id
+      `;
+
       let result;
 
-      if (siteId === SIEGE_SITE_ID) {
-        // ✅ Siège : tous les utilisateurs actifs, toutes coordinations
-        console.log(`🏛️  getUsersForSite SIEGE: tous les utilisateurs`);
+      // ── Administrateur ou Siège → tous les comptes ──────────────────────
+      if (role === 'admin' || role === 'administrateur' || siteId === SIEGE_SITE_ID) {
+        console.log(`🏛️  Admin/Siège: tous les utilisateurs`);
         result = await client.query(
-          `SELECT
-             u.id,
-             u.nomutilisateur,
-             u.nomcomplet,
-             u.email,
-             u.motdepasse,
-             u.role,
-             u.agence,
-             u.coordination,
-             u.coordination_id,
-             u.actif,
-             u.niveau_acces,
-             u.peut_voir_stats,
-             u.updated_at,
-             us_main.site_id  AS site_id,
-             s.api_key         AS site_api_key
-           FROM utilisateurs u
-           LEFT JOIN utilisateur_sites us_main
-             ON us_main.utilisateur_id = u.id AND us_main.est_site_principal = true
-           LEFT JOIN sites s ON s.id = us_main.site_id
+          `SELECT ${SELECT_COLS} ${FROM_JOINS}
            WHERE u.actif = true
            ORDER BY u.coordination_id ASC, u.nomcomplet ASC`
         );
-      } else {
-        // Comportement normal : filtrage par coordination
+      }
+
+      // ── Gestionnaire → son compte + chefs + opérateurs de sa coordination
+      else if (role === 'manager' || role === 'gestionnaire') {
+        console.log(`📋 Gestionnaire: coordination ${coordinationId}`);
         result = await client.query(
-          `SELECT
-             u.id,
-             u.nomutilisateur,
-             u.nomcomplet,
-             u.email,
-             u.motdepasse,
-             u.role,
-             u.agence,
-             u.coordination,
-             u.coordination_id,
-             u.actif,
-             u.niveau_acces,
-             u.peut_voir_stats,
-             u.updated_at,
-             us_main.site_id  AS site_id,
-             s.api_key         AS site_api_key
-           FROM utilisateurs u
-           LEFT JOIN utilisateur_sites us_main
-             ON us_main.utilisateur_id = u.id AND us_main.est_site_principal = true
-           LEFT JOIN sites s ON s.id = us_main.site_id
+          `SELECT ${SELECT_COLS} ${FROM_JOINS}
            WHERE u.actif = true
              AND u.coordination_id = $1
-           ORDER BY u.nomcomplet ASC`,
+           ORDER BY u.role ASC, u.nomcomplet ASC`,
           [coordinationId]
         );
       }
 
-      console.log(`👥 Utilisateurs pour ${siteId}: ${result.rows.length}`);
+      // ── Chef d'équipe → son compte + opérateurs de ses sites ────────────
+      else if (role === 'chef' || role === "chef d'équipe") {
+        // Récupérer tous les sites assignés au chef connecté
+        const sitesDuChef = await client.query(
+          `SELECT DISTINCT us.site_id
+           FROM utilisateur_sites us
+           JOIN utilisateurs u ON u.id = us.utilisateur_id
+           WHERE u.actif = true
+             AND us.site_id = $1`,
+          [effectiveSiteId]
+        );
+
+        const siteIds =
+          sitesDuChef.rows.length > 0 ? sitesDuChef.rows.map((r) => r.site_id) : [effectiveSiteId];
+
+        console.log(`👨‍💼 Chef: sites [${siteIds.join(', ')}]`);
+
+        const placeholders = siteIds.map((_, i) => `$${i + 1}`).join(', ');
+        result = await client.query(
+          `SELECT DISTINCT ${SELECT_COLS} ${FROM_JOINS}
+           WHERE u.actif = true
+             AND us_main.site_id IN (${placeholders})
+             AND u.role IN ('Opérateur', 'Chef d''équipe')
+           ORDER BY u.nomcomplet ASC`,
+          siteIds
+        );
+      }
+
+      // ── Opérateur → comptes du site uniquement ───────────────────────────
+      else {
+        console.log(`👤 Opérateur: site ${effectiveSiteId}`);
+        result = await client.query(
+          `SELECT ${SELECT_COLS} ${FROM_JOINS}
+           WHERE u.actif = true
+             AND us_main.site_id = $1
+             AND u.role = 'Opérateur'
+           ORDER BY u.nomcomplet ASC`,
+          [effectiveSiteId]
+        );
+      }
+
+      console.log(`👥 Résultat: ${result.rows.length} utilisateur(s) (rôle: ${role})`);
       return result.rows;
     } catch (error) {
       console.error('❌ Erreur getUsersForSite:', error);
