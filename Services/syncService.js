@@ -204,6 +204,9 @@ const syncService = {
       `INSERT INTO cartes (
         coordination_id,
         site_proprietaire_id,
+        coordination,
+        "LIEU D'ENROLEMENT",
+        "SITE DE RETRAIT",
         nom,
         prenoms,
         "DATE DE NAISSANCE",
@@ -217,7 +220,7 @@ const syncService = {
         sync_timestamp,
         sync_status,
         local_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, NOW(), 'synced', $12)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 1, NOW(), 'synced', $16)
       ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
       WHERE deleted_at IS NULL
       DO UPDATE SET
@@ -235,6 +238,9 @@ const syncService = {
       [
         mod.coordination_id,
         site.id,
+        mod.coordination || null,
+        mod.lieu_enrollement || null,
+        mod.site_retrait || null,
         mod.nom,
         mod.prenoms,
         mod.date_naissance || null,
@@ -244,6 +250,7 @@ const syncService = {
         mod.delivrance || null,
         mod.contact_retrait || null,
         mod.date_delivrance || null,
+        1,
         mod.local_id || null,
       ]
     );
