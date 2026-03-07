@@ -418,25 +418,25 @@ const syncService = {
       let query, params;
 
       if (last_id > 0) {
-        // Batch suivant — curseur composite
+        // ── Batch suivant — curseur UNIQUEMENT par id ─────────────────────
+        // On ne se base plus sur sync_timestamp pour paginer car toutes les
+        // cartes peuvent avoir le même timestamp (import en masse).
+        // L'id PostgreSQL est toujours unique et croissant → curseur fiable.
         query = `
           SELECT * FROM cartes
           WHERE deleted_at IS NULL
-            AND (
-              sync_timestamp > $1::TIMESTAMP
-              OR (sync_timestamp = $1::TIMESTAMP AND id > $2)
-            )
-          ORDER BY sync_timestamp ASC, id ASC
-          LIMIT $3
+            AND id > $1
+          ORDER BY id ASC
+          LIMIT $2
         `;
-        params = [sinceDate, last_id, fetchLimit];
+        params = [last_id, fetchLimit];
       } else {
-        // Premier batch
+        // ── Premier batch — filtre par timestamp puis tri par id ──────────
         query = `
           SELECT * FROM cartes
           WHERE deleted_at IS NULL
-            AND sync_timestamp >= $1::TIMESTAMP
-          ORDER BY sync_timestamp ASC, id ASC
+            AND (sync_timestamp >= $1::TIMESTAMP OR updated_at >= $1::TIMESTAMP)
+          ORDER BY id ASC
           LIMIT $2
         `;
         params = [sinceDate, fetchLimit];
