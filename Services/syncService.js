@@ -2,6 +2,9 @@
 const db = require('../db/db');
 const jwt = require('jsonwebtoken');
 
+// ID du site siège — reçoit toutes les cartes sans filtre coordination
+const SIEGE_SITE_ID = 'SIE-001';
+
 const syncService = {
   // ----------------------------------------------------------
   // Authentifier un site avec sa clé API
@@ -79,7 +82,9 @@ const syncService = {
       try {
         await client.query('BEGIN');
 
-        if (mod.coordination_id !== site.coordination_id) {
+        // ✅ Le siège (SIE-001) n'envoie pas de modifications — lecture seule
+        // Les autres sites : vérification coordination obligatoire
+        if (site.id !== SIEGE_SITE_ID && mod.coordination_id !== site.coordination_id) {
           throw new Error(
             `Coordination invalide: attendu ${site.coordination_id}, reçu ${mod.coordination_id}`
           );
@@ -89,7 +94,6 @@ const syncService = {
 
         if (mod.operation === 'INSERT') {
           result = await this._handleInsert(client, mod, site);
-          // ✅ Si la carte existait déjà (doublon détecté), c'est un update silencieux
           result.was_duplicate ? stats.updates++ : stats.inserts++;
         } else if (mod.operation === 'UPDATE') {
           result = await this._handleUpdate(client, mod, site, historyId);
@@ -180,23 +184,9 @@ const syncService = {
 
   // ----------------------------------------------------------
   // ✅ CORRIGÉ — Gérer une insertion SANS créer de doublons
-  //
-  // Logique de détection (3 niveaux) :
-  //
-  // Niveau 1 — local_id (même poste, même carte)
-  //   → Retour immédiat du pg_id existant (idempotence)
-  //
-  // Niveau 2 — nom + prenoms + DATE DE NAISSANCE (même coordination)
-  //   → La carte vient du même site (importée par Excel ou autre poste)
-  //   → ON CONFLICT : mise à jour des champs manquants + rattachement local_id
-  //
-  // Niveau 3 — nom + prenoms + DATE DE NAISSANCE (autre coordination)
-  //   → La carte existe mais appartient à une autre coordination
-  //   → BLOQUÉ : on ne touche pas aux données d'une autre coordination
-  //   → Retour pg_id existant sans modification (lecture seule)
   // ----------------------------------------------------------
   async _handleInsert(client, mod, site) {
-    // ── Niveau 1 : idempotence locale (même poste, même envoi) ─────────────
+    // ── Niveau 1 : idempotence locale ───────────────────────
     if (mod.local_id) {
       const byLocalId = await client.query(
         `SELECT id FROM cartes
@@ -210,9 +200,7 @@ const syncService = {
       }
     }
 
-    // ── Niveau 2 : doublon de la MÊME coordination (ex: import Excel + logiciel) ─
-    // ON CONFLICT sur (nom, prenoms, DATE DE NAISSANCE, coordination_id)
-    // Met à jour les champs enrichis si manquants, rattache le local_id
+    // ── Niveau 2 : doublon même coordination ────────────────
     const result = await client.query(
       `INSERT INTO cartes (
         coordination_id,
@@ -234,20 +222,15 @@ const syncService = {
       ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
       WHERE deleted_at IS NULL
       DO UPDATE SET
-        -- Rattacher le local_id du poste qui envoie (pour la suite des syncs)
         local_id             = COALESCE(cartes.local_id, EXCLUDED.local_id),
         site_proprietaire_id = COALESCE(cartes.site_proprietaire_id, EXCLUDED.site_proprietaire_id),
-        -- Enrichir uniquement les champs vides (ne pas écraser ce qui existe déjà)
-        contact                = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
-        delivrance             = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
-        "CONTACT DE RETRAIT"   = COALESCE(NULLIF(cartes."CONTACT DE RETRAIT", ''), EXCLUDED."CONTACT DE RETRAIT"),
-        "DATE DE DELIVRANCE"   = COALESCE(cartes."DATE DE DELIVRANCE",             EXCLUDED."DATE DE DELIVRANCE"),
-        sync_status            = 'synced',
-        sync_timestamp         = NOW()
+        contact              = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
+        delivrance           = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
+        "CONTACT DE RETRAIT" = COALESCE(NULLIF(cartes."CONTACT DE RETRAIT", ''), EXCLUDED."CONTACT DE RETRAIT"),
+        "DATE DE DELIVRANCE" = COALESCE(cartes."DATE DE DELIVRANCE",             EXCLUDED."DATE DE DELIVRANCE"),
+        sync_status          = 'synced',
+        sync_timestamp       = NOW()
       WHERE
-        -- ✅ Niveau 3 : ne toucher que si même coordination
-        -- Si autre coordination → la clause WHERE échoue → pas de DO UPDATE → INSERT échoue aussi
-        -- → Géré par le bloc WHERE ci-dessous
         cartes.coordination_id = EXCLUDED.coordination_id
       RETURNING id, (xmax <> 0) AS was_existing`,
       [
@@ -266,9 +249,7 @@ const syncService = {
       ]
     );
 
-    // ── Niveau 3 : doublon d'une AUTRE coordination ──────────────────────────
-    // Le ON CONFLICT WHERE coordination_id = EXCLUDED.coordination_id a échoué
-    // → INSERT bloqué aussi → result vide → on cherche la carte existante
+    // ── Niveau 3 : doublon autre coordination ───────────────
     if (result.rows.length === 0) {
       const existingOtherCoord = await client.query(
         `SELECT id, coordination_id FROM cartes
@@ -290,14 +271,13 @@ const syncService = {
       if (existingOtherCoord.rows.length > 0) {
         const other = existingOtherCoord.rows[0];
         console.warn(
-          `⚠️  Doublon inter-coordination détecté: "${mod.nom} ${mod.prenoms}" ` +
-            `coordination locale=${mod.coordination_id} ≠ coordination serveur=${other.coordination_id} ` +
+          `⚠️  Doublon inter-coordination: "${mod.nom} ${mod.prenoms}" ` +
+            `coord locale=${mod.coordination_id} ≠ coord serveur=${other.coordination_id} ` +
             `→ pg_id=${other.id} retourné sans modification`
         );
         return { pg_id: other.id, was_duplicate: true, cross_coordination: true };
       }
 
-      // Cas improbable : conflict sans carte existante trouvée
       throw new Error(`INSERT impossible pour "${mod.nom} ${mod.prenoms}" — conflit non résolu`);
     }
 
@@ -305,11 +285,9 @@ const syncService = {
     const wasDuplicate = row.was_existing === true;
 
     if (wasDuplicate) {
-      console.log(
-        `🔗 Doublon rattaché (même coordination): "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`
-      );
+      console.log(`🔗 Doublon rattaché: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`);
     } else {
-      console.log(`🆕 Nouvelle carte insérée: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`);
+      console.log(`🆕 Nouvelle carte: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`);
     }
 
     return { pg_id: row.id, was_duplicate: wasDuplicate };
@@ -378,12 +356,9 @@ const syncService = {
       }
     }
 
-    if (updates.length === 0) {
-      return { pg_id: mod.pg_id };
-    }
+    if (updates.length === 0) return { pg_id: mod.pg_id };
 
     params.push(mod.pg_id);
-
     await client.query(
       `UPDATE cartes SET ${updates.join(', ')} WHERE id = $${paramIdx + 1}`,
       params
@@ -409,7 +384,9 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Download différentiel (limit 5000 par défaut)
+  // ✅ Download différentiel
+  // SIE-001 (siège) → toutes les cartes, toutes coordinations
+  // Autres sites    → seulement leur coordination (comportement normal)
   // ----------------------------------------------------------
   async prepareDownload(site, since, limit = 5000) {
     try {
@@ -417,11 +394,27 @@ const syncService = {
         ? new Date(since).toISOString()
         : new Date('2000-01-01').toISOString();
 
-      const result = await db.query(`SELECT * FROM get_changes_since($1, $2::TIMESTAMP, $3)`, [
-        site.id,
-        sinceDate,
-        limit,
-      ]);
+      let result;
+
+      if (site.id === SIEGE_SITE_ID) {
+        // ✅ Siège : toutes les cartes sans filtre coordination
+        console.log(`🏛️  Download SIEGE (${site.id}): toutes coordinations confondues`);
+        result = await db.query(
+          `SELECT * FROM cartes
+           WHERE deleted_at IS NULL
+             AND (sync_timestamp > $1::TIMESTAMP OR updated_at > $1::TIMESTAMP)
+           ORDER BY sync_timestamp DESC
+           LIMIT $2`,
+          [sinceDate, limit]
+        );
+      } else {
+        // Comportement normal : filtrage par coordination via fonction SQL
+        result = await db.query(`SELECT * FROM get_changes_since($1, $2::TIMESTAMP, $3)`, [
+          site.id,
+          sinceDate,
+          limit,
+        ]);
+      }
 
       console.log(
         `📥 Download pour ${site.id}: ${result.rows.length} enregistrements depuis ${sinceDate}`
@@ -518,7 +511,9 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Récupérer les utilisateurs d'un site
+  // ✅ Récupérer les utilisateurs d'un site
+  // SIE-001 → tous les utilisateurs actifs (toutes coordinations)
+  // Autres  → uniquement les utilisateurs de leur coordination
   // ----------------------------------------------------------
   async getUsersForSite(siteId) {
     const client = await db.pool.connect();
@@ -533,37 +528,66 @@ const syncService = {
       }
 
       const coordinationId = siteResult.rows[0].coordination_id;
+      let result;
 
-      const result = await client.query(
-        `SELECT
-           u.id,
-           u.nomutilisateur,
-           u.nomcomplet,
-           u.email,
-           u.motdepasse,
-           u.role,
-           u.agence,
-           u.coordination,
-           u.coordination_id,
-           u.actif,
-           u.niveau_acces,
-           u.peut_voir_stats,
-           u.updated_at,
-           us_main.site_id   AS site_id,
-           s.api_key          AS site_api_key
-         FROM utilisateurs u
-         LEFT JOIN utilisateur_sites us_main
-           ON us_main.utilisateur_id = u.id AND us_main.est_site_principal = true
-         LEFT JOIN sites s ON s.id = us_main.site_id
-         WHERE u.actif = true
-           AND u.coordination_id = $1
-         ORDER BY u.nomcomplet ASC`,
-        [coordinationId]
-      );
+      if (siteId === SIEGE_SITE_ID) {
+        // ✅ Siège : tous les utilisateurs actifs, toutes coordinations
+        console.log(`🏛️  getUsersForSite SIEGE: tous les utilisateurs`);
+        result = await client.query(
+          `SELECT
+             u.id,
+             u.nomutilisateur,
+             u.nomcomplet,
+             u.email,
+             u.motdepasse,
+             u.role,
+             u.agence,
+             u.coordination,
+             u.coordination_id,
+             u.actif,
+             u.niveau_acces,
+             u.peut_voir_stats,
+             u.updated_at,
+             us_main.site_id  AS site_id,
+             s.api_key         AS site_api_key
+           FROM utilisateurs u
+           LEFT JOIN utilisateur_sites us_main
+             ON us_main.utilisateur_id = u.id AND us_main.est_site_principal = true
+           LEFT JOIN sites s ON s.id = us_main.site_id
+           WHERE u.actif = true
+           ORDER BY u.coordination_id ASC, u.nomcomplet ASC`
+        );
+      } else {
+        // Comportement normal : filtrage par coordination
+        result = await client.query(
+          `SELECT
+             u.id,
+             u.nomutilisateur,
+             u.nomcomplet,
+             u.email,
+             u.motdepasse,
+             u.role,
+             u.agence,
+             u.coordination,
+             u.coordination_id,
+             u.actif,
+             u.niveau_acces,
+             u.peut_voir_stats,
+             u.updated_at,
+             us_main.site_id  AS site_id,
+             s.api_key         AS site_api_key
+           FROM utilisateurs u
+           LEFT JOIN utilisateur_sites us_main
+             ON us_main.utilisateur_id = u.id AND us_main.est_site_principal = true
+           LEFT JOIN sites s ON s.id = us_main.site_id
+           WHERE u.actif = true
+             AND u.coordination_id = $1
+           ORDER BY u.nomcomplet ASC`,
+          [coordinationId]
+        );
+      }
 
-      console.log(
-        `👥 Utilisateurs pour ${siteId} (coordination ${coordinationId}): ${result.rows.length}`
-      );
+      console.log(`👥 Utilisateurs pour ${siteId}: ${result.rows.length}`);
       return result.rows;
     } catch (error) {
       console.error('❌ Erreur getUsersForSite:', error);

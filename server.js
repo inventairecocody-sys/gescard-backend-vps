@@ -45,7 +45,8 @@ const statistiquesRoutes = require('./routes/statistiques');
 const externalApiRoutes = require('./routes/externalApi');
 const backupRoutes = require('./routes/backupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
-const updatesRoutes = require('./routes/Updatesroutes'); // ✅ Nouveau
+const updatesRoutes = require('./routes/Updatesroutes'); // ✅ Mises à jour
+const coordinationsRoutes = require('./routes/coordinations'); // ✅ Coordinations CRUD
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -331,13 +332,14 @@ app.use('/api/statistiques', statistiquesRoutes);
 app.use('/api/external', externalApiRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/sync', syncRoutes);
-app.use('/api/updates', updatesRoutes); // ✅ Nouveau
+app.use('/api/updates', updatesRoutes); // ✅ Mises à jour automatiques
+app.use('/api/coordinations', coordinationsRoutes); // ✅ CRUD Coordinations
 
 // ========== ROUTE RACINE ==========
 app.get('/', (req, res) => {
   res.json({
     message: 'API GESCARD PostgreSQL',
-    version: '3.1.0',
+    version: '3.2.0',
     environment: process.env.NODE_ENV || 'development',
     documentation: `${req.protocol}://${req.get('host')}/api`,
     health_check: `${req.protocol}://${req.get('host')}/api/health`,
@@ -358,7 +360,8 @@ app.get('/', (req, res) => {
       journal_ameliore: true,
       sync_sites: true,
       sync_utilisateurs: true,
-      auto_update: true, // ✅ Nouveau
+      auto_update: true,
+      gestion_coordinations: true, // ✅ Nouveau
     },
     sync_endpoints: {
       login: 'POST /api/sync/login',
@@ -368,6 +371,14 @@ app.get('/', (req, res) => {
       confirm: 'POST /api/sync/confirm',
       status: 'GET  /api/sync/status',
       users: 'GET  /api/sync/users',
+    },
+    coordinations_endpoints: {
+      // ✅ Nouveau
+      liste: 'GET    /api/coordinations',
+      detail: 'GET    /api/coordinations/:id',
+      creer: 'POST   /api/coordinations        (Admin)',
+      modifier: 'PUT    /api/coordinations/:id    (Admin)',
+      supprimer: 'DELETE /api/coordinations/:id    (Admin)',
     },
     statistiques_endpoints: {
       globales: 'GET  /api/statistiques/globales',
@@ -381,7 +392,6 @@ app.get('/', (req, res) => {
       diagnostic: 'GET  /api/statistiques/diagnostic',
     },
     updates_endpoints: {
-      // ✅ Nouveau
       check: 'GET  /api/updates/check?version=X.X.X',
       latest: 'GET  /api/updates/latest',
       download: 'GET  /api/updates/download',
@@ -453,8 +463,6 @@ app.use((err, req, res, _next) => {
       request_id: req.idRequete,
     });
   }
-
-  // Erreur multer — fichier trop volumineux
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
       success: false,
@@ -496,6 +504,7 @@ const server = app.listen(PORT, async () => {
   console.log('• Sync utilisateurs   : ✅ ACTIVE');
   console.log('• Statistiques        : ✅ ACTIVE (filtrées par rôle)');
   console.log('• Auto-update logiciel: ✅ ACTIVE (/api/updates)');
+  console.log('• Coordinations CRUD  : ✅ ACTIVE (/api/coordinations)');
   console.log('• Sécurité            : ✅ ACTIVE\n');
 });
 
