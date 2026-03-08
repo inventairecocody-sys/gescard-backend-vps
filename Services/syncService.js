@@ -82,8 +82,6 @@ const syncService = {
       try {
         await client.query('BEGIN');
 
-        // Le siège (SIE-001) n'envoie pas de modifications — lecture seule
-        // Les autres sites : vérification coordination obligatoire
         if (site.id !== SIEGE_SITE_ID && mod.coordination_id !== site.coordination_id) {
           throw new Error(
             `Coordination invalide: attendu ${site.coordination_id}, reçu ${mod.coordination_id}`
@@ -177,10 +175,8 @@ const syncService = {
 
     await db.query(`SELECT refresh_site_sync_stats($1)`, [site.id]);
 
-    // Préparer un premier batch de download pour confirmer la réception
-    const download = await this.prepareDownload(site, lastSync, { limit: 5000 });
-
-    return { historyId, uploaded: stats, download: download.records, processed };
+    const downloadResult = await this.prepareDownload(site, lastSync, 5000, 0); // lastId=0 → premier batch
+    return { historyId, uploaded: stats, download: downloadResult.rows, processed };
   },
 
   // ----------------------------------------------------------
@@ -202,70 +198,46 @@ const syncService = {
 
     const result = await client.query(
       `INSERT INTO cartes (
-        coordination_id,
-        site_proprietaire_id,
-        coordination,
-        "LIEU D'ENROLEMENT",
-        "SITE DE RETRAIT",
-        nom,
-        prenoms,
-        "DATE DE NAISSANCE",
-        "LIEU NAISSANCE",
-        rangement,
-        contact,
-        delivrance,
-        "CONTACT DE RETRAIT",
-        "DATE DE DELIVRANCE",
-        version,
-        sync_timestamp,
-        sync_status,
-        local_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, NOW(), 'synced', $15)
+        coordination_id, site_proprietaire_id,
+        nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE",
+        rangement, contact, delivrance, "CONTACT DE RETRAIT", "DATE DE DELIVRANCE",
+        version, sync_timestamp, sync_status, local_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, NOW(), 'synced', $12)
       ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
       WHERE deleted_at IS NULL
       DO UPDATE SET
         local_id             = COALESCE(cartes.local_id, EXCLUDED.local_id),
         site_proprietaire_id = COALESCE(cartes.site_proprietaire_id, EXCLUDED.site_proprietaire_id),
-        coordination         = COALESCE(NULLIF(cartes.coordination, ''),         EXCLUDED.coordination),
-        "LIEU D'ENROLEMENT" = COALESCE(NULLIF(cartes."LIEU D'ENROLEMENT", ''), EXCLUDED."LIEU D'ENROLEMENT"),
-        "SITE DE RETRAIT"    = COALESCE(NULLIF(cartes."SITE DE RETRAIT", ''),    EXCLUDED."SITE DE RETRAIT"),
         contact              = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
         delivrance           = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
         "CONTACT DE RETRAIT" = COALESCE(NULLIF(cartes."CONTACT DE RETRAIT", ''), EXCLUDED."CONTACT DE RETRAIT"),
         "DATE DE DELIVRANCE" = COALESCE(cartes."DATE DE DELIVRANCE",             EXCLUDED."DATE DE DELIVRANCE"),
         sync_status          = 'synced',
         sync_timestamp       = NOW()
-      WHERE
-        cartes.coordination_id = EXCLUDED.coordination_id
+      WHERE cartes.coordination_id = EXCLUDED.coordination_id
       RETURNING id, (xmax <> 0) AS was_existing`,
       [
-        mod.coordination_id, // $1
-        site.id, // $2
-        mod.coordination || null, // $3
-        mod.lieu_enrollement || null, // $4
-        mod.site_retrait || null, // $5
-        mod.nom, // $6
-        mod.prenoms, // $7
-        mod.date_naissance || null, // $8
-        mod.lieu_naissance || null, // $9
-        mod.rangement || null, // $10
-        mod.contact || null, // $11
-        mod.delivrance || null, // $12
-        mod.contact_retrait || null, // $13
-        mod.date_delivrance || null, // $14
-        mod.local_id || null, // $15  ← version=1 hardcodé, local_id=$16 → $15
+        mod.coordination_id,
+        site.id,
+        mod.nom,
+        mod.prenoms,
+        mod.date_naissance || null,
+        mod.lieu_naissance || null,
+        mod.rangement || null,
+        mod.contact || null,
+        mod.delivrance || null,
+        mod.contact_retrait || null,
+        mod.date_delivrance || null,
+        mod.local_id || null,
       ]
     );
 
     if (result.rows.length === 0) {
       const existingOtherCoord = await client.query(
         `SELECT id, coordination_id FROM cartes
-         WHERE nom                 = $1
-           AND prenoms             = $2
-           AND "DATE DE NAISSANCE" = $3
-           AND "LIEU NAISSANCE"    = $4
-           AND rangement           = $5
-           AND deleted_at IS NULL`,
+         WHERE nom = $1 AND prenoms = $2
+           AND "DATE DE NAISSANCE" = $3 AND "LIEU NAISSANCE" = $4
+           AND rangement = $5 AND deleted_at IS NULL`,
         [
           mod.nom,
           mod.prenoms,
@@ -288,13 +260,11 @@ const syncService = {
 
     const row = result.rows[0];
     const wasDuplicate = row.was_existing === true;
-
     if (wasDuplicate) {
       console.log(`🔗 Doublon rattaché: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`);
     } else {
       console.log(`🆕 Nouvelle carte: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`);
     }
-
     return { pg_id: row.id, was_duplicate: wasDuplicate };
   },
 
@@ -309,9 +279,7 @@ const syncService = {
       [mod.pg_id]
     );
 
-    if (serverRow.rows.length === 0) {
-      throw new Error(`Carte ${mod.pg_id} introuvable`);
-    }
+    if (serverRow.rows.length === 0) throw new Error(`Carte ${mod.pg_id} introuvable`);
 
     const server = serverRow.rows[0];
     const serverTime = new Date(server.sync_timestamp);
@@ -321,8 +289,7 @@ const syncService = {
       await client.query(
         `INSERT INTO sync_conflicts (
           site_id, sync_history_id, carte_id, coordination_id,
-          conflict_type, conflict_field,
-          client_value, server_value,
+          conflict_type, conflict_field, client_value, server_value,
           resolution_status, resolution_method
         ) VALUES ($1, $2, $3, $4, 'timestamp_conflict', 'sync_timestamp',
                   $5, $6, 'resolved', 'last_write_wins')`,
@@ -368,7 +335,6 @@ const syncService = {
       `UPDATE cartes SET ${updates.join(', ')} WHERE id = $${paramIdx + 1}`,
       params
     );
-
     return { pg_id: mod.pg_id };
   },
 
@@ -377,111 +343,117 @@ const syncService = {
   // ----------------------------------------------------------
   async _handleDelete(client, mod, site) {
     await client.query(
-      `UPDATE cartes
-       SET deleted_at  = NOW(),
-           sync_status = 'synced'
-       WHERE id                   = $1
-         AND site_proprietaire_id = $2
-         AND deleted_at IS NULL`,
+      `UPDATE cartes SET deleted_at = NOW(), sync_status = 'synced'
+       WHERE id = $1 AND site_proprietaire_id = $2 AND deleted_at IS NULL`,
       [mod.pg_id, site.id]
     );
     return { pg_id: mod.pg_id };
   },
 
   // ----------------------------------------------------------
-  // ✅ KEYSET PAGINATION — Download optimisé pour millions de données
+  // ✅ Download différentiel — garanti pour 2 millions+ de cartes
   //
-  // Pagination par (sync_timestamp ASC, id ASC) — stable, sans doublon,
-  // sans offset, efficace même sur 1 million+ de cartes.
+  // STRATÉGIE DE PAGINATION ROBUSTE :
   //
-  // Paramètres :
-  //   site       : objet site authentifié
-  //   since      : timestamp ISO depuis lequel charger (null = tout)
-  //   options    : { limit, last_id }
-  //     limit    : nb max de cartes par batch (défaut 5000)
-  //     last_id  : id de la dernière carte du batch précédent (keyset cursor)
+  // On utilise un curseur composite (since_timestamp, last_id) plutôt
+  // qu'un simple OFFSET. Pourquoi ?
   //
-  // Réponse :
-  //   { records, count, has_more, next_since, next_last_id }
+  //   OFFSET 1 500 000 sur 2 millions = PostgreSQL doit parcourir
+  //   1 500 000 lignes avant de retourner quoi que ce soit → lent.
+  //
+  //   Curseur composite (timestamp + id) = index seek direct → O(log n)
+  //   peu importe la taille de la table.
+  //
+  // Le client Python envoie :
+  //   ?since=2024-01-01T00:00:00Z        ← timestamp minimum
+  //   &last_id=0                          ← id du dernier enregistrement reçu (0 = début)
+  //   &limit=5000
+  //
+  // La réponse inclut :
+  //   has_more: true/false
+  //   until: timestamp du dernier enregistrement (pour log)
+  //   last_id: id du dernier enregistrement (prochain curseur)
   // ----------------------------------------------------------
-  async prepareDownload(site, since, options = {}) {
+  async prepareDownload(site, since, limit = 5000, lastId = 0) {
     try {
-      const limit = Math.min(parseInt(options.limit) || 5000, 10000);
-      const last_id = Math.max(parseInt(options.last_id) || 0, 0);
       const sinceDate = since
         ? new Date(since).toISOString()
         : new Date('2000-01-01').toISOString();
+      const safeLimit = Math.max(1, Math.min(parseInt(limit) || 5000, 10000)); // max 10k par batch
+      const safeLastId = Math.max(0, parseInt(lastId) || 0);
+      const fetchCount = safeLimit + 1; // +1 pour détecter has_more sans COUNT(*)
 
-      // ── TECHNIQUE limit+1 : on demande un enregistrement de plus que nécessaire.
-      //    Si on reçoit limit+1 résultats → has_more=true (on coupe le dernier).
-      //    Si on reçoit <= limit résultats → has_more=false, c'est terminé.
-      //    Avantage : zéro ambiguïté, pas de batch vide en fin de séquence.
-      //
-      // ── KEYSET pagination (sync_timestamp, id) :
-      //    Batch 1 : id > 0       → WHERE ts >= since           ORDER BY ts ASC, id ASC
-      //    Batch N : id > last_id → WHERE ts > since OR (ts = since AND id > last_id)
-      //    → Seek direct sur index composite → O(log n) même à 1M+ lignes
-      // ────────────────────────────────────────────────────────────────────────────
-      const fetchLimit = limit + 1; // +1 pour détecter has_more sans COUNT(*)
+      let rows;
 
-      let query, params;
-
-      if (last_id > 0) {
-        // ── Batch suivant — curseur UNIQUEMENT par id ─────────────────────
-        // On ne se base plus sur sync_timestamp pour paginer car toutes les
-        // cartes peuvent avoir le même timestamp (import en masse).
-        // L'id PostgreSQL est toujours unique et croissant → curseur fiable.
-        query = `
-          SELECT * FROM cartes
-          WHERE deleted_at IS NULL
-            AND id > $1
-          ORDER BY id ASC
-          LIMIT $2
-        `;
-        params = [last_id, fetchLimit];
+      if (site.id === SIEGE_SITE_ID) {
+        // ── Siège : toutes coordinations — curseur composite (timestamp, id) ──
+        console.log(`🏛️  Download SIEGE last_id=${safeLastId}`);
+        const result = await db.query(
+          `SELECT * FROM cartes
+           WHERE deleted_at IS NULL
+             AND (
+               sync_timestamp > $1::TIMESTAMP
+               OR (sync_timestamp = $1::TIMESTAMP AND id > $2)
+               OR (updated_at  > $1::TIMESTAMP AND id > $2)
+             )
+           ORDER BY sync_timestamp ASC, id ASC
+           LIMIT $3`,
+          [sinceDate, safeLastId, fetchCount]
+        );
+        rows = result.rows;
       } else {
-        // ── Premier batch — filtre par timestamp puis tri par id ──────────
-        query = `
-          SELECT * FROM cartes
-          WHERE deleted_at IS NULL
-            AND (sync_timestamp >= $1::TIMESTAMP OR updated_at >= $1::TIMESTAMP)
-          ORDER BY id ASC
-          LIMIT $2
-        `;
-        params = [sinceDate, fetchLimit];
+        // ── Sites normaux — requête directe sur cartes avec curseur composite ──
+        // On interroge directement la table plutôt que via get_changes_since
+        // pour avoir un contrôle total sur le curseur et l'index.
+        //
+        // Filtre : toutes les cartes de la même coordination que le site,
+        // modifiées après `since`, ordonnées par (sync_timestamp, id).
+        // PostgreSQL utilisera l'index composite sur ces deux colonnes.
+        const siteCoordResult = await db.query(`SELECT coordination_id FROM sites WHERE id = $1`, [
+          site.id,
+        ]);
+
+        if (siteCoordResult.rows.length === 0) {
+          console.warn(`⚠️ Site introuvable pour download: ${site.id}`);
+          return { rows: [], hasMore: false, until: new Date().toISOString(), lastId: 0 };
+        }
+
+        const coordinationId = siteCoordResult.rows[0].coordination_id;
+
+        console.log(`📥 Download site=${site.id} coord=${coordinationId} last_id=${safeLastId}`);
+
+        const result = await db.query(
+          `SELECT * FROM cartes
+           WHERE deleted_at IS NULL
+             AND coordination_id = $1
+             AND (
+               sync_timestamp > $2::TIMESTAMP
+               OR (sync_timestamp = $2::TIMESTAMP AND id > $3)
+             )
+           ORDER BY sync_timestamp ASC, id ASC
+           LIMIT $4`,
+          [coordinationId, sinceDate, safeLastId, fetchCount]
+        );
+        rows = result.rows;
       }
 
-      console.log(`📥 Download ${site.id}: keyset since=${sinceDate} last_id=${last_id}`);
+      // ── Détection has_more via enregistrement sonde ──────────────────────
+      const hasMore = rows.length > safeLimit;
+      if (hasMore) rows = rows.slice(0, safeLimit);
 
-      const result = await db.query(query, params);
-      const allRows = result.rows;
-
-      // ── Détection has_more via l'enregistrement sonde ────────────────────
-      const hasMore = allRows.length > limit;
-      const records = hasMore ? allRows.slice(0, limit) : allRows;
-      const count = records.length;
-
-      // ── Curseurs pour le prochain batch ──────────────────────────────────
-      const lastRecord = count > 0 ? records[count - 1] : null;
-      const next_last_id = lastRecord ? lastRecord.id : last_id;
-      const next_since = lastRecord
-        ? new Date(lastRecord.sync_timestamp || sinceDate).toISOString()
-        : sinceDate;
+      // ── Curseurs pour le prochain batch ─────────────────────────────────
+      const newLastId = rows.length > 0 ? rows[rows.length - 1].id : safeLastId;
+      const until =
+        rows.length > 0
+          ? rows[rows.length - 1].sync_timestamp || new Date().toISOString()
+          : new Date().toISOString();
 
       console.log(
-        `📥 Download ${site.id}: ${count} enregistrements` +
-          ` | has_more=${hasMore}` +
-          ` | next_last_id=${next_last_id}`
+        `📥 Download ${site.id}: ${rows.length} enregistrements` +
+          ` since=${sinceDate} last_id=${safeLastId}→${newLastId} has_more=${hasMore}`
       );
 
-      return {
-        records,
-        count,
-        has_more: hasMore,
-        next_since: hasMore ? next_since : null,
-        next_last_id: hasMore ? next_last_id : null,
-        since: sinceDate,
-      };
+      return { rows, hasMore, until, lastId: newLastId };
     } catch (error) {
       console.error('❌ Erreur prepareDownload:', error);
       throw error;
@@ -500,24 +472,22 @@ const syncService = {
         }
       }
 
-      if (historyId) {
-        await db.query(
-          `UPDATE sync_history
-           SET downloaded_count   = $1,
-               downloaded_inserts = $2,
-               downloaded_updates = $3,
-               error_message      = $4
-           WHERE id = $5 AND site_id = $6`,
-          [
-            appliedIds?.length || 0,
-            appliedIds?.filter((id) => String(id).includes('new')).length || 0,
-            appliedIds?.filter((id) => !String(id).includes('new')).length || 0,
-            errors ? JSON.stringify(errors) : null,
-            historyId,
-            siteId,
-          ]
-        );
-      }
+      await db.query(
+        `UPDATE sync_history
+         SET downloaded_count   = $1,
+             downloaded_inserts = $2,
+             downloaded_updates = $3,
+             error_message      = $4
+         WHERE id = $5 AND site_id = $6`,
+        [
+          appliedIds?.length || 0,
+          appliedIds?.filter((id) => String(id).includes('new')).length || 0,
+          appliedIds?.filter((id) => !String(id).includes('new')).length || 0,
+          errors ? JSON.stringify(errors) : null,
+          historyId,
+          siteId,
+        ]
+      );
     } catch (error) {
       console.error('❌ Erreur confirmDownload:', error);
       throw error;
@@ -530,9 +500,7 @@ const syncService = {
   async getSiteStatus(siteId) {
     try {
       const result = await db.query(`SELECT * FROM v_sync_status WHERE site_id = $1`, [siteId]);
-
       if (result.rows.length === 0) return null;
-
       const s = result.rows[0];
       return {
         total_cards: s.total_cards,
@@ -562,12 +530,7 @@ const syncService = {
         db.query(`SELECT * FROM v_sync_status`),
         db.query(`SELECT * FROM v_conflicts_pending LIMIT 50`),
       ]);
-
-      return {
-        global: dashboard.rows[0],
-        sites: sites.rows,
-        conflicts: conflicts.rows,
-      };
+      return { global: dashboard.rows[0], sites: sites.rows, conflicts: conflicts.rows };
     } catch (error) {
       console.error('❌ Erreur getGlobalDashboard:', error);
       throw error;
@@ -575,12 +538,7 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Récupérer les utilisateurs selon le RÔLE de l'utilisateur connecté
-  //
-  // Opérateur    → comptes du site uniquement
-  // Chef         → son compte + opérateurs de ses sites
-  // Gestionnaire → son compte + chefs + opérateurs de sa coordination
-  // Admin/Siège  → tous les comptes de toutes les coordinations
+  // Récupérer les utilisateurs selon le rôle
   // ----------------------------------------------------------
   async getUsersForSite(siteId, userRole, userSiteId) {
     const client = await db.pool.connect();
@@ -588,7 +546,6 @@ const syncService = {
       const siteResult = await client.query(`SELECT coordination_id FROM sites WHERE id = $1`, [
         siteId,
       ]);
-
       if (siteResult.rows.length === 0) {
         console.warn(`⚠️ Site introuvable: ${siteId}`);
         return [];
@@ -604,8 +561,7 @@ const syncService = {
         u.id, u.nomutilisateur, u.nomcomplet, u.email, u.motdepasse,
         u.role, u.agence, u.coordination, u.coordination_id,
         u.actif, u.niveau_acces, u.peut_voir_stats, u.updated_at,
-        us_main.site_id AS site_id,
-        s.api_key       AS site_api_key
+        us_main.site_id AS site_id, s.api_key AS site_api_key
       `;
       const FROM_JOINS = `
         FROM utilisateurs u
@@ -616,44 +572,26 @@ const syncService = {
 
       let result;
 
-      // ── Administrateur ou Siège → tous les comptes ──────────────────────
       if (role === 'admin' || role === 'administrateur' || siteId === SIEGE_SITE_ID) {
-        console.log(`🏛️  Admin/Siège: tous les utilisateurs`);
         result = await client.query(
-          `SELECT ${SELECT_COLS} ${FROM_JOINS}
-           WHERE u.actif = true
-           ORDER BY u.coordination_id ASC, u.nomcomplet ASC`
+          `SELECT ${SELECT_COLS} ${FROM_JOINS} WHERE u.actif = true ORDER BY u.coordination_id ASC, u.nomcomplet ASC`
         );
-      }
-
-      // ── Gestionnaire → son compte + chefs + opérateurs de sa coordination
-      else if (role === 'manager' || role === 'gestionnaire') {
-        console.log(`📋 Gestionnaire: coordination ${coordinationId}`);
+      } else if (role === 'manager' || role === 'gestionnaire') {
         result = await client.query(
           `SELECT ${SELECT_COLS} ${FROM_JOINS}
-           WHERE u.actif = true
-             AND u.coordination_id = $1
+           WHERE u.actif = true AND u.coordination_id = $1
            ORDER BY u.role ASC, u.nomcomplet ASC`,
           [coordinationId]
         );
-      }
-
-      // ── Chef d'équipe → son compte + opérateurs de ses sites ────────────
-      else if (role === 'chef' || role === "chef d'équipe") {
+      } else if (role === 'chef' || role === "chef d'équipe") {
         const sitesDuChef = await client.query(
-          `SELECT DISTINCT us.site_id
-           FROM utilisateur_sites us
+          `SELECT DISTINCT us.site_id FROM utilisateur_sites us
            JOIN utilisateurs u ON u.id = us.utilisateur_id
-           WHERE u.actif = true
-             AND us.site_id = $1`,
+           WHERE u.actif = true AND us.site_id = $1`,
           [effectiveSiteId]
         );
-
         const siteIds =
           sitesDuChef.rows.length > 0 ? sitesDuChef.rows.map((r) => r.site_id) : [effectiveSiteId];
-
-        console.log(`👨‍💼 Chef: sites [${siteIds.join(', ')}]`);
-
         const placeholders = siteIds.map((_, i) => `$${i + 1}`).join(', ');
         result = await client.query(
           `SELECT DISTINCT ${SELECT_COLS} ${FROM_JOINS}
@@ -663,16 +601,10 @@ const syncService = {
            ORDER BY u.nomcomplet ASC`,
           siteIds
         );
-      }
-
-      // ── Opérateur → comptes du site uniquement ───────────────────────────
-      else {
-        console.log(`👤 Opérateur: site ${effectiveSiteId}`);
+      } else {
         result = await client.query(
           `SELECT ${SELECT_COLS} ${FROM_JOINS}
-           WHERE u.actif = true
-             AND us_main.site_id = $1
-             AND u.role = 'Opérateur'
+           WHERE u.actif = true AND us_main.site_id = $1 AND u.role = 'Opérateur'
            ORDER BY u.nomcomplet ASC`,
           [effectiveSiteId]
         );
