@@ -84,7 +84,9 @@ const syncService = {
 
         // Le siège (SIE-001) n'envoie pas de modifications — lecture seule
         // Les autres sites : vérification coordination obligatoire
-        if (site.id !== SIEGE_SITE_ID && mod.coordination_id !== site.coordination_id) {
+        // Comparer en entiers (mod.coordination_id peut arriver en string depuis Python)
+        const modCoordId = parseInt(mod.coordination_id, 10);
+        if (site.id !== SIEGE_SITE_ID && modCoordId !== site.coordination_id) {
           throw new Error(
             `Coordination invalide: attendu ${site.coordination_id}, reçu ${mod.coordination_id}`
           );
