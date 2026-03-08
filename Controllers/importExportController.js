@@ -3,7 +3,7 @@ const ExcelJS = require('exceljs');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const csv = require('csv-parser');
-const annulationService = require('../Services/annulationService');
+const annulationService = require('../db/db');
 
 const CONFIG = {
   supportedFormats: ['.csv', '.xlsx', '.xls'],
@@ -1079,18 +1079,18 @@ class OptimizedImportExportController {
           const prenoms = item.PRENOMS.toString().trim();
           const dateNaissance = this.formatDate(item['DATE DE NAISSANCE']);
           const lieuNaissance = this.sanitizeString(item['LIEU NAISSANCE']);
-          const rangement = this.sanitizeString(item['RANGEMENT']);
 
           // ✅ CORRIGÉ : 5 champs identitaires pour détecter un doublon
+          const contactNorm = this.formatPhone(item['CONTACT']) || '';
           const existingCarte = await client.query(
             `SELECT * FROM cartes
              WHERE LOWER(TRIM(nom))                  = LOWER($1)
                AND LOWER(TRIM(prenoms))              = LOWER($2)
                AND "DATE DE NAISSANCE"               = $3
                AND LOWER(TRIM("LIEU NAISSANCE"))     = LOWER($4)
-               AND LOWER(TRIM(COALESCE(rangement,''))) = LOWER($5)
+               AND COALESCE(NULLIF(contact,''),'__VIDE__') = COALESCE(NULLIF($5,''),'__VIDE__')
                AND deleted_at IS NULL`,
-            [nom, prenoms, dateNaissance, lieuNaissance, rangement]
+            [nom, prenoms, dateNaissance, lieuNaissance, contactNorm]
           );
 
           if (existingCarte.rows.length > 0) {
@@ -1327,15 +1327,16 @@ class OptimizedImportExportController {
         const rangementRaw = this.sanitizeString(data['RANGEMENT']);
 
         // ✅ CORRIGÉ : 5 champs identitaires pour détecter un doublon
+        const contactRaw = this.formatPhone(data['CONTACT']) || '';
         const existing = await client.query(
           `SELECT id, coordination, "SITE DE RETRAIT" as site FROM cartes
            WHERE LOWER(TRIM(nom))                    = LOWER($1)
              AND LOWER(TRIM(prenoms))                = LOWER($2)
              AND "DATE DE NAISSANCE"                 = $3
              AND LOWER(TRIM("LIEU NAISSANCE"))       = LOWER($4)
-             AND LOWER(TRIM(COALESCE(rangement,''))) = LOWER($5)
+             AND COALESCE(NULLIF(contact,''),'__VIDE__') = COALESCE(NULLIF($5,''),'__VIDE__')
              AND deleted_at IS NULL`,
-          [nom, prenoms, dateNaissanceRaw, lieuNaissanceRaw, rangementRaw]
+          [nom, prenoms, dateNaissanceRaw, lieuNaissanceRaw, contactRaw]
         );
 
         const insertData = {
@@ -1435,7 +1436,7 @@ class OptimizedImportExportController {
           "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
           "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, dateimport
         ) VALUES ${insertValues.join(', ')}
-        ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
+        ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", COALESCE(NULLIF(contact,''),'__VIDE__'))
         WHERE deleted_at IS NULL
         DO UPDATE SET
           delivrance             = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
@@ -1523,7 +1524,7 @@ class OptimizedImportExportController {
         "DATE DE NAISSANCE", "LIEU NAISSANCE", contact, delivrance,
         "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", coordination, dateimport
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-      ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
+      ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", COALESCE(NULLIF(contact,''),'__VIDE__'))
       WHERE deleted_at IS NULL
       DO UPDATE SET
         delivrance           = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),

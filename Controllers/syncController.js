@@ -2,6 +2,10 @@
 const syncService = require('../Services/syncService');
 const journalService = require('../Services/journalService');
 
+/**
+ * Contrôleur de synchronisation pour les sites locaux
+ * Gère l'authentification, l'upload, le download et le statut
+ */
 const syncController = {
   /**
    * Authentification d'un site
@@ -12,14 +16,19 @@ const syncController = {
       const { site_id, api_key } = req.body;
 
       if (!site_id || !api_key) {
-        return res.status(400).json({ success: false, error: 'site_id et api_key requis' });
+        return res.status(400).json({
+          success: false,
+          error: 'site_id et api_key requis',
+        });
       }
 
       const site = await syncService.authenticateSite(site_id, api_key);
+
       if (!site) {
-        return res
-          .status(401)
-          .json({ success: false, error: 'Identifiants invalides ou site inactif' });
+        return res.status(401).json({
+          success: false,
+          error: 'Identifiants invalides ou site inactif',
+        });
       }
 
       const token = syncService.generateSiteToken(site);
@@ -51,7 +60,11 @@ const syncController = {
       });
     } catch (error) {
       console.error('❌ Erreur login site:', error);
-      res.status(500).json({ success: false, error: 'Erreur serveur', message: error.message });
+      res.status(500).json({
+        success: false,
+        error: 'Erreur serveur',
+        message: error.message,
+      });
     }
   },
 
@@ -91,6 +104,7 @@ const syncController = {
       });
     } catch (error) {
       console.error('❌ Erreur upload:', error);
+
       await journalService.logAction({
         utilisateurId: null,
         nomUtilisateur: site?.id || 'inconnu',
@@ -104,6 +118,7 @@ const syncController = {
         details: `Erreur pour site ${site?.id}: ${error.message}`,
         ip: req.ip,
       });
+
       res.status(500).json({
         success: false,
         error: error.message,
@@ -114,18 +129,17 @@ const syncController = {
 
   /**
    * Envoi des mises à jour aux sites
-   * GET /api/sync/download?since=...&limit=5000&last_id=0
+   * GET /api/sync/download?since=ISO&limit=5000&last_id=0
    *
-   * Pagination keyset (since + last_id) — scalable à 1M+ cartes :
-   *   - Pas d'OFFSET → index seek direct → O(log n)
-   *   - has_more=true  → le client rappelle avec next_since + next_last_id
-   *   - has_more=false → tout reçu, arrêt de la boucle
+   * ✅ CORRIGÉ : options passé comme OBJET { limit, last_id }
+   *    pour compatibilité avec syncService.prepareDownload(site, since, options)
    */
   async download(req, res) {
     const { since, limit = 5000, last_id = 0 } = req.query;
     const site = req.site;
 
     try {
+      // ✅ On passe un objet options, pas un entier
       const result = await syncService.prepareDownload(site, since, {
         limit: parseInt(limit) || 5000,
         last_id: parseInt(last_id) || 0,
@@ -138,6 +152,7 @@ const syncController = {
         next_since: result.next_since,
         next_last_id: result.next_last_id,
         since: result.since,
+        until: new Date().toISOString(),
         records: result.records,
         timestamp: new Date().toISOString(),
       });
@@ -161,7 +176,12 @@ const syncController = {
 
     try {
       await syncService.confirmDownload(site.id, history_id, applied_ids, errors);
-      res.json({ success: true, status: 'confirmed', timestamp: new Date().toISOString() });
+
+      res.json({
+        success: true,
+        status: 'confirmed',
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       console.error('❌ Erreur confirmation:', error);
       res.status(500).json({
@@ -178,11 +198,17 @@ const syncController = {
    */
   async status(req, res) {
     const site = req.site;
+
     try {
       const status = await syncService.getSiteStatus(site.id);
+
       res.json({
         success: true,
-        site: { id: site.id, nom: site.nom, coordination: site.coordination_code },
+        site: {
+          id: site.id,
+          nom: site.nom,
+          coordination: site.coordination_code,
+        },
         status,
         timestamp: new Date().toISOString(),
       });
@@ -199,14 +225,17 @@ const syncController = {
   /**
    * Récupération des utilisateurs pour un site
    * GET /api/sync/users
-   * Headers : X-User-Role, X-User-Site
+   *
+   * ✅ CORRIGÉ : passe userRole et userSiteId à getUsersForSite()
+   *    pour la gestion des droits par rôle
    */
   async getUsers(req, res) {
     const site = req.site;
-    const userRole = req.headers['x-user-role'] || null;
-    const userSiteId = req.headers['x-user-site'] || null;
-
     try {
+      // ✅ On passe le rôle et le site de l'appelant pour filtrage par rôle
+      const userRole = req.query.user_role || null;
+      const userSiteId = req.query.user_site_id || site.id;
+
       const users = await syncService.getUsersForSite(site.id, userRole, userSiteId);
 
       await journalService.logAction({
@@ -220,7 +249,7 @@ const syncController = {
         actionType: 'SYNC_USERS',
         tableName: 'utilisateurs',
         recordId: site.id,
-        details: `Site ${site.id} (rôle: ${userRole || 'inconnu'}) a téléchargé ${users.length} utilisateur(s)`,
+        details: `Site ${site.id} a téléchargé ${users.length} utilisateur(s)`,
         ip: req.ip,
       });
 

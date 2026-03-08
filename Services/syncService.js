@@ -186,9 +186,21 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Gérer une insertion SANS créer de doublons
+  // ✅ Gérer une insertion SANS créer de doublons
+  //
+  // Logique de détection (3 niveaux) :
+  //
+  // Niveau 1 — local_id (même poste, même carte)
+  //   → Retour immédiat du pg_id existant (idempotence)
+  //
+  // Niveau 2 — 5 champs identitaires (même coordination)
+  //   → ON CONFLICT : mise à jour des champs manquants + rattachement local_id
+  //
+  // Niveau 3 — 5 champs identitaires (autre coordination)
+  //   → BLOQUÉ : retour pg_id sans modification (lecture seule)
   // ----------------------------------------------------------
   async _handleInsert(client, mod, site) {
+    // ── Niveau 1 : idempotence locale ───────────────────────────────────────
     if (mod.local_id) {
       const byLocalId = await client.query(
         `SELECT id FROM cartes
@@ -202,6 +214,7 @@ const syncService = {
       }
     }
 
+    // ── Niveau 2 : ON CONFLICT sur 5 champs identitaires ────────────────────
     const result = await client.query(
       `INSERT INTO cartes (
         coordination_id,
@@ -223,13 +236,13 @@ const syncService = {
         sync_status,
         local_id
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, NOW(), 'synced', $15)
-      ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
+      ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", COALESCE(NULLIF(contact,''),'__VIDE__'))
       WHERE deleted_at IS NULL
       DO UPDATE SET
         local_id             = COALESCE(cartes.local_id, EXCLUDED.local_id),
         site_proprietaire_id = COALESCE(cartes.site_proprietaire_id, EXCLUDED.site_proprietaire_id),
         coordination         = COALESCE(NULLIF(cartes.coordination, ''),         EXCLUDED.coordination),
-        "LIEU D'ENROLEMENT" = COALESCE(NULLIF(cartes."LIEU D'ENROLEMENT", ''), EXCLUDED."LIEU D'ENROLEMENT"),
+        "LIEU D'ENROLEMENT"  = COALESCE(NULLIF(cartes."LIEU D'ENROLEMENT", ''), EXCLUDED."LIEU D'ENROLEMENT"),
         "SITE DE RETRAIT"    = COALESCE(NULLIF(cartes."SITE DE RETRAIT", ''),    EXCLUDED."SITE DE RETRAIT"),
         contact              = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
         delivrance           = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
@@ -255,10 +268,11 @@ const syncService = {
         mod.delivrance || null, // $12
         mod.contact_retrait || null, // $13
         mod.date_delivrance || null, // $14
-        mod.local_id || null, // $15  ← version=1 hardcodé, local_id=$16 → $15
+        mod.local_id || null, // $15
       ]
     );
 
+    // ── Niveau 3 : doublon d'une AUTRE coordination ──────────────────────────
     if (result.rows.length === 0) {
       const existingOtherCoord = await client.query(
         `SELECT id, coordination_id FROM cartes
@@ -266,14 +280,14 @@ const syncService = {
            AND prenoms             = $2
            AND "DATE DE NAISSANCE" = $3
            AND "LIEU NAISSANCE"    = $4
-           AND rangement           = $5
+           AND COALESCE(NULLIF(contact,''),'__VIDE__') = COALESCE(NULLIF($5,''),'__VIDE__')
            AND deleted_at IS NULL`,
         [
           mod.nom,
           mod.prenoms,
           mod.date_naissance || null,
           mod.lieu_naissance || null,
-          mod.rangement || null,
+          mod.contact || null,
         ]
       );
 
@@ -393,9 +407,6 @@ const syncService = {
   // ----------------------------------------------------------
   // ✅ KEYSET PAGINATION — Download optimisé pour millions de données
   //
-  // Pagination par (sync_timestamp ASC, id ASC) — stable, sans doublon,
-  // sans offset, efficace même sur 1 million+ de cartes.
-  //
   // Paramètres :
   //   site       : objet site authentifié
   //   since      : timestamp ISO depuis lequel charger (null = tout)
@@ -414,25 +425,12 @@ const syncService = {
         ? new Date(since).toISOString()
         : new Date('2000-01-01').toISOString();
 
-      // ── TECHNIQUE limit+1 : on demande un enregistrement de plus que nécessaire.
-      //    Si on reçoit limit+1 résultats → has_more=true (on coupe le dernier).
-      //    Si on reçoit <= limit résultats → has_more=false, c'est terminé.
-      //    Avantage : zéro ambiguïté, pas de batch vide en fin de séquence.
-      //
-      // ── KEYSET pagination (sync_timestamp, id) :
-      //    Batch 1 : id > 0       → WHERE ts >= since           ORDER BY ts ASC, id ASC
-      //    Batch N : id > last_id → WHERE ts > since OR (ts = since AND id > last_id)
-      //    → Seek direct sur index composite → O(log n) même à 1M+ lignes
-      // ────────────────────────────────────────────────────────────────────────────
       const fetchLimit = limit + 1; // +1 pour détecter has_more sans COUNT(*)
 
       let query, params;
 
       if (last_id > 0) {
-        // ── Batch suivant — curseur UNIQUEMENT par id ─────────────────────
-        // On ne se base plus sur sync_timestamp pour paginer car toutes les
-        // cartes peuvent avoir le même timestamp (import en masse).
-        // L'id PostgreSQL est toujours unique et croissant → curseur fiable.
+        // Batch suivant — curseur uniquement par id
         query = `
           SELECT * FROM cartes
           WHERE deleted_at IS NULL
@@ -442,7 +440,7 @@ const syncService = {
         `;
         params = [last_id, fetchLimit];
       } else {
-        // ── Premier batch — filtre par timestamp puis tri par id ──────────
+        // Premier batch — filtre par timestamp
         query = `
           SELECT * FROM cartes
           WHERE deleted_at IS NULL
@@ -458,12 +456,10 @@ const syncService = {
       const result = await db.query(query, params);
       const allRows = result.rows;
 
-      // ── Détection has_more via l'enregistrement sonde ────────────────────
       const hasMore = allRows.length > limit;
       const records = hasMore ? allRows.slice(0, limit) : allRows;
       const count = records.length;
 
-      // ── Curseurs pour le prochain batch ──────────────────────────────────
       const lastRecord = count > 0 ? records[count - 1] : null;
       const next_last_id = lastRecord ? lastRecord.id : last_id;
       const next_since = lastRecord
