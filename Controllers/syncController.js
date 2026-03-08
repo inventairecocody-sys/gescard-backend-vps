@@ -232,9 +232,9 @@ const syncController = {
   async getUsers(req, res) {
     const site = req.site;
     try {
-      // ✅ On passe le rôle et le site de l'appelant pour filtrage par rôle
-      const userRole = req.query.user_role || null;
-      const userSiteId = req.query.user_site_id || site.id;
+      // ✅ Lire depuis header (Python) OU query param (web/autres clients)
+      const userRole = req.headers['x-user-role'] || req.query.user_role || null;
+      const userSiteId = req.headers['x-user-site'] || req.query.user_site_id || site.id;
 
       const users = await syncService.getUsersForSite(site.id, userRole, userSiteId);
 
