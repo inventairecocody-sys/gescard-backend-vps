@@ -220,12 +220,15 @@ const syncService = {
         sync_timestamp,
         sync_status,
         local_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 1, NOW(), 'synced', $16)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, NOW(), 'synced', $15)
       ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", rangement)
       WHERE deleted_at IS NULL
       DO UPDATE SET
         local_id             = COALESCE(cartes.local_id, EXCLUDED.local_id),
         site_proprietaire_id = COALESCE(cartes.site_proprietaire_id, EXCLUDED.site_proprietaire_id),
+        coordination         = COALESCE(NULLIF(cartes.coordination, ''),         EXCLUDED.coordination),
+        "LIEU D'ENROLEMENT" = COALESCE(NULLIF(cartes."LIEU D'ENROLEMENT", ''), EXCLUDED."LIEU D'ENROLEMENT"),
+        "SITE DE RETRAIT"    = COALESCE(NULLIF(cartes."SITE DE RETRAIT", ''),    EXCLUDED."SITE DE RETRAIT"),
         contact              = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
         delivrance           = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
         "CONTACT DE RETRAIT" = COALESCE(NULLIF(cartes."CONTACT DE RETRAIT", ''), EXCLUDED."CONTACT DE RETRAIT"),
@@ -236,22 +239,21 @@ const syncService = {
         cartes.coordination_id = EXCLUDED.coordination_id
       RETURNING id, (xmax <> 0) AS was_existing`,
       [
-        mod.coordination_id,
-        site.id,
-        mod.coordination || null,
-        mod.lieu_enrollement || null,
-        mod.site_retrait || null,
-        mod.nom,
-        mod.prenoms,
-        mod.date_naissance || null,
-        mod.lieu_naissance || null,
-        mod.rangement || null,
-        mod.contact || null,
-        mod.delivrance || null,
-        mod.contact_retrait || null,
-        mod.date_delivrance || null,
-        1,
-        mod.local_id || null,
+        mod.coordination_id, // $1
+        site.id, // $2
+        mod.coordination || null, // $3
+        mod.lieu_enrollement || null, // $4
+        mod.site_retrait || null, // $5
+        mod.nom, // $6
+        mod.prenoms, // $7
+        mod.date_naissance || null, // $8
+        mod.lieu_naissance || null, // $9
+        mod.rangement || null, // $10
+        mod.contact || null, // $11
+        mod.delivrance || null, // $12
+        mod.contact_retrait || null, // $13
+        mod.date_delivrance || null, // $14
+        mod.local_id || null, // $15  ← version=1 hardcodé, local_id=$16 → $15
       ]
     );
 
