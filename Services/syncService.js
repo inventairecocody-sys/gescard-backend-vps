@@ -685,6 +685,23 @@ const syncService = {
       client.release();
     }
   },
+
+  /**
+   * Retourne toutes les coordinations actives.
+   * Inclus dans la réponse login pour alimenter la table locale Python.
+   */
+  async getAllCoordinations() {
+    try {
+      const result = await db.query('SELECT id, nom, code FROM coordinations ORDER BY nom ASC');
+      return result.rows;
+    } catch (error) {
+      console.error('❌ Erreur getAllCoordinations:', error);
+      return [];
+    }
+  },
 };
 
 module.exports = syncService;
+
+// Méthode ajoutée : retourne toutes les coordinations pour la réponse login
+// Permet au logiciel Python de construire sa table locale coordinations

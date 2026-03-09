@@ -48,6 +48,9 @@ const syncController = {
         ip: req.ip,
       });
 
+      // Récupérer toutes les coordinations pour alimenter le logiciel local
+      const coordinations = await syncService.getAllCoordinations();
+
       res.json({
         success: true,
         token,
@@ -57,6 +60,7 @@ const syncController = {
           coordination: site.coordination_code,
           coordination_id: site.coordination_id,
         },
+        coordinations,
       });
     } catch (error) {
       console.error('❌ Erreur login site:', error);
