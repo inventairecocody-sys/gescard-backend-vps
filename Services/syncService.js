@@ -82,9 +82,8 @@ const syncService = {
       try {
         await client.query('BEGIN');
 
-        // Le siège (SIE-001) n'envoie pas de modifications — lecture seule
+        // Le siège (SIE-001) peut envoyer des modifications pour toutes les coordinations
         // Les autres sites : vérification coordination obligatoire
-        // Comparer en entiers (mod.coordination_id peut arriver en string depuis Python)
         const modCoordId = parseInt(mod.coordination_id, 10);
         if (site.id !== SIEGE_SITE_ID && modCoordId !== site.coordination_id) {
           throw new Error(
@@ -198,15 +197,24 @@ const syncService = {
   //
   // Niveau 3 — 5 champs identitaires (autre coordination)
   //   → BLOQUÉ : retour pg_id sans modification (lecture seule)
+  //
+  // ✅ CORRECTION : site_proprietaire_id respecté depuis le client
+  //   (ANC-001 pour COCODY, ANY-001 pour YOPOUGON, ASU-001 pour SUD)
+  //   Le siège (SIE-001) ne doit pas être propriétaire des cartes de terrain
   // ----------------------------------------------------------
   async _handleInsert(client, mod, site) {
+    // ── Déterminer le site propriétaire ──────────────────────────────────────
+    // Priorité : site_proprietaire_id envoyé par le client (calculé selon coordination)
+    // Fallback : site connecté
+    const siteProprietaireId = mod.site_proprietaire_id || site.id;
+
     // ── Niveau 1 : idempotence locale ───────────────────────────────────────
     if (mod.local_id) {
       const byLocalId = await client.query(
         `SELECT id FROM cartes
          WHERE local_id             = $1
            AND site_proprietaire_id = $2`,
-        [mod.local_id, site.id]
+        [mod.local_id, siteProprietaireId]
       );
       if (byLocalId.rows.length > 0) {
         console.log(`♻️  INSERT ignoré (local_id déjà connu): local_id=${mod.local_id}`);
@@ -255,7 +263,7 @@ const syncService = {
       RETURNING id, (xmax <> 0) AS was_existing`,
       [
         mod.coordination_id, // $1
-        site.id, // $2
+        siteProprietaireId, // $2 ✅ corrigé : site du client, pas SIE-001
         mod.coordination || null, // $3
         mod.lieu_enrollement || null, // $4
         mod.site_retrait || null, // $5
@@ -308,7 +316,9 @@ const syncService = {
     if (wasDuplicate) {
       console.log(`🔗 Doublon rattaché: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`);
     } else {
-      console.log(`🆕 Nouvelle carte: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id}`);
+      console.log(
+        `🆕 Nouvelle carte: "${mod.nom} ${mod.prenoms}" → pg_id=${row.id} | site=${siteProprietaireId}`
+      );
     }
 
     return { pg_id: row.id, was_duplicate: wasDuplicate };
@@ -373,7 +383,7 @@ const syncService = {
       if (mod[modKey] !== undefined) {
         paramIdx++;
         updates.push(`${sqlCol} = $${paramIdx}`);
-        params.push(mod[modKey]);
+        params.push(mod[modKey] || null);
       }
     }
 
@@ -381,7 +391,7 @@ const syncService = {
 
     params.push(mod.pg_id);
     await client.query(
-      `UPDATE cartes SET ${updates.join(', ')} WHERE id = $${paramIdx + 1}`,
+      `UPDATE cartes SET ${updates.join(', ')}, sync_timestamp = NOW() WHERE id = $${paramIdx + 1}`,
       params
     );
 
@@ -389,18 +399,34 @@ const syncService = {
   },
 
   // ----------------------------------------------------------
-  // Soft delete
+  // ✅ Soft delete — CORRECTION : le siège peut supprimer toutes les cartes
+  // Les autres sites ne peuvent supprimer que leurs propres cartes
   // ----------------------------------------------------------
   async _handleDelete(client, mod, site) {
-    await client.query(
-      `UPDATE cartes
-       SET deleted_at  = NOW(),
-           sync_status = 'synced'
-       WHERE id                   = $1
-         AND site_proprietaire_id = $2
-         AND deleted_at IS NULL`,
-      [mod.pg_id, site.id]
-    );
+    if (site.id === SIEGE_SITE_ID) {
+      // Le siège supprime sans filtre site_proprietaire_id
+      await client.query(
+        `UPDATE cartes
+         SET deleted_at  = NOW(),
+             sync_status = 'synced'
+         WHERE id          = $1
+           AND deleted_at IS NULL`,
+        [mod.pg_id]
+      );
+      console.log(`🗑️ Siège: suppression carte pg_id=${mod.pg_id}`);
+    } else {
+      // Les autres sites : seulement leurs propres cartes
+      await client.query(
+        `UPDATE cartes
+         SET deleted_at  = NOW(),
+             sync_status = 'synced'
+         WHERE id                   = $1
+           AND site_proprietaire_id = $2
+           AND deleted_at IS NULL`,
+        [mod.pg_id, site.id]
+      );
+      console.log(`🗑️ Site ${site.id}: suppression carte pg_id=${mod.pg_id}`);
+    }
     return { pg_id: mod.pg_id };
   },
 
@@ -702,6 +728,3 @@ const syncService = {
 };
 
 module.exports = syncService;
-
-// Méthode ajoutée : retourne toutes les coordinations pour la réponse login
-// Permet au logiciel Python de construire sa table locale coordinations
