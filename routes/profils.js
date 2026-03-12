@@ -199,50 +199,6 @@ router.post(
 router.post('/cache/clear', PROFIL_CONFIG.rateLimits.standard, profilController.clearUserCache);
 
 // ============================================
-// ROUTES ADMINISTRATEUR (Admin uniquement)
-// ============================================
-
-/**
- * GET /api/profil/:userId - Récupérer le profil d'un utilisateur (Admin uniquement)
- */
-router.get(
-  '/:userId',
-  role.peutGererComptes,
-  PROFIL_CONFIG.rateLimits.standard,
-  profilController.getUserProfile
-);
-
-/**
- * GET /api/profil/:userId/activity - Activité d'un utilisateur (Admin uniquement)
- */
-router.get(
-  '/:userId/activity',
-  role.peutGererComptes,
-  PROFIL_CONFIG.rateLimits.standard,
-  profilController.getUserActivityById
-);
-
-/**
- * POST /api/profil/reactivate/:userId - Réactiver un compte (Admin uniquement)
- */
-router.post(
-  '/reactivate/:userId',
-  role.peutGererComptes,
-  PROFIL_CONFIG.rateLimits.sensitive,
-  profilController.reactivateAccount
-);
-
-/**
- * GET /api/profil/diagnostic - Diagnostic du module (Admin uniquement)
- */
-router.get(
-  '/diagnostic',
-  role.peutGererComptes,
-  PROFIL_CONFIG.rateLimits.standard,
-  profilController.diagnostic
-);
-
-// ============================================
 // ROUTE D'ACCUEIL
 // ============================================
 
@@ -279,6 +235,55 @@ router.get('/home', (req, res) => {
     },
   });
 });
+
+// ============================================
+// ROUTES ADMINISTRATEUR (Admin uniquement)
+// ✅ FIX : Ces routes avec :userId sont déclarées EN DERNIER.
+//    Dans la version originale, GET /:userId était avant /home, /diagnostic etc.
+//    Express les matchait donc comme userId="home", userId="diagnostic"...
+//    Solution : toutes les routes fixes nommées d'abord, :userId à la fin.
+// ============================================
+
+/**
+ * POST /api/profil/reactivate/:userId - Réactiver un compte (Admin uniquement)
+ */
+router.post(
+  '/reactivate/:userId',
+  role.peutGererComptes,
+  PROFIL_CONFIG.rateLimits.sensitive,
+  profilController.reactivateAccount
+);
+
+/**
+ * GET /api/profil/diagnostic - Diagnostic du module (Admin uniquement)
+ */
+router.get(
+  '/diagnostic',
+  role.peutGererComptes,
+  PROFIL_CONFIG.rateLimits.standard,
+  profilController.diagnostic
+);
+
+/**
+ * GET /api/profil/:userId/activity - Activité d'un utilisateur (Admin uniquement)
+ */
+router.get(
+  '/:userId/activity',
+  role.peutGererComptes,
+  PROFIL_CONFIG.rateLimits.standard,
+  profilController.getUserActivityById
+);
+
+/**
+ * GET /api/profil/:userId - Récupérer le profil d'un utilisateur (Admin uniquement)
+ * ⚠️  Doit rester EN TOUT DERNIER — capture tout ce qui n'a pas matché avant
+ */
+router.get(
+  '/:userId',
+  role.peutGererComptes,
+  PROFIL_CONFIG.rateLimits.standard,
+  profilController.getUserProfile
+);
 
 // ============================================
 // GESTION DES ERREURS 404

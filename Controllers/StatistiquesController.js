@@ -9,6 +9,7 @@ const CACHE = {
   globales: { data: null, timestamp: null, key: null },
   sites: { data: null, timestamp: null, key: null },
   detail: { data: null, timestamp: null, key: null },
+  agences: { data: null, timestamp: null, key: null }, // ✅ AJOUT niveau agence
   TIMEOUT: 5 * 60 * 1000, // 5 minutes
 };
 
@@ -621,6 +622,166 @@ const statistiquesController = {
     }
   },
 
+  // ============================================
+  // ✅ NOUVEAU — GET /api/statistiques/agences
+  // ============================================
+  /**
+   * Statistiques par agence — total cartes, retirées, restantes, taux, nb sites, agents
+   *
+   * Accès :
+   *   Administrateur  → toutes les agences
+   *   Gestionnaire    → agences de sa coordination uniquement (via coordination_id)
+   *   Chef d'équipe   → son agence uniquement (via agence_id)
+   *
+   * Jointure : agences → sites → cartes (via LOWER("SITE DE RETRAIT") = LOWER(sites.nom))
+   */
+  async parAgence(req, res) {
+    try {
+      const { forceRefresh } = req.query;
+      const startTime = Date.now();
+      const cacheKey = getCacheKey(req.user);
+
+      if (!forceRefresh && isCacheValid('agences', cacheKey)) {
+        return res.json({
+          ...CACHE.agences.data,
+          cached: true,
+          cacheAge: Math.round((Date.now() - CACHE.agences.timestamp) / 1000) + 's',
+        });
+      }
+
+      const { role, coordination_id, agence_id } = req.user;
+
+      let whereAgence = 'WHERE a.is_active = true';
+      const params = [];
+
+      if (role === 'Gestionnaire' && coordination_id) {
+        params.push(coordination_id);
+        whereAgence += ` AND a.coordination_id = $${params.length}`;
+      } else if (role === "Chef d'équipe" && agence_id) {
+        params.push(agence_id);
+        whereAgence += ` AND a.id = $${params.length}`;
+      }
+      // Administrateur → pas de filtre supplémentaire
+
+      const result = await db.query(
+        `
+        SELECT
+          a.id                                                           AS agence_id,
+          a.nom                                                          AS agence_nom,
+          c.id                                                           AS coordination_id,
+          c.nom                                                          AS coordination_nom,
+          COUNT(DISTINCT s.id)                                           AS nombre_sites,
+          COUNT(DISTINCT s.id) FILTER (WHERE s.is_active = true)         AS sites_actifs,
+          COALESCE(SUM(stats.total_cartes),     0)                        AS total_cartes,
+          COALESCE(SUM(stats.cartes_retirees),  0)                        AS cartes_retirees,
+          COALESCE(SUM(stats.cartes_restantes), 0)                        AS cartes_restantes,
+          ROUND(
+            CASE
+              WHEN COALESCE(SUM(stats.total_cartes), 0) > 0
+              THEN SUM(stats.cartes_retirees)::numeric
+                   / SUM(stats.total_cartes)::numeric * 100
+              ELSE 0
+            END, 1
+          )                                                              AS taux_retrait,
+          COUNT(DISTINCT u.id) FILTER (WHERE u.actif = true)             AS nombre_agents
+        FROM agences a
+        LEFT JOIN coordinations c ON c.id = a.coordination_id
+        LEFT JOIN sites s         ON s.agence_id = a.id
+
+        /* Stats cartes réelles via jointure sur le nom du site */
+        LEFT JOIN (
+          SELECT
+            s2.id                                                          AS site_id,
+            COUNT(*)                                                        AS total_cartes,
+            COUNT(*) FILTER (
+              WHERE k.delivrance IS NOT NULL
+                AND TRIM(COALESCE(k.delivrance, '')) != ''
+                AND UPPER(k.delivrance) != 'NON'
+            )                                                               AS cartes_retirees,
+            COUNT(*) FILTER (
+              WHERE NOT (
+                k.delivrance IS NOT NULL
+                AND TRIM(COALESCE(k.delivrance, '')) != ''
+                AND UPPER(k.delivrance) != 'NON'
+              )
+            )                                                               AS cartes_restantes
+          FROM sites s2
+          JOIN cartes k
+            ON LOWER(TRIM(k."SITE DE RETRAIT")) = LOWER(TRIM(s2.nom))
+          WHERE k.deleted_at IS NULL
+          GROUP BY s2.id
+        ) stats ON stats.site_id = s.id
+
+        LEFT JOIN utilisateurs u ON u.agence_id = a.id
+
+        ${whereAgence}
+        GROUP BY a.id, a.nom, c.id, c.nom
+        ORDER BY c.nom NULLS LAST, a.nom
+        `,
+        params
+      );
+
+      const agences = result.rows.map((r) => ({
+        agence_id: parseInt(r.agence_id),
+        agence_nom: r.agence_nom,
+        coordination_id: r.coordination_id,
+        coordination_nom: r.coordination_nom || 'Non définie',
+        nombre_sites: parseInt(r.nombre_sites) || 0,
+        sites_actifs: parseInt(r.sites_actifs) || 0,
+        nombre_agents: parseInt(r.nombre_agents) || 0,
+        total_cartes: parseInt(r.total_cartes) || 0,
+        cartes_retirees: parseInt(r.cartes_retirees) || 0,
+        cartes_restantes: parseInt(r.cartes_restantes) || 0,
+        taux_retrait: parseFloat(r.taux_retrait) || 0,
+      }));
+
+      const totaux = agences.reduce(
+        (acc, a) => ({
+          total_cartes: acc.total_cartes + a.total_cartes,
+          cartes_retirees: acc.cartes_retirees + a.cartes_retirees,
+          cartes_restantes: acc.cartes_restantes + a.cartes_restantes,
+          nombre_sites: acc.nombre_sites + a.nombre_sites,
+          nombre_agents: acc.nombre_agents + a.nombre_agents,
+        }),
+        {
+          total_cartes: 0,
+          cartes_retirees: 0,
+          cartes_restantes: 0,
+          nombre_sites: 0,
+          nombre_agents: 0,
+        }
+      );
+      totaux.taux_retrait =
+        totaux.total_cartes > 0
+          ? Math.round((totaux.cartes_retirees / totaux.total_cartes) * 100)
+          : 0;
+
+      const response = {
+        success: true,
+        agences,
+        totaux,
+        count: agences.length,
+        filtres: {
+          role: req.user.role,
+          coordination: req.user.coordination || 'toutes',
+          agence_id: req.user.agence_id || null,
+        },
+      };
+
+      CACHE.agences = { data: response, timestamp: Date.now(), key: cacheKey };
+
+      res.json({
+        ...response,
+        cached: false,
+        performance: { queryTime: Date.now() - startTime },
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('❌ Erreur statistiques agences:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  },
+
   /**
    * POST /api/statistiques/refresh
    * Vider le cache manuellement
@@ -630,6 +791,7 @@ const statistiquesController = {
       CACHE.globales = { data: null, timestamp: null, key: null };
       CACHE.sites = { data: null, timestamp: null, key: null };
       CACHE.detail = { data: null, timestamp: null, key: null };
+      CACHE.agences = { data: null, timestamp: null, key: null }; // ✅ AJOUT
 
       console.log('🔄 Cache statistiques vidé par:', req.user?.nomUtilisateur);
 
@@ -697,6 +859,7 @@ const statistiquesController = {
           globales: CACHE.globales.timestamp ? 'actif' : 'inactif',
           sites: CACHE.sites.timestamp ? 'actif' : 'inactif',
           detail: CACHE.detail.timestamp ? 'actif' : 'inactif',
+          agences: CACHE.agences.timestamp ? 'actif' : 'inactif', // ✅ AJOUT
           timeout: '5 minutes',
         },
         performance: { queryTime: Date.now() - startTime },

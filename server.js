@@ -1,3 +1,9 @@
+// ========================================
+// BACKEND COMPLET CONSOLIDÉ
+// Généré le: 12/03/2026 10:28:22
+// ========================================
+
+// ========== SERVER.JS (POINT D'ENTRÉE) ==========
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -47,6 +53,9 @@ const backupRoutes = require('./routes/backupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
 const updatesRoutes = require('./routes/Updatesroutes'); // ✅ Mises à jour
 const coordinationsRoutes = require('./routes/coordinations'); // ✅ Coordinations CRUD
+const sitesRoutes = require('./routes/sites'); // ✅ Sites CRUD
+const agencesRoutes = require('./routes/agences'); // ✅ Agences CRUD
+const initFileRoutes = require('./routes/initFileRoutes'); // ✅ Fichier d'initialisation hors-ligne
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -334,6 +343,9 @@ app.use('/api/backup', backupRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/updates', updatesRoutes); // ✅ Mises à jour automatiques
 app.use('/api/coordinations', coordinationsRoutes); // ✅ CRUD Coordinations
+app.use('/api/sites', sitesRoutes); // ✅ CRUD Sites
+app.use('/api/agences', agencesRoutes); // ✅ CRUD Agences
+app.use('/api/init-file', initFileRoutes); // ✅ Fichier d'initialisation hors-ligne
 
 // ========== ROUTE RACINE ==========
 app.get('/', (req, res) => {
@@ -361,7 +373,9 @@ app.get('/', (req, res) => {
       sync_sites: true,
       sync_utilisateurs: true,
       auto_update: true,
-      gestion_coordinations: true, // ✅ Nouveau
+      gestion_coordinations: true,
+      gestion_agences: true, // ✅ Agences
+      init_file_hors_ligne: true, // ✅ Fichier hors-ligne
     },
     sync_endpoints: {
       login: 'POST /api/sync/login',
@@ -373,12 +387,22 @@ app.get('/', (req, res) => {
       users: 'GET  /api/sync/users',
     },
     coordinations_endpoints: {
-      // ✅ Nouveau
       liste: 'GET    /api/coordinations',
       detail: 'GET    /api/coordinations/:id',
       creer: 'POST   /api/coordinations        (Admin)',
       modifier: 'PUT    /api/coordinations/:id    (Admin)',
       supprimer: 'DELETE /api/coordinations/:id    (Admin)',
+    },
+    agences_endpoints: {
+      liste: 'GET    /api/agences',
+      detail: 'GET    /api/agences/:id',
+      creer: 'POST   /api/agences               (Admin)',
+      modifier: 'PUT    /api/agences/:id           (Admin)',
+      supprimer: 'DELETE /api/agences/:id           (Admin)',
+    },
+    init_file_endpoints: {
+      sites: 'GET  /api/init-file/sites         (Admin)',
+      generate: 'POST /api/init-file/generate      (Admin)',
     },
     statistiques_endpoints: {
       globales: 'GET  /api/statistiques/globales',
@@ -494,18 +518,21 @@ const server = app.listen(PORT, async () => {
   await setupBackupSystem();
 
   console.log('\n📋 Configuration:');
-  console.log('• Upload limit        : 200MB (exe: 500MB)');
-  console.log('• Rate limit          : 5000 req/15min');
-  console.log('• Logs                : /logs/access.log');
-  console.log('• Backups             : /backups/ + Google Drive');
-  console.log('• Connexions DB max   : 50');
-  console.log("• Rôles               : Administrateur, Gestionnaire, Chef d'équipe, Opérateur");
-  console.log('• Sync sites          : ✅ ACTIVE (login/upload/download/confirm/status/users)');
-  console.log('• Sync utilisateurs   : ✅ ACTIVE');
-  console.log('• Statistiques        : ✅ ACTIVE (filtrées par rôle)');
-  console.log('• Auto-update logiciel: ✅ ACTIVE (/api/updates)');
-  console.log('• Coordinations CRUD  : ✅ ACTIVE (/api/coordinations)');
-  console.log('• Sécurité            : ✅ ACTIVE\n');
+  console.log('• Upload limit           : 200MB (exe: 500MB)');
+  console.log('• Rate limit             : 5000 req/15min');
+  console.log('• Logs                   : /logs/access.log');
+  console.log('• Backups                : /backups/ + Google Drive');
+  console.log('• Connexions DB max      : 50');
+  console.log("• Rôles                  : Administrateur, Gestionnaire, Chef d'équipe, Opérateur");
+  console.log('• Sync sites             : ✅ ACTIVE (login/upload/download/confirm/status/users)');
+  console.log('• Sync utilisateurs      : ✅ ACTIVE');
+  console.log('• Statistiques           : ✅ ACTIVE (filtrées par rôle)');
+  console.log('• Auto-update logiciel   : ✅ ACTIVE (/api/updates)');
+  console.log('• Coordinations CRUD     : ✅ ACTIVE (/api/coordinations)');
+  console.log('• Sites CRUD             : ✅ ACTIVE (/api/sites)');
+  console.log('• Agences CRUD           : ✅ ACTIVE (/api/agences)');
+  console.log('• Init fichier hors-ligne: ✅ ACTIVE (/api/init-file)');
+  console.log('• Sécurité               : ✅ ACTIVE\n');
 });
 
 server.keepAliveTimeout = 300000;

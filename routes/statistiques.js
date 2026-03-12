@@ -76,6 +76,13 @@ router.get('/evolution', permission.peutVoirStatistiques, ctrl.evolution);
 router.get('/imports', permission.peutVoirStatistiques, ctrl.parImport);
 
 /**
+ * GET /api/statistiques/agences
+ * Statistiques par agence (total cartes, retirées, restantes, taux, sites, agents)
+ * Accès : Administrateur (tout), Gestionnaire (sa coordination), Chef d'équipe (son agence)
+ */
+router.get('/agences', permission.peutVoirStatistiques, ctrl.parAgence); // ✅ AJOUT
+
+/**
  * GET /api/statistiques/coordinations
  * Comparaison entre coordinations
  * Accès : Administrateur uniquement
@@ -120,6 +127,11 @@ router.get('/', (req, res) => {
       { method: 'GET', path: '/api/statistiques/quick', description: 'Tableau de bord' },
       { method: 'GET', path: '/api/statistiques/evolution', description: 'Évolution temporelle' },
       { method: 'GET', path: '/api/statistiques/imports', description: "Par lot d'import" },
+      {
+        method: 'GET',
+        path: '/api/statistiques/agences',
+        description: 'Par agence (Admin/Gest/Chef)',
+      }, // ✅ AJOUT
       {
         method: 'GET',
         path: '/api/statistiques/coordinations',
