@@ -176,8 +176,8 @@ const allowedOrigins = [
   'https://gescardcocody.netlify.app',
   'http://gescardcocody.com',
   'https://gescardcocody.com',
-  'http://www.gescarcocody.com',
-  'https://www.gescarcocody.com',
+  'http://www.gescardcocody.com', // ✅ corrigé (d ajouté)
+  'https://www.gescardcocody.com', // ✅ corrigé (d ajouté)
   /\.gescardcocody\.com$/,
   'http://localhost:5173',
   'http://localhost:3000',
@@ -374,8 +374,8 @@ app.get('/', (req, res) => {
       sync_utilisateurs: true,
       auto_update: true,
       gestion_coordinations: true,
-      gestion_agences: true, // ✅ Agences
-      init_file_hors_ligne: true, // ✅ Fichier hors-ligne
+      gestion_agences: true,
+      init_file_hors_ligne: true,
     },
     sync_endpoints: {
       login: 'POST /api/sync/login',
@@ -437,7 +437,6 @@ app.use((req, res) => {
   });
 });
 
-// ✅ _next requis par Express pour reconnaître un middleware d'erreur (4 paramètres)
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
   console.error('❌ Error:', {
