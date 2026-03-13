@@ -33,37 +33,10 @@ const TEAL = '0d9488';
 const GRAY = '6B7280';
 const DARK = '1A1A1A';
 
-// ✅ NOUVELLE FONCTION : Formatage des nombres avec gestion des décimales pour les taux
-const fmt = (n) => {
-  if (typeof n === 'number') {
-    return n.toLocaleString('fr-FR', { maximumFractionDigits: 0 });
-  }
-  return n;
-};
-
-// ✅ NOUVELLE FONCTION : Formatage des taux avec 1 décimale
-const afficherTaux = (taux) => {
-  if (typeof taux !== 'number') return taux;
-  return taux.toFixed(1).replace('.', ',') + '%';
-};
-
-// ✅ MODIFIÉ : Seuils de couleur plus précis
-const tColor = (t) => {
-  if (t >= 90) return GREEN;
-  if (t >= 70) return TEAL;
-  if (t >= 50) return ORANGE;
-  if (t >= 30) return '#f59e0b'; // Amber
-  return RED;
-};
-
-// ✅ MODIFIÉ : Labels plus précis
-const tLabel = (t) => {
-  if (t >= 90) return '🏆 Excellent';
-  if (t >= 70) return '✨ Très bon';
-  if (t >= 50) return '📈 En progression';
-  if (t >= 30) return '⚠️ À surveiller';
-  return '🔴 Critique';
-};
+const fmt = (n) => parseInt(n).toLocaleString('fr-FR');
+const tColor = (t) => (t >= 75 ? GREEN : t >= 50 ? ORANGE : RED);
+const tLabel = (t) => (t >= 75 ? '🏆 Excellent' : t >= 50 ? '📈 En progression' : '⚠️ À améliorer');
+const fmtTaux = (t) => t.toFixed(2).replace('.', ',') + '%';
 
 const border = (color = 'CCCCCC') => ({ style: BorderStyle.SINGLE, size: 1, color });
 const borders = (color = 'CCCCCC') => ({
@@ -132,38 +105,25 @@ function headerCell(text, width, bgColor = ORANGE) {
 }
 
 function dataCell(text, width, opts = {}) {
-  const {
-    bg = 'FFFFFF',
-    color = DARK,
-    bold = false,
-    align = AlignmentType.LEFT,
-    isTaux = false,
-  } = opts;
-
-  // Formater le texte en fonction du type
-  let displayText = String(text ?? '');
-  if (typeof text === 'number') {
-    displayText = isTaux ? afficherTaux(text) : fmt(text);
-  }
-
+  const { bg = 'FFFFFF', color = DARK, bold = false, align = AlignmentType.LEFT } = opts;
   return new TableCell({
     width: { size: width, type: WidthType.DXA },
     borders: borders(),
     shading: { fill: bg, type: ShadingType.CLEAR },
     margins: cellMargins,
     verticalAlign: VerticalAlign.CENTER,
-    children: [para([run(displayText, { color, bold, size: 18 })], { align, before: 0, after: 0 })],
+    children: [
+      para([run(String(text ?? ''), { color, bold, size: 18 })], { align, before: 0, after: 0 }),
+    ],
   });
 }
 
-// ✅ MODIFIÉ : KPI Table avec taux formaté
 function kpiTable(data) {
-  const taux = data.tauxRetrait || 0;
   const kpis = [
     { label: 'Total cartes', value: fmt(data.total), color: ORANGE },
     { label: 'Cartes retirées', value: fmt(data.retires), color: GREEN },
     { label: 'Cartes restantes', value: fmt(data.restants), color: BLUE },
-    { label: 'Taux de retrait', value: afficherTaux(taux), color: tColor(taux) },
+    { label: 'Taux de retrait', value: fmtTaux(data.tauxRetrait), color: tColor(data.tauxRetrait) },
   ];
   const col = Math.floor(CONTENT / 4);
   return new Table({
@@ -198,7 +158,6 @@ function kpiTable(data) {
   });
 }
 
-// ✅ MODIFIÉ : Analyse auto avec taux formatés
 function analyseAuto(sites = []) {
   if (!sites.length) return [];
   const taux_moy = sites.reduce((s, x) => s + x.tauxRetrait, 0) / sites.length;
@@ -213,7 +172,7 @@ function analyseAuto(sites = []) {
   paras.push(
     para([
       run(`Taux moyen de retrait : `, { bold: true }),
-      run(afficherTaux(taux_moy), { bold: true, color: tColor(taux_moy) }),
+      run(fmtTaux(taux_moy), { bold: true, color: tColor(taux_moy) }),
       run(`  |  ${sites.length} sites analysés  |  `, {}),
       run(`${fmt(restants)} cartes en attente`, { color: BLUE }),
     ])
@@ -231,7 +190,7 @@ function analyseAuto(sites = []) {
   paras.push(
     para([
       run('✅ Top 3 : ', { bold: true, color: GREEN }),
-      run(top3.map((s) => `${s.site} (${afficherTaux(s.tauxRetrait)})`).join(' · ')),
+      run(top3.map((s) => `${s.site} (${fmtTaux(s.tauxRetrait)})`).join(' · ')),
     ])
   );
 
@@ -253,18 +212,15 @@ function analyseAuto(sites = []) {
   paras.push(
     para([
       run('📉 3 sites en retard : ', { bold: true, color: RED }),
-      run(bas3.map((s) => `${s.site} (${afficherTaux(s.tauxRetrait)})`).join(' · ')),
+      run(bas3.map((s) => `${s.site} (${fmtTaux(s.tauxRetrait)})`).join(' · ')),
     ])
   );
 
-  // Recommandation avec seuils ajustés
+  // Recommandation
   let rec;
-  if (taux_moy >= 90)
+  if (taux_moy >= 75)
     rec =
       "Performance excellente. Documenter les bonnes pratiques des sites leaders et les partager à l'ensemble des équipes. Planifier les opérations de clôture.";
-  else if (taux_moy >= 70)
-    rec =
-      'Performance très satisfaisante. Maintenir la dynamique et renforcer les sites entre 50-70%.';
   else if (taux_moy >= 50)
     rec = `Performance satisfaisante. Concentrer les efforts sur les ${alertes.length} site(s) en retard. Renforcer les équipes mobiles et intensifier la communication auprès des bénéficiaires.`;
   else
@@ -276,7 +232,6 @@ function analyseAuto(sites = []) {
   return paras;
 }
 
-// ✅ MODIFIÉ : Tableau coordinations avec taux formatés
 function tableCoordinations(data) {
   const coords = [...(data.coordinations || [])].sort((a, b) => b.tauxRetrait - a.tauxRetrait);
   const cols = [600, 2800, 1600, 1600, 1600, 1200, 2066];
@@ -309,12 +264,11 @@ function tableCoordinations(data) {
               bold: true,
               bg: i % 2 ? 'F9F9F9' : 'FFFFFF',
             }),
-            dataCell(c.tauxRetrait, cols[5], {
+            dataCell(fmtTaux(c.tauxRetrait), cols[5], {
               align: AlignmentType.CENTER,
               color: tColor(c.tauxRetrait),
               bold: true,
               bg: i % 2 ? 'F9F9F9' : 'FFFFFF',
-              isTaux: true,
             }),
             dataCell(tLabel(c.tauxRetrait), cols[6], {
               align: AlignmentType.CENTER,
@@ -328,10 +282,9 @@ function tableCoordinations(data) {
   return new Table({ width: { size: CONTENT, type: WidthType.DXA }, columnWidths: cols, rows });
 }
 
-// ✅ MODIFIÉ : Tableau agences avec taux formatés
 function tableAgences(data) {
   const ags = [...(data.agences || [])].sort((a, b) => b.taux_retrait - a.taux_retrait);
-  const cols = [600, 2800, 2200, 800, 800, 1400, 1400, 1066];
+  const cols = [600, 2800, 2200, 800, 800, 1400, 1400, 1066]; // 11066 + 600 ≈ CONTENT
   const sum = cols.reduce((a, b) => a + b, 0);
   const adj = CONTENT - sum;
   cols[cols.length - 1] += adj;
@@ -350,11 +303,10 @@ function tableAgences(data) {
             dataCell(a.nombre_agents, cols[4], { align: AlignmentType.CENTER }),
             dataCell(fmt(a.total_cartes), cols[5], { align: AlignmentType.RIGHT }),
             dataCell(fmt(a.cartes_retirees), cols[6], { align: AlignmentType.RIGHT, color: GREEN }),
-            dataCell(a.taux_retrait, cols[7], {
+            dataCell(fmtTaux(a.taux_retrait), cols[7], {
               align: AlignmentType.CENTER,
               color: tColor(a.taux_retrait),
               bold: true,
-              isTaux: true,
             }),
           ],
         })
@@ -363,7 +315,6 @@ function tableAgences(data) {
   return new Table({ width: { size: CONTENT, type: WidthType.DXA }, columnWidths: cols, rows });
 }
 
-// ✅ MODIFIÉ : Tableau sites avec taux formatés
 function tableSites(sites = [], limit = 30) {
   const src = [...sites].sort((a, b) => b.tauxRetrait - a.tauxRetrait).slice(0, limit);
   const cols = [600, 3000, 2200, 1200, 1200, 1200, 900, 1166];
@@ -383,11 +334,10 @@ function tableSites(sites = [], limit = 30) {
             dataCell(fmt(s.total), cols[3], { align: AlignmentType.RIGHT }),
             dataCell(fmt(s.retires), cols[4], { align: AlignmentType.RIGHT, color: GREEN }),
             dataCell(fmt(s.restants), cols[5], { align: AlignmentType.RIGHT, color: BLUE }),
-            dataCell(s.tauxRetrait, cols[6], {
+            dataCell(fmtTaux(s.tauxRetrait), cols[6], {
               align: AlignmentType.CENTER,
               color: tColor(s.tauxRetrait),
               bold: true,
-              isTaux: true,
             }),
             dataCell(tLabel(s.tauxRetrait), cols[7]),
           ],
@@ -397,7 +347,6 @@ function tableSites(sites = [], limit = 30) {
   return new Table({ width: { size: CONTENT, type: WidthType.DXA }, columnWidths: cols, rows });
 }
 
-// ✅ MODIFIÉ : Section recommandations avec seuils ajustés
 function recommandationsSection(data) {
   const sites = data.sites || [];
   const alertes = sites
@@ -437,40 +386,33 @@ function recommandationsSection(data) {
 
   paras.push(spacer(200));
 
-  // Plan d'action avec seuils ajustés
+  // Plan d'action
   paras.push(titre("Plan d'Action Recommandé", 2));
 
   const actions =
-    t >= 90
+    t >= 75
       ? [
           '1. Documenter les processus des sites leaders et créer un guide de bonnes pratiques.',
           "2. Organiser des visites d'échange entre les meilleurs sites et ceux en retard.",
           "3. Planifier la phase de clôture pour les bénéficiaires n'ayant pas encore retiré leur carte.",
           '4. Préparer le rapport final de distribution pour les autorités compétentes.',
         ]
-      : t >= 70
+      : t >= 50
         ? [
-            `1. Maintenir la dynamique sur les sites performants.`,
-            `2. Intervention ciblée sur les ${alertes.length} site(s) en alerte (taux < 50%) dans les 72 heures.`,
-            '3. Renforcer les équipes mobiles dans les zones à taux intermédiaire.',
-            '4. Poursuivre la campagne de communication.',
+            `1. Intervention prioritaire sur les ${alertes.length} site(s) en alerte (taux < 50%) dans les 72 heures.`,
+            '2. Déployer des équipes mobiles renforcées dans les zones à faible taux de retrait.',
+            '3. Lancer une campagne de communication ciblée (SMS, radio locale, affichage) pour informer les bénéficiaires.',
+            '4. Instaurer un reporting hebdomadaire avec indicateurs de suivi par site.',
+            '5. Identifier et lever les blocages opérationnels (horaires, accessibilité, documents requis).',
           ]
-        : t >= 50
-          ? [
-              `1. Intervention prioritaire sur les ${alertes.length} site(s) en alerte (taux < 50%) dans les 72 heures.`,
-              '2. Déployer des équipes mobiles renforcées dans les zones à faible taux de retrait.',
-              '3. Lancer une campagne de communication ciblée (SMS, radio locale, affichage) pour informer les bénéficiaires.',
-              '4. Instaurer un reporting hebdomadaire avec indicateurs de suivi par site.',
-              '5. Identifier et lever les blocages opérationnels (horaires, accessibilité, documents requis).',
-            ]
-          : [
-              `1. URGENCE : Mobilisation immédiate sur les ${alertes.length} site(s) critiques.`,
-              '2. Constituer une cellule de crise dédiée avec réunion quotidienne.',
-              "3. Renforcer massivement les équipes sur le terrain et étendre les horaires d'ouverture.",
-              '4. Lancer une campagne de sensibilisation multicanal (radio, SMS, chefs de quartier).',
-              '5. Déployer des points de distribution mobiles dans les zones géographiquement isolées.',
-              "6. Mettre en place un numéro d'assistance pour les bénéficiaires ayant des difficultés.",
-            ];
+        : [
+            `1. URGENCE : Mobilisation immédiate sur les ${alertes.length} site(s) critiques.`,
+            '2. Constituer une cellule de crise dédiée avec réunion quotidienne.',
+            "3. Renforcer massivement les équipes sur le terrain et étendre les horaires d'ouverture.",
+            '4. Lancer une campagne de sensibilisation multicanal (radio, SMS, chefs de quartier).',
+            '5. Déployer des points de distribution mobiles dans les zones géographiquement isolées.',
+            "6. Mettre en place un numéro d'assistance pour les bénéficiaires ayant des difficultés.",
+          ];
 
   for (const action of actions) {
     paras.push(para([run(action)], { before: 60, after: 60 }));
@@ -621,7 +563,7 @@ async function generate(dataStr) {
                       para(
                         [
                           run(`Taux global de retrait : `, { size: 22 }),
-                          run(afficherTaux(data.tauxRetrait), {
+                          run(fmtTaux(data.tauxRetrait), {
                             bold: true,
                             size: 28,
                             color: tColor(data.tauxRetrait),

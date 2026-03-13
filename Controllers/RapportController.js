@@ -7,17 +7,14 @@ const { execSync } = require('child_process');
 const path = require('path');
 const { query } = require('../db/db');
 
-// ✅ CORRIGÉ : Chemin vers les scripts de génération (avec majuscule)
 const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts', 'Rapport');
+const PROJECT_DIR = path.join(__dirname, '..');
 
-// ─── Condition retrait (cohérente avec StatistiquesController) ───────────────
 const CONDITION_RETIRES = `delivrance IS NOT NULL AND TRIM(delivrance) != '' AND UPPER(TRIM(delivrance)) != 'NON'`;
 
-// ─── Récupération des données consolidées ────────────────────────────────────
 async function collecterDonnees(user) {
   const isAdmin = user.role === 'Administrateur';
 
-  // Filtre coordination
   let filtreCoord = '';
   const params = [];
   if (!isAdmin) {
@@ -27,12 +24,11 @@ async function collecterDonnees(user) {
     }
   }
 
-  // ── Globales ──────────────────────────────────────────────────────────────
   const gRes = await query(
     `
     SELECT
-      COUNT(*)                                        AS total,
-      COUNT(*) FILTER (WHERE ${CONDITION_RETIRES})    AS retires,
+      COUNT(*)                                           AS total,
+      COUNT(*) FILTER (WHERE ${CONDITION_RETIRES})       AS retires,
       COUNT(*) FILTER (WHERE NOT (${CONDITION_RETIRES})) AS restants
     FROM cartes
     WHERE deleted_at IS NULL ${filtreCoord}
@@ -45,14 +41,13 @@ async function collecterDonnees(user) {
   const retires = parseInt(g.retires);
   const restants = parseInt(g.restants);
 
-  // ── Par coordination ──────────────────────────────────────────────────────
   let coords = [];
   if (isAdmin) {
     const cRes = await query(`
       SELECT
         coordination,
-        COUNT(*)                                        AS total,
-        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES})    AS retires,
+        COUNT(*)                                           AS total,
+        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES})       AS retires,
         COUNT(*) FILTER (WHERE NOT (${CONDITION_RETIRES})) AS restants
       FROM cartes
       WHERE deleted_at IS NULL AND coordination IS NOT NULL AND TRIM(coordination) != ''
@@ -64,7 +59,7 @@ async function collecterDonnees(user) {
       total: parseInt(r.total),
       retires: parseInt(r.retires),
       restants: parseInt(r.restants),
-      tauxRetrait: parseInt(r.total) > 0 ? (parseInt(r.retires) / parseInt(r.total)) * 100 : 0, // ✅ Plus d'arrondi
+      tauxRetrait: parseInt(r.total) > 0 ? (parseInt(r.retires) / parseInt(r.total)) * 100 : 0,
     }));
   } else if (user.coordination) {
     coords = [
@@ -73,12 +68,11 @@ async function collecterDonnees(user) {
         total,
         retires,
         restants,
-        tauxRetrait: total > 0 ? (retires / total) * 100 : 0, // ✅ Plus d'arrondi
+        tauxRetrait: total > 0 ? (retires / total) * 100 : 0,
       },
     ];
   }
 
-  // ── Par agence ────────────────────────────────────────────────────────────
   let agences = [];
   try {
     let agQuery = `
@@ -118,14 +112,13 @@ async function collecterDonnees(user) {
       cartes_restantes: parseInt(r.total_cartes) - parseInt(r.cartes_retirees),
       taux_retrait:
         parseInt(r.total_cartes) > 0
-          ? (parseInt(r.cartes_retirees) / parseInt(r.total_cartes)) * 100 // ✅ Plus d'arrondi
+          ? (parseInt(r.cartes_retirees) / parseInt(r.total_cartes)) * 100
           : 0,
     }));
   } catch (e) {
     console.warn('[Rapport] Agences indisponibles:', e.message);
   }
 
-  // ── Par site ──────────────────────────────────────────────────────────────
   const sRes = await query(
     `
     SELECT
@@ -151,14 +144,14 @@ async function collecterDonnees(user) {
     total: parseInt(r.total),
     retires: parseInt(r.retires),
     restants: parseInt(r.restants),
-    tauxRetrait: parseInt(r.total) > 0 ? (parseInt(r.retires) / parseInt(r.total)) * 100 : 0, // ✅ Plus d'arrondi
+    tauxRetrait: parseInt(r.total) > 0 ? (parseInt(r.retires) / parseInt(r.total)) * 100 : 0,
   }));
 
   return {
     total,
     retires,
     restants,
-    tauxRetrait: total > 0 ? (retires / total) * 100 : 0, // ✅ Plus d'arrondi
+    tauxRetrait: total > 0 ? (retires / total) * 100 : 0,
     metadata: { nb_coordinations: coords.length },
     coordinations: coords,
     agences,
@@ -166,7 +159,7 @@ async function collecterDonnees(user) {
   };
 }
 
-// ─── Controller ───────────────────────────────────────────────────────────────
+// ─── Excel ────────────────────────────────────────────────────────────────────
 exports.genererExcel = async (req, res) => {
   try {
     const data = await collecterDonnees(req.user);
@@ -174,8 +167,9 @@ exports.genererExcel = async (req, res) => {
     const script = path.join(SCRIPTS_DIR, 'generer_rapport_excel.py');
 
     const b64 = execSync(`python3 "${script}" '${dataStr.replace(/'/g, "'\\''")}'`, {
-      timeout: 30000,
+      timeout: 60000,
       maxBuffer: 50 * 1024 * 1024,
+      cwd: PROJECT_DIR, // ✅ résolution modules depuis le projet
     })
       .toString()
       .trim();
@@ -202,6 +196,7 @@ exports.genererExcel = async (req, res) => {
   }
 };
 
+// ─── Word ─────────────────────────────────────────────────────────────────────
 exports.genererWord = async (req, res) => {
   try {
     const data = await collecterDonnees(req.user);
@@ -209,8 +204,9 @@ exports.genererWord = async (req, res) => {
     const script = path.join(SCRIPTS_DIR, 'generer_rapport_word.js');
 
     const b64 = execSync(`node "${script}" '${dataStr.replace(/'/g, "'\\''")}'`, {
-      timeout: 30000,
+      timeout: 60000,
       maxBuffer: 50 * 1024 * 1024,
+      cwd: PROJECT_DIR, // ✅ node_modules/docx trouvé dans /var/www/backend
     })
       .toString()
       .trim();

@@ -15,21 +15,10 @@ def cell_border():
     s = Side(style='thin', color='CCCCCC')
     return Border(left=s, right=s, top=s, bottom=s)
 
-# ✅ MODIFIÉ : Seuils de couleur plus précis
 def taux_color(taux):
-    if taux >= 90: return '16a34a'  # Vert foncé
-    if taux >= 70: return '0d9488'  # Teal
-    if taux >= 50: return 'f59e0b'  # Orange
-    if taux >= 30: return 'f97316'  # Orange clair
-    return 'dc2626'                  # Rouge
-
-# ✅ MODIFIÉ : Labels plus précis
-def taux_label(taux):
-    if taux >= 90: return '🏆 Excellent'
-    if taux >= 70: return '✨ Très bon'
-    if taux >= 50: return '📈 En progression'
-    if taux >= 30: return '⚠️ À surveiller'
-    return '🔴 Critique'
+    if taux >= 75: return '16a34a'
+    if taux >= 50: return 'f59e0b'
+    return 'dc2626'
 
 def header_fill():  return PatternFill('solid', start_color='F77F00', end_color='F77F00')
 def sub_fill():     return PatternFill('solid', start_color='FFF3E0', end_color='FFF3E0')
@@ -66,21 +55,8 @@ def write_data_row(ws, row, values, is_alt=False):
         cell.border = cell_border()
         cell.alignment = Alignment(horizontal='center' if isinstance(v, (int, float)) else 'left', vertical='center')
 
-# ✅ MODIFIÉ : Formatage des nombres avec gestion des décimales
-def fmt(n):
-    if isinstance(n, (int, float)):
-        if n >= 1000000:
-            return f"{n/1000000:.1f}M".replace('.', ',')
-        elif n >= 1000:
-            return f"{n:,.0f}".replace(',', ' ')
-        return f"{n}".replace('.', ',')
-    return n
-
-# ✅ MODIFIÉ : Formatage des taux avec 1 décimale
-def afficher_taux(taux):
-    if taux is None:
-        return "0%"
-    return f"{taux:.1f}%".replace('.', ',')
+def fmt(n): return f"{int(n):,}".replace(',', ' ')
+def fmt_taux(t): return f"{t:.2f}".replace('.', ',') + '%'
 
 def analyse_auto(sites, label=''):
     """Génère commentaires automatiques d'analyse"""
@@ -95,24 +71,22 @@ def analyse_auto(sites, label=''):
 
     lignes = []
     lignes.append(f"📊 SYNTHÈSE AUTOMATIQUE — {label}")
-    lignes.append(f"Taux moyen de retrait : {afficher_taux(taux_moy)}  |  {len(sites)} sites analysés  |  {fmt(restants)} cartes encore en attente")
+    lignes.append(f"Taux moyen de retrait : {fmt_taux(taux_moy)}  |  {len(sites)} sites analysés  |  {fmt(restants)} cartes encore en attente")
     lignes.append("")
     if excellents:
         lignes.append(f"🏆 PERFORMANCE EXCELLENTE (≥90%) : {', '.join(s['site'] for s in excellents)}")
-    lignes.append(f"✅ TOP 3 des meilleurs sites : " + " · ".join(f"{s['site']} ({afficher_taux(s['tauxRetrait'])})" for s in top3))
+    lignes.append(f"✅ TOP 3 des meilleurs sites : " + " · ".join(f"{s['site']} ({fmt_taux(s['tauxRetrait'])})" for s in top3))
     lignes.append(f"⚠️  Sites nécessitant attention (<50%) : {len(alertes)} site(s)")
     if alertes:
         lignes.append(f"   → {', '.join(s['site'] for s in alertes[:5])}" + ("..." if len(alertes) > 5 else ""))
-    lignes.append(f"📉 3 sites les plus en retard : " + " · ".join(f"{s['site']} ({afficher_taux(s['tauxRetrait'])})" for s in bas3))
+    lignes.append(f"📉 3 sites les plus en retard : " + " · ".join(f"{s['site']} ({fmt_taux(s['tauxRetrait'])})" for s in bas3))
     lignes.append("")
-    if taux_moy >= 90:
-        lignes.append("💡 RECOMMANDATION : Performance excellente. Documenter les bonnes pratiques des sites leaders et préparer la phase de clôture.")
-    elif taux_moy >= 70:
-        lignes.append("💡 RECOMMANDATION : Performance très satisfaisante. Maintenir la dynamique et renforcer les sites entre 50-70%.")
+    if taux_moy >= 75:
+        lignes.append("💡 RECOMMANDATION : Niveau de performance excellent. Maintenir la cadence et partager les bonnes pratiques des sites leaders.")
     elif taux_moy >= 50:
-        lignes.append("💡 RECOMMANDATION : Performance satisfaisante. Concentrer les efforts sur les sites en retard et renforcer les opérations.")
+        lignes.append("💡 RECOMMANDATION : Performance satisfaisante. Concentrer les efforts sur les sites en retard et renforcer les opérations à mi-parcours.")
     else:
-        lignes.append("💡 RECOMMANDATION : Performance insuffisante. Action urgente requise — mobilisation des équipes sur le terrain.")
+        lignes.append("💡 RECOMMANDATION : Performance insuffisante. Action urgente requise — mobilisation des équipes sur le terrain, renforcement logistique et suivi hebdomadaire.")
     return lignes
 
 def create_resume_sheet(wb, data):
@@ -143,12 +117,11 @@ def create_resume_sheet(wb, data):
     ws.row_dimensions[row].height = 28
 
     row = 5
-    taux_global = data['tauxRetrait']
     kpis = [
         ("Total cartes", fmt(data['total']),       'F77F00'),
         ("Cartes retirées", fmt(data['retires']),   '16a34a'),
         ("Cartes restantes", fmt(data['restants']), '0077B6'),
-        ("Taux de retrait", afficher_taux(taux_global), taux_color(taux_global)),
+        ("Taux de retrait", fmt_taux(data['tauxRetrait']), taux_color(data['tauxRetrait'])),
     ]
     for i, (label, value, color) in enumerate(kpis):
         col = i * 2 + 1
@@ -231,8 +204,8 @@ def create_coordinations_sheet(wb, data):
             coord['total'],
             coord['retires'],
             coord['restants'],
-            afficher_taux(t),
-            taux_label(t),
+            fmt_taux(t),
+            '🏆 Excellent' if t >= 75 else '📈 En progression' if t >= 50 else '⚠️ À améliorer',
         ], alt)
         # Couleur taux
         taux_cell = ws.cell(r, 6)
@@ -245,14 +218,11 @@ def create_coordinations_sheet(wb, data):
     ws.cell(r, 1, "TOTAL").font = Font(name='Arial', bold=True, size=10, color='FFFFFF')
     ws.cell(r, 1).fill = PatternFill('solid', start_color='333333', end_color='333333')
     ws.cell(r, 1).alignment = Alignment(horizontal='center')
-    total_retires = sum(c['retires'] for c in coords)
-    total_cartes = sum(c['total'] for c in coords)
-    taux_global = (total_retires / total_cartes * 100) if total_cartes > 0 else 0
     for c, v in enumerate([
-        total_cartes,
-        total_retires,
+        sum(c['total'] for c in coords),
+        sum(c['retires'] for c in coords),
         sum(c['restants'] for c in coords),
-        afficher_taux(taux_global),
+        fmt_taux(data['tauxRetrait']),
         '',
     ], 3):
         cell = ws.cell(r, c, v)
@@ -321,7 +291,7 @@ def create_agences_sheet(wb, data):
             ag['nombre_agents'],
             ag['total_cartes'],
             ag['cartes_retirees'],
-            afficher_taux(t),
+            fmt_taux(t),
         ], i % 2 == 1)
         ws.cell(r, 8).font = Font(name='Arial', bold=True, size=10, color=taux_color(t))
         ws.row_dimensions[r].height = 20
@@ -353,8 +323,8 @@ def create_sites_sheet(wb, data):
             site['total'],
             site['retires'],
             site['restants'],
-            afficher_taux(t),
-            taux_label(t),
+            fmt_taux(t),
+            '🏆 Excellent' if t >= 75 else '📈 En progression' if t >= 50 else '⚠️ À améliorer',
         ], i % 2 == 1)
         ws.cell(r, 7).font = Font(name='Arial', bold=True, size=10, color=taux_color(t))
         ws.row_dimensions[r].height = 18
@@ -406,7 +376,7 @@ def create_recommandations_sheet(wb, data):
                          [30, 22, 12, 12, 12, 12])
         row += 1
         for i, s in enumerate(alertes):
-            write_data_row(ws, row, [s['site'], s['coordination'], s['total'], s['retires'], s['restants'], afficher_taux(s['tauxRetrait'])], i % 2 == 1)
+            write_data_row(ws, row, [s['site'], s['coordination'], s['total'], s['retires'], s['restants'], fmt_taux(s['tauxRetrait'])], i % 2 == 1)
             ws.cell(row, 6).font = Font(name='Arial', bold=True, color='dc2626')
             ws.row_dimensions[row].height = 18
             row += 1
@@ -424,7 +394,7 @@ def create_recommandations_sheet(wb, data):
                      [8, 30, 22, 12, 12, 12])
     row += 1
     for i, s in enumerate(top10):
-        write_data_row(ws, row, [i+1, s['site'], s['coordination'], s['total'], s['retires'], afficher_taux(s['tauxRetrait'])], i % 2 == 1)
+        write_data_row(ws, row, [i+1, s['site'], s['coordination'], s['total'], s['retires'], fmt_taux(s['tauxRetrait'])], i % 2 == 1)
         ws.cell(row, 6).font = Font(name='Arial', bold=True, color='16a34a')
         ws.row_dimensions[row].height = 18
         row += 1
@@ -439,19 +409,12 @@ def create_recommandations_sheet(wb, data):
 
     taux_global = data['tauxRetrait']
     recs = []
-    if taux_global >= 90:
+    if taux_global >= 75:
         recs = [
-            "✅ Performance globale excellente. Le système de distribution est très efficace.",
+            "✅ Performance globale excellente. Le système de distribution est efficace.",
             "→ Documenter et partager les meilleures pratiques des sites leaders (taux ≥ 90%).",
             "→ Mettre en place un programme de mentorat : les équipes des meilleurs sites accompagnent les sites en retard.",
             "→ Planifier les opérations de clôture pour les quelques cartes restantes.",
-        ]
-    elif taux_global >= 70:
-        recs = [
-            "✨ Performance très satisfaisante. Maintenir la dynamique actuelle.",
-            f"→ Intervention ciblée sur les {len(alertes)} site(s) en alerte (taux < 50%).",
-            "→ Renforcer les équipes mobiles sur les zones à taux intermédiaire (50-70%).",
-            "→ Intensifier la communication auprès des bénéficiaires qui n'ont pas encore retiré.",
         ]
     elif taux_global >= 50:
         recs = [
@@ -474,7 +437,7 @@ def create_recommandations_sheet(wb, data):
     for rec in recs:
         ws.merge_cells(f'A{row}:F{row}')
         c = ws.cell(row, 1, rec)
-        if rec.startswith('✅') or rec.startswith('✨') or rec.startswith('📈') or rec.startswith('🚨'):
+        if rec.startswith('✅') or rec.startswith('📈') or rec.startswith('🚨'):
             c.font = Font(name='Arial', bold=True, size=10, color='1A1A1A')
             c.fill = PatternFill('solid', start_color='FFF3E0', end_color='FFF3E0')
         else:

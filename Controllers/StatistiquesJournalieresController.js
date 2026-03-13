@@ -1,25 +1,26 @@
 // Controllers/StatistiquesJournalieresController.js
 const { query } = require('../db/db');
 
-// ✅ Définition de la constante (identique à celle utilisée dans RapportController.js)
 const CONDITION_RETIRES = `delivrance IS NOT NULL AND TRIM(delivrance) != '' AND UPPER(TRIM(delivrance)) != 'NON'`;
+
+// Un retrait du jour = carte retirée dont "DATE DE DELIVRANCE" = date demandée
+const CONDITION_RETRAIT_JOUR = (param) =>
+  `${CONDITION_RETIRES} AND DATE("DATE DE DELIVRANCE") = $${param}`;
 
 exports.getStatistiquesParDate = async (req, res) => {
   try {
     const { date, coordination_id, agence_id, site } = req.query;
     const user = req.user;
 
-    let params = [];
-    let conditions = [];
-
-    // Filtre par date (obligatoire)
     if (!date) {
-      return res.status(400).json({ error: 'La date est requise' });
+      return res.status(400).json({ error: 'La date est requise (format : YYYY-MM-DD)' });
     }
-    params.push(date);
-    conditions.push(`DATE(c.date_import) = $${params.length}`);
 
-    // Filtres selon les droits utilisateur
+    // Paramètre 1 = date
+    const params = [date];
+    const conditions = [`c.deleted_at IS NULL`];
+
+    // Sécurité rôle
     if (user.role !== 'Administrateur') {
       if (user.coordination) {
         params.push(user.coordination);
@@ -41,65 +42,70 @@ exports.getStatistiquesParDate = async (req, res) => {
       conditions.push(`c."SITE DE RETRAIT" = $${params.length}`);
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const where = `WHERE ${conditions.join(' AND ')}`;
+    const retraitJour = CONDITION_RETRAIT_JOUR(1); // $1 = date
 
-    // Statistiques globales du jour
-    const globalQuery = `
-      SELECT 
-        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES}) AS retraits_jour,
-        COUNT(*) AS total_concernes
-      FROM cartes c
-      LEFT JOIN sites s ON LOWER(TRIM(c."SITE DE RETRAIT")) = LOWER(TRIM(s.nom))
-      LEFT JOIN agences a ON s.agence_id = a.id
+    const joinsSites = `
+      LEFT JOIN sites s        ON LOWER(TRIM(c."SITE DE RETRAIT")) = LOWER(TRIM(s.nom))
+      LEFT JOIN agences a      ON s.agence_id = a.id
       LEFT JOIN coordinations co ON a.coordination_id = co.id
-      ${whereClause}
     `;
 
-    // Statistiques par coordination
-    const coordQuery = `
-      SELECT 
-        co.id,
-        co.nom AS coordination,
-        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES}) AS retraits_jour,
-        COUNT(*) AS total_concernes
+    // ── Global du jour ────────────────────────────────────────────────────────
+    const globalQuery = `
+      SELECT
+        COUNT(*) FILTER (WHERE ${retraitJour})  AS retraits_jour,
+        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES}) AS total_retires_cumul,
+        COUNT(*)                                 AS total_cartes
       FROM cartes c
-      LEFT JOIN sites s ON LOWER(TRIM(c."SITE DE RETRAIT")) = LOWER(TRIM(s.nom))
-      LEFT JOIN agences a ON s.agence_id = a.id
-      LEFT JOIN coordinations co ON a.coordination_id = co.id
-      ${whereClause}
+      ${joinsSites}
+      ${where}
+    `;
+
+    // ── Par coordination ───────────────────────────────────────────────────────
+    const coordQuery = `
+      SELECT
+        co.id,
+        co.nom                                           AS coordination,
+        COUNT(*) FILTER (WHERE ${retraitJour})           AS retraits_jour,
+        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES})     AS total_retires_cumul,
+        COUNT(*)                                         AS total_cartes
+      FROM cartes c
+      ${joinsSites}
+      ${where}
       GROUP BY co.id, co.nom
       ORDER BY retraits_jour DESC
     `;
 
-    // Statistiques par agence
+    // ── Par agence ─────────────────────────────────────────────────────────────
     const agenceQuery = `
-      SELECT 
-        a.id AS agence_id,
-        a.nom AS agence,
-        co.nom AS coordination,
-        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES}) AS retraits_jour,
-        COUNT(*) AS total_concernes
+      SELECT
+        a.id                                             AS agence_id,
+        a.nom                                            AS agence,
+        co.nom                                           AS coordination,
+        COUNT(*) FILTER (WHERE ${retraitJour})           AS retraits_jour,
+        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES})     AS total_retires_cumul,
+        COUNT(*)                                         AS total_cartes
       FROM cartes c
-      LEFT JOIN sites s ON LOWER(TRIM(c."SITE DE RETRAIT")) = LOWER(TRIM(s.nom))
-      LEFT JOIN agences a ON s.agence_id = a.id
-      LEFT JOIN coordinations co ON a.coordination_id = co.id
-      ${whereClause}
+      ${joinsSites}
+      ${where}
       GROUP BY a.id, a.nom, co.nom
       ORDER BY retraits_jour DESC
     `;
 
-    // Statistiques par site
+    // ── Par site ───────────────────────────────────────────────────────────────
     const siteQuery = `
-      SELECT 
-        c."SITE DE RETRAIT" AS site,
+      SELECT
+        c."SITE DE RETRAIT"                              AS site,
         c.coordination,
-        a.nom AS agence,
-        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES}) AS retraits_jour,
-        COUNT(*) AS total_concernes
+        a.nom                                            AS agence,
+        COUNT(*) FILTER (WHERE ${retraitJour})           AS retraits_jour,
+        COUNT(*) FILTER (WHERE ${CONDITION_RETIRES})     AS total_retires_cumul,
+        COUNT(*)                                         AS total_cartes
       FROM cartes c
-      LEFT JOIN sites s ON LOWER(TRIM(c."SITE DE RETRAIT")) = LOWER(TRIM(s.nom))
-      LEFT JOIN agences a ON s.agence_id = a.id
-      ${whereClause}
+      LEFT JOIN sites s        ON LOWER(TRIM(c."SITE DE RETRAIT")) = LOWER(TRIM(s.nom))
+      LEFT JOIN agences a      ON s.agence_id = a.id
+      ${where}
       GROUP BY c."SITE DE RETRAIT", c.coordination, a.nom
       ORDER BY retraits_jour DESC
     `;
@@ -113,7 +119,7 @@ exports.getStatistiquesParDate = async (req, res) => {
 
     res.json({
       date,
-      global: global.rows[0] || { retraits_jour: 0, total_concernes: 0 },
+      global: global.rows[0] || { retraits_jour: 0, total_retires_cumul: 0, total_cartes: 0 },
       coordinations: coords.rows,
       agences: agences.rows,
       sites: sites.rows,
