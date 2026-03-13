@@ -4,16 +4,20 @@ const router = express.Router();
 const { verifierToken } = require('../middleware/auth');
 const permission = require('../middleware/permission');
 const role = require('../middleware/verificationRole');
-const ctrl = require('../Controllers/StatistiquesController');
+const statistiquesController = require('../Controllers/StatistiquesController');
+
+// Vérification que le contrôleur est bien chargé
+console.log(
+  '📊 Contrôleur statistiques chargé, méthodes disponibles:',
+  Object.keys(statistiquesController)
+);
 
 // ============================================
 // MIDDLEWARE GLOBAUX
 // ============================================
 
-// Authentification obligatoire sur toutes les routes
 router.use(verifierToken);
 
-// Logging
 router.use((req, res, next) => {
   console.log(
     `📊 [Stats] ${req.method} ${req.path} - ${req.user?.nomUtilisateur} (${req.user?.role}) - ${req.user?.coordination || 'toutes coordinations'}`
@@ -21,96 +25,83 @@ router.use((req, res, next) => {
   next();
 });
 
-// Cache-Control navigateur
 router.use((req, res, next) => {
   res.setHeader('Cache-Control', 'private, max-age=300');
   next();
 });
 
 // ============================================
-// ROUTES
+// ROUTES LECTURE
 // ============================================
 
-/**
- * GET /api/statistiques/globales
- * Totaux généraux filtrés selon le rôle
- * Accès : Administrateur, Gestionnaire, Chef d'équipe, Opérateur
- */
-router.get('/globales', permission.peutVoirStatistiques, ctrl.globales);
+/** Totaux généraux filtrés selon le rôle */
+router.get('/globales', permission.peutVoirStatistiques, statistiquesController.globales);
+
+/** Statistiques par site */
+router.get('/sites', permission.peutVoirStatistiques, statistiquesController.parSite);
+
+/** Statistiques complètes (globales + sites) */
+router.get('/detail', permission.peutVoirStatistiques, statistiquesController.detail);
+
+/** Stats rapides pour widgets */
+router.get('/quick', permission.peutVoirStatistiques, statistiquesController.quick);
 
 /**
- * GET /api/statistiques/sites
- * Statistiques par site filtrées selon le rôle
- * Accès : Administrateur, Gestionnaire, Chef d'équipe, Opérateur
+ * GET /api/statistiques/temporel
+ * Évolution des retraits basée sur "DATE DE DELIVRANCE"
+ * Params : ?granularite=jour|semaine|mois &niveau=global|coordination|agence|site &id=... &periodes=12
  */
-router.get('/sites', permission.peutVoirStatistiques, ctrl.parSite);
+router.get('/temporel', permission.peutVoirStatistiques, statistiquesController.temporel);
 
-/**
- * GET /api/statistiques/detail
- * Statistiques complètes (globales + sites + évolution)
- * Accès : Administrateur, Gestionnaire, Chef d'équipe, Opérateur
- */
-router.get('/detail', permission.peutVoirStatistiques, ctrl.detail);
+/** Évolution ancienne (conservée pour compatibilité) - Remplacée par temporel */
+router.get('/evolution', permission.peutVoirStatistiques, (req, res) => {
+  // Redirection vers temporel avec granularité mois par défaut
+  res.json({
+    success: true,
+    message: 'Cette route est dépréciée. Utilisez /api/statistiques/temporel à la place',
+    data: null,
+    redirect: '/api/statistiques/temporel?granularite=mois',
+  });
+});
 
-/**
- * GET /api/statistiques/quick
- * Stats rapides pour tableau de bord
- * Accès : tous les rôles
- */
-router.get('/quick', permission.peutVoirStatistiques, ctrl.quick);
-
-/**
- * GET /api/statistiques/evolution
- * Évolution temporelle des imports
- * Paramètres : ?periode=30&interval=day|week|month
- * Accès : Administrateur, Gestionnaire, Chef d'équipe
- */
-router.get('/evolution', permission.peutVoirStatistiques, ctrl.evolution);
-
-/**
- * GET /api/statistiques/imports
- * Statistiques par lot d'import
- * Paramètres : ?limit=10
- * Accès : Administrateur, Gestionnaire, Chef d'équipe
- */
-router.get('/imports', permission.peutVoirStatistiques, ctrl.parImport);
+/** Par lot d'import */
+router.get('/imports', permission.peutVoirStatistiques, statistiquesController.parImport);
 
 /**
  * GET /api/statistiques/agences
- * Statistiques par agence (total cartes, retirées, restantes, taux, sites, agents)
- * Accès : Administrateur (tout), Gestionnaire (sa coordination), Chef d'équipe (son agence)
+ * Admin → toutes | Gestionnaire → sa coordination | Chef d'équipe → son agence
+ * Param optionnel : ?coordination_id=X pour drill-down
  */
-router.get('/agences', permission.peutVoirStatistiques, ctrl.parAgence); // ✅ AJOUT
+router.get('/agences', permission.peutVoirStatistiques, statistiquesController.parAgence);
 
 /**
  * GET /api/statistiques/coordinations
- * Comparaison entre coordinations
- * Accès : Administrateur uniquement
+ * Admin → toutes | Gestionnaire → la sienne
  */
-router.get('/coordinations', permission.peutVoirStatistiques, ctrl.parCoordination);
+router.get(
+  '/coordinations',
+  permission.peutVoirStatistiques,
+  statistiquesController.parCoordination
+);
 
-/**
- * POST /api/statistiques/refresh
- * Vider le cache manuellement
- * Accès : Administrateur, Gestionnaire
- */
-router.post('/refresh', permission.peutVoirStatistiques, ctrl.refresh);
+/** Diagnostic technique */
+router.get('/diagnostic', role.peutAccederPage('statistiques'), statistiquesController.diagnostic);
 
-/**
- * GET /api/statistiques/diagnostic
- * Diagnostic technique complet
- * Accès : Administrateur uniquement
- */
-router.get('/diagnostic', role.peutAccederPage('statistiques'), ctrl.diagnostic);
+// ============================================
+// ROUTES ÉCRITURE
+// ============================================
 
-/**
- * GET /api/statistiques
- * Documentation de l'API
- */
+/** Vider le cache manuellement */
+router.post('/refresh', permission.peutVoirStatistiques, statistiquesController.refresh);
+
+// ============================================
+// DOCUMENTATION API
+// ============================================
+
 router.get('/', (req, res) => {
   res.json({
     name: 'API Statistiques GESCARD',
-    version: '3.0.0',
+    version: '3.1.0',
     description: 'Module de statistiques avec filtrage par rôle',
     timestamp: new Date().toISOString(),
     utilisateur: req.user ? `${req.user.nomUtilisateur} (${req.user.role})` : 'Non authentifié',
@@ -123,19 +114,28 @@ router.get('/', (req, res) => {
     endpoints: [
       { method: 'GET', path: '/api/statistiques/globales', description: 'Totaux globaux' },
       { method: 'GET', path: '/api/statistiques/sites', description: 'Par site' },
-      { method: 'GET', path: '/api/statistiques/detail', description: 'Tout en un' },
-      { method: 'GET', path: '/api/statistiques/quick', description: 'Tableau de bord' },
-      { method: 'GET', path: '/api/statistiques/evolution', description: 'Évolution temporelle' },
-      { method: 'GET', path: '/api/statistiques/imports', description: "Par lot d'import" },
-      {
-        method: 'GET',
-        path: '/api/statistiques/agences',
-        description: 'Par agence (Admin/Gest/Chef)',
-      }, // ✅ AJOUT
       {
         method: 'GET',
         path: '/api/statistiques/coordinations',
-        description: 'Par coordination (Admin)',
+        description: 'Par coordination avec classement',
+      },
+      {
+        method: 'GET',
+        path: '/api/statistiques/agences',
+        description: 'Par agence — param optionnel: ?coordination_id=X',
+      },
+      {
+        method: 'GET',
+        path: '/api/statistiques/temporel',
+        description: 'Évolution retraits — params: granularite, niveau, id, periodes',
+      },
+      { method: 'GET', path: '/api/statistiques/detail', description: 'Tout en un' },
+      { method: 'GET', path: '/api/statistiques/quick', description: 'Widgets tableau de bord' },
+      { method: 'GET', path: '/api/statistiques/imports', description: "Par lot d'import" },
+      {
+        method: 'GET',
+        path: '/api/statistiques/evolution',
+        description: 'Évolution imports (dépréciée) - redirigée vers temporel',
       },
       { method: 'POST', path: '/api/statistiques/refresh', description: 'Vider le cache' },
       { method: 'GET', path: '/api/statistiques/diagnostic', description: 'Diagnostic technique' },

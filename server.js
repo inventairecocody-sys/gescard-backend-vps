@@ -1,8 +1,3 @@
-// ========================================
-// BACKEND COMPLET CONSOLIDÉ
-// Généré le: 12/03/2026 10:28:22
-// ========================================
-
 // ========== SERVER.JS (POINT D'ENTRÉE) ==========
 const express = require('express');
 const cors = require('cors');
@@ -56,6 +51,7 @@ const coordinationsRoutes = require('./routes/coordinations'); // ✅ Coordinati
 const sitesRoutes = require('./routes/sites'); // ✅ Sites CRUD
 const agencesRoutes = require('./routes/agences'); // ✅ Agences CRUD
 const initFileRoutes = require('./routes/initFileRoutes'); // ✅ Fichier d'initialisation hors-ligne
+const rapportsRoutes = require('./routes/rapports_routes'); // ✅ Routes pour les rapports Excel/Word
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -176,8 +172,8 @@ const allowedOrigins = [
   'https://gescardcocody.netlify.app',
   'http://gescardcocody.com',
   'https://gescardcocody.com',
-  'http://www.gescardcocody.com', // ✅ corrigé (d ajouté)
-  'https://www.gescardcocody.com', // ✅ corrigé (d ajouté)
+  'http://www.gescardcocody.com',
+  'https://www.gescardcocody.com',
   /\.gescardcocody\.com$/,
   'http://localhost:5173',
   'http://localhost:3000',
@@ -346,6 +342,7 @@ app.use('/api/coordinations', coordinationsRoutes); // ✅ CRUD Coordinations
 app.use('/api/sites', sitesRoutes); // ✅ CRUD Sites
 app.use('/api/agences', agencesRoutes); // ✅ CRUD Agences
 app.use('/api/init-file', initFileRoutes); // ✅ Fichier d'initialisation hors-ligne
+app.use('/api/rapports', rapportsRoutes); // ✅ Routes pour les rapports Excel/Word
 
 // ========== ROUTE RACINE ==========
 app.get('/', (req, res) => {
@@ -376,6 +373,7 @@ app.get('/', (req, res) => {
       gestion_coordinations: true,
       gestion_agences: true,
       init_file_hors_ligne: true,
+      generation_rapports: true, // ✅ Nouvelle fonctionnalité
     },
     sync_endpoints: {
       login: 'POST /api/sync/login',
@@ -403,6 +401,10 @@ app.get('/', (req, res) => {
     init_file_endpoints: {
       sites: 'GET  /api/init-file/sites         (Admin)',
       generate: 'POST /api/init-file/generate      (Admin)',
+    },
+    rapports_endpoints: {
+      excel: 'GET  /api/rapports/excel',
+      word: 'GET  /api/rapports/word',
     },
     statistiques_endpoints: {
       globales: 'GET  /api/statistiques/globales',
@@ -531,6 +533,7 @@ const server = app.listen(PORT, async () => {
   console.log('• Sites CRUD             : ✅ ACTIVE (/api/sites)');
   console.log('• Agences CRUD           : ✅ ACTIVE (/api/agences)');
   console.log('• Init fichier hors-ligne: ✅ ACTIVE (/api/init-file)');
+  console.log('• Rapports Excel/Word    : ✅ ACTIVE (/api/rapports)');
   console.log('• Sécurité               : ✅ ACTIVE\n');
 });
 
