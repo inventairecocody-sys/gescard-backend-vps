@@ -7,8 +7,8 @@ const { execSync } = require('child_process');
 const path = require('path');
 const { query } = require('../db/db');
 
-// Chemin vers les scripts de génération
-const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts', 'rapports');
+// ✅ CORRIGÉ : Chemin vers les scripts de génération (avec majuscule)
+const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts', 'Rapport');
 
 // ─── Condition retrait (cohérente avec StatistiquesController) ───────────────
 const CONDITION_RETIRES = `delivrance IS NOT NULL AND TRIM(delivrance) != '' AND UPPER(TRIM(delivrance)) != 'NON'`;
@@ -64,8 +64,7 @@ async function collecterDonnees(user) {
       total: parseInt(r.total),
       retires: parseInt(r.retires),
       restants: parseInt(r.restants),
-      tauxRetrait:
-        parseInt(r.total) > 0 ? Math.round((parseInt(r.retires) / parseInt(r.total)) * 100) : 0,
+      tauxRetrait: parseInt(r.total) > 0 ? (parseInt(r.retires) / parseInt(r.total)) * 100 : 0, // ✅ Plus d'arrondi
     }));
   } else if (user.coordination) {
     coords = [
@@ -74,7 +73,7 @@ async function collecterDonnees(user) {
         total,
         retires,
         restants,
-        tauxRetrait: total > 0 ? Math.round((retires / total) * 100) : 0,
+        tauxRetrait: total > 0 ? (retires / total) * 100 : 0, // ✅ Plus d'arrondi
       },
     ];
   }
@@ -119,7 +118,7 @@ async function collecterDonnees(user) {
       cartes_restantes: parseInt(r.total_cartes) - parseInt(r.cartes_retirees),
       taux_retrait:
         parseInt(r.total_cartes) > 0
-          ? Math.round((parseInt(r.cartes_retirees) / parseInt(r.total_cartes)) * 100)
+          ? (parseInt(r.cartes_retirees) / parseInt(r.total_cartes)) * 100 // ✅ Plus d'arrondi
           : 0,
     }));
   } catch (e) {
@@ -152,15 +151,14 @@ async function collecterDonnees(user) {
     total: parseInt(r.total),
     retires: parseInt(r.retires),
     restants: parseInt(r.restants),
-    tauxRetrait:
-      parseInt(r.total) > 0 ? Math.round((parseInt(r.retires) / parseInt(r.total)) * 100) : 0,
+    tauxRetrait: parseInt(r.total) > 0 ? (parseInt(r.retires) / parseInt(r.total)) * 100 : 0, // ✅ Plus d'arrondi
   }));
 
   return {
     total,
     retires,
     restants,
-    tauxRetrait: total > 0 ? Math.round((retires / total) * 100) : 0,
+    tauxRetrait: total > 0 ? (retires / total) * 100 : 0, // ✅ Plus d'arrondi
     metadata: { nb_coordinations: coords.length },
     coordinations: coords,
     agences,

@@ -5,6 +5,8 @@ const { verifierToken } = require('../middleware/auth');
 const permission = require('../middleware/permission');
 const role = require('../middleware/verificationRole');
 const statistiquesController = require('../Controllers/StatistiquesController');
+// ✅ Import du nouveau contrôleur
+const statistiquesJournalieresController = require('../Controllers/StatistiquesJournalieresController');
 
 // Vérification que le contrôleur est bien chargé
 console.log(
@@ -88,6 +90,22 @@ router.get(
 router.get('/diagnostic', role.peutAccederPage('statistiques'), statistiquesController.diagnostic);
 
 // ============================================
+// ✅ NOUVELLE ROUTE : STATISTIQUES JOURNALIÈRES
+// ============================================
+
+/**
+ * GET /api/statistiques/journalieres
+ * Statistiques détaillées pour une date spécifique
+ * Params requis : ?date=YYYY-MM-DD
+ * Params optionnels : &coordination_id=X &agence_id=X &site=nom_du_site
+ */
+router.get(
+  '/journalieres',
+  permission.peutVoirStatistiques,
+  statistiquesJournalieresController.getStatistiquesParDate
+);
+
+// ============================================
 // ROUTES ÉCRITURE
 // ============================================
 
@@ -101,8 +119,8 @@ router.post('/refresh', permission.peutVoirStatistiques, statistiquesController.
 router.get('/', (req, res) => {
   res.json({
     name: 'API Statistiques GESCARD',
-    version: '3.1.0',
-    description: 'Module de statistiques avec filtrage par rôle',
+    version: '3.2.0', // ✅ Version mise à jour
+    description: 'Module de statistiques avec filtrage par rôle et statistiques journalières',
     timestamp: new Date().toISOString(),
     utilisateur: req.user ? `${req.user.nomUtilisateur} (${req.user.role})` : 'Non authentifié',
     acces_par_role: {
@@ -128,6 +146,13 @@ router.get('/', (req, res) => {
         method: 'GET',
         path: '/api/statistiques/temporel',
         description: 'Évolution retraits — params: granularite, niveau, id, periodes',
+      },
+      // ✅ Nouvel endpoint documenté
+      {
+        method: 'GET',
+        path: '/api/statistiques/journalieres',
+        description:
+          'Statistiques journalières — params requis: date=YYYY-MM-DD, optionnels: coordination_id, agence_id, site',
       },
       { method: 'GET', path: '/api/statistiques/detail', description: 'Tout en un' },
       { method: 'GET', path: '/api/statistiques/quick', description: 'Widgets tableau de bord' },
