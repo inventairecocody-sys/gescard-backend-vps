@@ -147,6 +147,16 @@ async function collecterDonnees(user) {
     tauxRetrait: parseInt(r.total) > 0 ? (parseInt(r.retires) / parseInt(r.total)) * 100 : 0,
   }));
 
+  // Niveau hiérarchique de l'utilisateur
+  const niveau =
+    user.role === 'Administrateur'
+      ? 'direction'
+      : user.role === 'Gestionnaire'
+        ? 'coordination'
+        : user.role === "Chef d'équipe"
+          ? 'agence'
+          : 'site';
+
   return {
     total,
     retires,
@@ -156,6 +166,14 @@ async function collecterDonnees(user) {
     coordinations: coords,
     agences,
     sites,
+    _contexte: {
+      niveau,
+      nomUtilisateur: user.nomUtilisateur || user.nom || '',
+      coordination: user.coordination || null,
+      agence: user.agence || null,
+      site: user.agence || null,
+      dateGeneration: new Date().toISOString(),
+    },
   };
 }
 
