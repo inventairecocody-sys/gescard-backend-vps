@@ -3,7 +3,7 @@ const ExcelJS = require('exceljs');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const csv = require('csv-parser');
-const annulationService = require('../db/db');
+const annulationService = require('../Services/annulationService'); // ✅ CORRIGÉ: était '../db/db'
 
 const CONFIG = {
   supportedFormats: ['.csv', '.xlsx', '.xls'],
@@ -1080,7 +1080,6 @@ class OptimizedImportExportController {
           const dateNaissance = this.formatDate(item['DATE DE NAISSANCE']);
           const lieuNaissance = this.sanitizeString(item['LIEU NAISSANCE']);
 
-          // ✅ CORRIGÉ : 5 champs identitaires pour détecter un doublon
           const contactNorm = this.formatPhone(item['CONTACT']) || '';
           const existingCarte = await client.query(
             `SELECT * FROM cartes
@@ -1326,7 +1325,6 @@ class OptimizedImportExportController {
         const lieuNaissanceRaw = this.sanitizeString(data['LIEU NAISSANCE']);
         const rangementRaw = this.sanitizeString(data['RANGEMENT']);
 
-        // ✅ CORRIGÉ : 5 champs identitaires pour détecter un doublon
         const contactRaw = this.formatPhone(data['CONTACT']) || '';
         const existing = await client.query(
           `SELECT id, coordination, "SITE DE RETRAIT" as site FROM cartes
@@ -1355,7 +1353,6 @@ class OptimizedImportExportController {
         };
 
         if (existing.rows.length > 0) {
-          // ✅ Doublon inter-coordination : bloquer si Gestionnaire
           if (
             userRole === 'Gestionnaire' &&
             existing.rows[0].coordination &&
@@ -1390,7 +1387,6 @@ class OptimizedImportExportController {
           );
           result.updated++;
         } else {
-          // ✅ CORRIGÉ : ON CONFLICT sur 5 champs identitaires avec WHERE deleted_at IS NULL
           const p = paramIndex;
           insertValues.push(
             `($${p + 1},$${p + 2},$${p + 3},$${p + 4},$${p + 5},$${p + 6},$${p + 7},$${p + 8},$${p + 9},$${p + 10},$${p + 11},$${p + 12},NOW())`
@@ -1428,7 +1424,6 @@ class OptimizedImportExportController {
       }
     }
 
-    // ✅ CORRIGÉ : INSERT batch avec ON CONFLICT sur 5 champs
     if (insertValues.length > 0) {
       const query = `
         INSERT INTO cartes (
@@ -1517,7 +1512,6 @@ class OptimizedImportExportController {
       COORDINATION: data.COORDINATION || userCoordination,
     };
 
-    // ✅ CORRIGÉ : ON CONFLICT sur 5 champs identitaires
     const result = await client.query(
       `INSERT INTO cartes (
         "LIEU D'ENROLEMENT", "SITE DE RETRAIT", rangement, nom, prenoms,
