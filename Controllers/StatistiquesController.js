@@ -36,15 +36,34 @@ const getCacheKey = (user) => {
 /**
  * Construit le filtre WHERE selon le rôle
  * Administrateur → tout
- * Gestionnaire / Chef d'équipe → sa coordination
- * Opérateur → son site
+ * Gestionnaire   → sa coordination
+ * Chef d'équipe  → les sites de son agence
+ * Opérateur      → son site
  */
 const buildFiltreWhere = (user, params = [], baseWhere = 'WHERE 1=1') => {
   const role = user.role;
 
   if (role === 'Administrateur') return { where: baseWhere, params };
 
-  if (role === 'Gestionnaire' || role === "Chef d'équipe") {
+  if (role === 'Gestionnaire') {
+    if (user.coordination) {
+      params = [...params, user.coordination];
+      return { where: baseWhere + ` AND coordination = $${params.length}`, params };
+    }
+  }
+
+  if (role === "Chef d'équipe") {
+    // Filtre par agence_id via sous-requête sur les sites
+    if (user.agence_id) {
+      params = [...params, user.agence_id];
+      return {
+        where:
+          baseWhere +
+          ` AND "SITE DE RETRAIT" IN (SELECT nom FROM sites WHERE agence_id = $${params.length} AND is_active = true)`,
+        params,
+      };
+    }
+    // Fallback : filtre par coordination si agence_id non disponible
     if (user.coordination) {
       params = [...params, user.coordination];
       return { where: baseWhere + ` AND coordination = $${params.length}`, params };

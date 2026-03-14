@@ -30,9 +30,9 @@ const CONFIG_ROLES = {
   },
   "Chef d'équipe": {
     niveau: 60,
-    pages: ['accueil', 'inventaire', 'profil', 'deconnexion'],
+    pages: ['accueil', 'inventaire', 'profil', 'deconnexion', 'statistiques'],
     peutImporterExporter: false,
-    peutVoirStatistiques: false,
+    peutVoirStatistiques: 'agence',
     colonnesModifiables: ['delivrance', 'CONTACT DE RETRAIT', 'DATE DE DELIVRANCE'],
     peutAnnulerAction: false,
     peutVoirJournal: false,

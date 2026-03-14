@@ -680,31 +680,14 @@ const deleteCarte = async (req, res) => {
  */
 const getCoordinations = async (req, res) => {
   try {
-    const { role, coordination: userCoord } = req.user || {};
-
-    const rolesLimites = ['Gestionnaire', "Chef d'équipe", 'Opérateur'];
-
-    let result;
-
-    if (rolesLimites.includes(role) && userCoord) {
-      result = await db.query(
-        `SELECT DISTINCT coordination
-         FROM cartes
-         WHERE coordination IS NOT NULL
-           AND coordination <> ''
-           AND LOWER(coordination) = LOWER($1)
-         ORDER BY coordination ASC`,
-        [userCoord]
-      );
-    } else {
-      result = await db.query(
-        `SELECT DISTINCT coordination
-         FROM cartes
-         WHERE coordination IS NOT NULL
-           AND coordination <> ''
-         ORDER BY coordination ASC`
-      );
-    }
+    // ✅ Toutes les coordinations accessibles à tous les rôles authentifiés
+    const result = await db.query(
+      `SELECT DISTINCT coordination
+       FROM cartes
+       WHERE coordination IS NOT NULL
+         AND coordination <> ''
+       ORDER BY coordination ASC`
+    );
 
     const coordinations = result.rows.map((row) => row.coordination);
 
