@@ -74,6 +74,18 @@ router.get('/roles', RATE.standard, ctrl.getRoles);
 router.get('/check-username', RATE.standard, ctrl.checkUsernameAvailability);
 
 // ============================================
+// ROUTE PROFIL PERSONNEL — tous les rôles authentifiés
+// Doit être déclarée AVANT le middleware peutGererComptes
+// ============================================
+
+/**
+ * Détail utilisateur — accessible à tous (contrôleur vérifie le droit)
+ * Un utilisateur peut toujours consulter son propre profil
+ * GET /api/utilisateurs/:id
+ */
+router.get('/:id', RATE.standard, ctrl.getUserById);
+
+// ============================================
 // MIDDLEWARE RÔLE — Admin, Gestionnaire, Chef d'équipe
 // (appliqué à toutes les routes suivantes)
 // ============================================
@@ -187,12 +199,6 @@ router.get('/home', (req, res) => {
 // ROUTES AVEC PARAMÈTRE :id
 // (doivent être après les routes nommées fixes)
 // ============================================
-
-/**
- * Détail utilisateur
- * GET /api/utilisateurs/:id
- */
-router.get('/:id', RATE.standard, ctrl.getUserById);
 
 /**
  * Historique d'un utilisateur — Administrateur uniquement

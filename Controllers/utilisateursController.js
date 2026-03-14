@@ -159,9 +159,6 @@ const getAllUsers = async (req, res) => {
 const getUserById = async (req, res) => {
   try {
     const acteur = req.user;
-    if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
-    }
 
     const { id } = req.params;
 
@@ -169,6 +166,12 @@ const getUserById = async (req, res) => {
     const userId = parseInt(id);
     if (isNaN(userId) || userId <= 0) {
       return res.status(400).json({ success: false, message: 'ID utilisateur invalide' });
+    }
+
+    // ✅ Un utilisateur peut toujours consulter son propre profil
+    const isSelf = parseInt(acteur.id) === userId;
+    if (!isSelf && !['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
+      return res.status(403).json({ success: false, message: 'Accès refusé' });
     }
 
     const startTime = Date.now();
@@ -185,7 +188,8 @@ const getUserById = async (req, res) => {
     const user = result.rows[0];
     if (!user) return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
 
-    if (!peutGererUtilisateur(acteur, user)) {
+    // ✅ Un utilisateur peut toujours voir son propre profil sans passer par peutGererUtilisateur
+    if (!isSelf && !peutGererUtilisateur(acteur, user)) {
       return res
         .status(403)
         .json({ success: false, message: 'Accès non autorisé à cet utilisateur' });
@@ -213,7 +217,15 @@ const getUserById = async (req, res) => {
 
     res.json({
       success: true,
-      utilisateur: { ...user, sites },
+      utilisateur: {
+        ...user,
+        // ✅ Normalisation camelCase pour le frontend
+        nomUtilisateur: user.nomutilisateur,
+        nomComplet: user.nomcomplet,
+        derniereConnexion: user.derniereconnexion,
+        dateCreation: user.datecreation,
+        sites,
+      },
       performance: { queryTime: Date.now() - startTime },
       timestamp: new Date().toISOString(),
     });

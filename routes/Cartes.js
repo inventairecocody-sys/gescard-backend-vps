@@ -213,18 +213,31 @@ router.post('/sync', async (req, res) => {
 });
 
 /**
- * Récupérer les sites configurés
+ * Liste dynamique des sites — accessible à TOUS les rôles authentifiés
+ * Utilisée par SiteDropdown dans la recherche
  * GET /api/cartes/sites
  */
-router.get('/sites', (req, res) => {
-  const sites = ['ADJAME', "CHU D'ANGRE", 'UNIVERSITE DE COCODY', 'LYCEE HOTELIER', 'BINGERVILLE'];
-
-  res.json({
-    success: true,
-    data: sites,
-    count: sites.length,
-    timestamp: new Date().toISOString(),
-  });
+router.get('/sites', async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT DISTINCT "SITE DE RETRAIT" AS nom
+       FROM cartes
+       WHERE "SITE DE RETRAIT" IS NOT NULL
+         AND "SITE DE RETRAIT" <> ''
+         AND deleted_at IS NULL
+       ORDER BY nom`
+    );
+    const sites = result.rows.map((r) => r.nom);
+    res.json({
+      success: true,
+      sites,
+      count: sites.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('❌ Erreur getSites:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 /**
