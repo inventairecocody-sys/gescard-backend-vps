@@ -1,10 +1,9 @@
-// ========== SERVER.JS (POINT D'ENTRÉE) ==========
+// ========== SERVER.JS (SÉCURISÉ) ==========
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const compression = require('compression');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
@@ -17,21 +16,14 @@ const { query } = require('./db/db');
 // Import des middlewares
 const journalRequetes = require('./middleware/journalRequetes');
 const { securityHeaders } = require('./middleware/apiAuth');
-
-// ========== MIDDLEWARE DE SÉCURITÉ SUPPLÉMENTAIRE ==========
-const securityMiddleware = (req, res, next) => {
-  const blockedPaths = ['.env', 'config', '.git', 'wp-admin', 'wp-content', 'php', 'sql'];
-  if (blockedPaths.some((path) => req.url.toLowerCase().includes(path))) {
-    console.warn(`🚨 Tentative d'accès bloquée: ${req.url} de ${req.ip}`);
-    return res.status(403).json({
-      success: false,
-      message: 'Accès interdit',
-      code: 'FORBIDDEN_PATH',
-      request_id: req.idRequete,
-    });
-  }
-  next();
-};
+const { securityMiddleware, getSecurityStats } = require('./middleware/securityMiddleware');
+const {
+  authLimiter,
+  apiLimiter,
+  uploadLimiter,
+  exportLimiter,
+  updatesLimiter,
+} = require('./middleware/rateLimiters');
 
 // Import des routes
 const authRoutes = require('./routes/authRoutes');
@@ -46,12 +38,12 @@ const statistiquesRoutes = require('./routes/statistiques');
 const externalApiRoutes = require('./routes/externalApi');
 const backupRoutes = require('./routes/backupRoutes');
 const syncRoutes = require('./routes/syncRoutes');
-const updatesRoutes = require('./routes/Updatesroutes'); // ✅ Mises à jour
-const coordinationsRoutes = require('./routes/coordinations'); // ✅ Coordinations CRUD
-const sitesRoutes = require('./routes/sites'); // ✅ Sites CRUD
-const agencesRoutes = require('./routes/agences'); // ✅ Agences CRUD
-const initFileRoutes = require('./routes/initFileRoutes'); // ✅ Fichier d'initialisation hors-ligne
-const rapportsRoutes = require('./routes/rapports_routes'); // ✅ Routes pour les rapports Excel/Word
+const updatesRoutes = require('./routes/Updatesroutes');
+const coordinationsRoutes = require('./routes/coordinations');
+const sitesRoutes = require('./routes/sites');
+const agencesRoutes = require('./routes/agences');
+const initFileRoutes = require('./routes/initFileRoutes');
+const rapportsRoutes = require('./routes/rapports_routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -66,12 +58,6 @@ dirs.forEach((dir) => {
     console.log(`📁 Dossier ${dir} créé`);
   }
 });
-
-// ========== MIDDLEWARE DE JOURNALISATION DES REQUÊTES (PREMIER) ==========
-app.use(journalRequetes);
-
-// ========== MIDDLEWARE DE SÉCURITÉ ==========
-app.use(securityMiddleware);
 
 // ========== CONFIGURATION BACKUP AUTOMATIQUE ==========
 async function setupBackupSystem() {
@@ -115,20 +101,43 @@ async function setupBackupSystem() {
   }
 }
 
-// ========== MIDDLEWARES DE SÉCURITÉ ==========
+// ========== 1. JOURNAL DES REQUÊTES (PREMIER, TOUJOURS) ==========
+app.use(journalRequetes);
+
+// ========== 2. SÉCURITÉ — BLOCAGE IMMÉDIAT (AVANT TOUT) ==========
+// Doit être AVANT helmet/cors pour intercepter les scanners sans overhead
+app.use(securityMiddleware);
+
+// ========== 3. HELMET — HEADERS HTTP SÉCURISÉS ==========
 app.use(
   helmet({
-    contentSecurityPolicy: false,
+    // CSP activé (désactivé avant — risque XSS)
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline nécessaire pour certains frameworks
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        frameSrc: ["'none'"],
+      },
+    },
     crossOriginResourcePolicy: { policy: 'cross-origin' },
     hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
     hidePoweredBy: true,
     noSniff: true,
     xssFilter: true,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    permittedCrossDomainPolicies: { permittedPolicies: 'none' },
   })
 );
 
 app.use(securityHeaders);
 
+// ========== 4. COMPRESSION ==========
 app.use(
   compression({
     level: 6,
@@ -141,33 +150,25 @@ app.use(
   })
 );
 
-// Rate Limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5000,
-  message: {
-    success: false,
-    error: 'Limite de requêtes atteinte',
-    message: 'Trop de requêtes effectuées. Veuillez réessayer dans 15 minutes.',
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// ========== 5. RATE LIMITING PAR ROUTE ==========
+// Auth — strictissime (anti brute-force)
+app.use('/api/auth', authLimiter);
 
-const noLimitRoutes = [
-  '/api/health',
-  '/api/test-db',
-  '/api/cors-test',
-  '/api/updates/check',
-  '/api/updates/download',
-];
-app.use((req, res, next) => {
-  const isExempt = noLimitRoutes.some((route) => req.path.startsWith(route));
-  if (isExempt) return next();
-  return limiter(req, res, next);
-});
+// Updates — permissif (app desktop)
+app.use('/api/updates', updatesLimiter);
 
-// ========== CONFIGURATION CORS ==========
+// Upload/Import — limité
+app.use('/api/import-export', uploadLimiter);
+app.use('/api/sync/upload', uploadLimiter);
+
+// Export/Rapports — modéré
+app.use('/api/rapports', exportLimiter);
+app.use('/api/import-export/export', exportLimiter);
+
+// Toutes les autres routes API — raisonnable (300/15min au lieu de 5000)
+app.use('/api', apiLimiter);
+
+// ========== 6. CONFIGURATION CORS ==========
 const allowedOrigins = [
   'https://gescardcocody.netlify.app',
   'http://gescardcocody.com',
@@ -225,11 +226,24 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// ========== CONFIGURATION BODY PARSER ==========
-app.use(express.json({ limit: '200mb' }));
-app.use(express.urlencoded({ extended: true, limit: '200mb' }));
+// ========== 7. BODY PARSER — LIMITES STRICTES PAR ROUTE ==========
+// ⚠️ CORRIGÉ : 200MB global était dangereux (attaque DoS par payload géant)
+// Routes générales : 1MB suffisant
+app.use((req, res, next) => {
+  // Routes d'upload légitimes → 200MB
+  const bigRoutes = [
+    '/api/import-export',
+    '/api/sync/upload',
+    '/api/backup',
+    '/api/updates/download',
+  ];
+  const isBigRoute = bigRoutes.some((r) => req.path.startsWith(r));
+  const limit = isBigRoute ? '200mb' : '1mb';
+  return express.json({ limit })(req, res, next);
+});
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// ========== LOGGING ==========
+// ========== 8. LOGGING ==========
 const morganFormat = process.env.NODE_ENV === 'production' ? 'combined' : 'dev';
 const accessLogStream = fs.createWriteStream(path.join(__dirname, 'logs', 'access.log'), {
   flags: 'a',
@@ -262,6 +276,7 @@ app.get('/api/health', async (req, res) => {
     const dbResult = await query('SELECT 1 as ok, current_database() as db, NOW() as time');
     const countResult = await query('SELECT COUNT(*) as total FROM cartes');
     const memory = process.memoryUsage();
+    const secStats = getSecurityStats();
 
     res.json({
       status: 'healthy',
@@ -282,12 +297,8 @@ app.get('/api/health', async (req, res) => {
       },
       environment: process.env.NODE_ENV || 'development',
       uptime: Math.round(process.uptime()) + 's',
-      roles: {
-        administrateur: 'Accès complet — toutes coordinations',
-        gestionnaire: 'Accès limité à sa coordination',
-        chef_equipe: 'Accès à sa coordination — inventaire et cartes',
-        operateur: 'Accès à son site uniquement',
-      },
+      // Stats sécurité visibles uniquement en production pour monitoring
+      security: process.env.NODE_ENV === 'production' ? secStats : undefined,
     });
   } catch (error) {
     res.status(503).json({
@@ -337,99 +348,25 @@ app.use('/api/statistiques', statistiquesRoutes);
 app.use('/api/external', externalApiRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/sync', syncRoutes);
-app.use('/api/updates', updatesRoutes); // ✅ Mises à jour automatiques
-app.use('/api/coordinations', coordinationsRoutes); // ✅ CRUD Coordinations
-app.use('/api/sites', sitesRoutes); // ✅ CRUD Sites
-app.use('/api/agences', agencesRoutes); // ✅ CRUD Agences
-app.use('/api/init-file', initFileRoutes); // ✅ Fichier d'initialisation hors-ligne
-app.use('/api/rapports', rapportsRoutes); // ✅ Routes pour les rapports Excel/Word
+app.use('/api/updates', updatesRoutes);
+app.use('/api/coordinations', coordinationsRoutes);
+app.use('/api/sites', sitesRoutes);
+app.use('/api/agences', agencesRoutes);
+app.use('/api/init-file', initFileRoutes);
+app.use('/api/rapports', rapportsRoutes);
 
 // ========== ROUTE RACINE ==========
 app.get('/', (req, res) => {
   res.json({
     message: 'API GESCARD PostgreSQL',
-    version: '3.2.0',
+    version: '3.2.1',
     environment: process.env.NODE_ENV || 'development',
-    documentation: `${req.protocol}://${req.get('host')}/api`,
     health_check: `${req.protocol}://${req.get('host')}/api/health`,
     requestId: req.idRequete,
-    roles_support: {
-      administrateur: '✅ Accès complet — toutes coordinations',
-      gestionnaire: '✅ Stats et données de sa coordination',
-      chef_equipe: '✅ Données de sa coordination',
-      operateur: '✅ Données de son site uniquement',
-    },
-    features: {
-      bulk_import: true,
-      export: true,
-      import_smart_sync: true,
-      backup_system: !!process.env.GOOGLE_CLIENT_ID,
-      annulation_actions: true,
-      filtrage_coordination: true,
-      journal_ameliore: true,
-      sync_sites: true,
-      sync_utilisateurs: true,
-      auto_update: true,
-      gestion_coordinations: true,
-      gestion_agences: true,
-      init_file_hors_ligne: true,
-      generation_rapports: true, // ✅ Nouvelle fonctionnalité
-    },
-    sync_endpoints: {
-      login: 'POST /api/sync/login',
-      test: 'GET  /api/sync/test',
-      upload: 'POST /api/sync/upload',
-      download: 'GET  /api/sync/download',
-      confirm: 'POST /api/sync/confirm',
-      status: 'GET  /api/sync/status',
-      users: 'GET  /api/sync/users',
-    },
-    coordinations_endpoints: {
-      liste: 'GET    /api/coordinations',
-      detail: 'GET    /api/coordinations/:id',
-      creer: 'POST   /api/coordinations        (Admin)',
-      modifier: 'PUT    /api/coordinations/:id    (Admin)',
-      supprimer: 'DELETE /api/coordinations/:id    (Admin)',
-    },
-    agences_endpoints: {
-      liste: 'GET    /api/agences',
-      detail: 'GET    /api/agences/:id',
-      creer: 'POST   /api/agences               (Admin)',
-      modifier: 'PUT    /api/agences/:id           (Admin)',
-      supprimer: 'DELETE /api/agences/:id           (Admin)',
-    },
-    init_file_endpoints: {
-      sites: 'GET  /api/init-file/sites         (Admin)',
-      generate: 'POST /api/init-file/generate      (Admin)',
-    },
-    rapports_endpoints: {
-      excel: 'GET  /api/rapports/excel',
-      word: 'GET  /api/rapports/word',
-    },
-    statistiques_endpoints: {
-      globales: 'GET  /api/statistiques/globales',
-      sites: 'GET  /api/statistiques/sites',
-      detail: 'GET  /api/statistiques/detail',
-      quick: 'GET  /api/statistiques/quick',
-      evolution: 'GET  /api/statistiques/evolution',
-      imports: 'GET  /api/statistiques/imports',
-      coordinations: 'GET  /api/statistiques/coordinations',
-      refresh: 'POST /api/statistiques/refresh',
-      diagnostic: 'GET  /api/statistiques/diagnostic',
-    },
-    updates_endpoints: {
-      check: 'GET  /api/updates/check?version=X.X.X',
-      latest: 'GET  /api/updates/latest',
-      download: 'GET  /api/updates/download',
-      publish: 'POST /api/updates/publish',
-      history: 'GET  /api/updates/history',
-      diagnostic: 'GET  /api/updates/diagnostic',
-    },
   });
 });
 
 // ========== GESTION DES ERREURS ==========
-
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -457,7 +394,7 @@ app.use((err, req, res, _next) => {
       request_id: req.idRequete,
     });
   }
-  if (err.statusCode === 429) {
+  if (err.statusCode === 429 || err.status === 429) {
     return res.status(429).json({
       success: false,
       message: 'Rate limit exceeded',
@@ -467,8 +404,7 @@ app.use((err, req, res, _next) => {
   if (err.message && err.message.includes('too large')) {
     return res.status(413).json({
       success: false,
-      message: 'File too large',
-      max_size: '200MB',
+      message: 'Payload trop volumineux',
       request_id: req.idRequete,
     });
   }
@@ -491,7 +427,7 @@ app.use((err, req, res, _next) => {
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
       success: false,
-      message: 'Fichier trop volumineux (max 500MB)',
+      message: 'Fichier trop volumineux',
       request_id: req.idRequete,
     });
   }
@@ -518,23 +454,18 @@ const server = app.listen(PORT, async () => {
 
   await setupBackupSystem();
 
-  console.log('\n📋 Configuration:');
-  console.log('• Upload limit           : 200MB (exe: 500MB)');
-  console.log('• Rate limit             : 5000 req/15min');
-  console.log('• Logs                   : /logs/access.log');
-  console.log('• Backups                : /backups/ + Google Drive');
-  console.log('• Connexions DB max      : 50');
-  console.log("• Rôles                  : Administrateur, Gestionnaire, Chef d'équipe, Opérateur");
-  console.log('• Sync sites             : ✅ ACTIVE (login/upload/download/confirm/status/users)');
-  console.log('• Sync utilisateurs      : ✅ ACTIVE');
-  console.log('• Statistiques           : ✅ ACTIVE (filtrées par rôle)');
-  console.log('• Auto-update logiciel   : ✅ ACTIVE (/api/updates)');
-  console.log('• Coordinations CRUD     : ✅ ACTIVE (/api/coordinations)');
-  console.log('• Sites CRUD             : ✅ ACTIVE (/api/sites)');
-  console.log('• Agences CRUD           : ✅ ACTIVE (/api/agences)');
-  console.log('• Init fichier hors-ligne: ✅ ACTIVE (/api/init-file)');
-  console.log('• Rapports Excel/Word    : ✅ ACTIVE (/api/rapports)');
-  console.log('• Sécurité               : ✅ ACTIVE\n');
+  console.log('\n📋 Configuration sécurité:');
+  console.log('• Body limit (général)   : 1MB');
+  console.log('• Body limit (upload)    : 200MB');
+  console.log('• Rate limit (auth)      : 10 req/15min');
+  console.log('• Rate limit (API)       : 300 req/15min');
+  console.log('• Rate limit (uploads)   : 20/15min');
+  console.log('• Rate limit (exports)   : 50/heure');
+  console.log('• Ban auto IPs           : ✅ ACTIVE (5 violations → 1h ban)');
+  console.log('• Blocklist paths        : ✅ ACTIVE (30+ patterns)');
+  console.log('• CSP                    : ✅ ACTIVE');
+  console.log('• HSTS                   : ✅ ACTIVE');
+  console.log('• Logs                   : /logs/access.log\n');
 });
 
 server.keepAliveTimeout = 300000;

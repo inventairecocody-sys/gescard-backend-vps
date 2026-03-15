@@ -1,8 +1,7 @@
-// Controllers/utilisateursController.js
-
 const bcrypt = require('bcryptjs');
 const db = require('../db/db');
 const journalService = require('../Services/journalService');
+const { serverError, notFound, forbidden, badRequest } = require('../utils/errorResponse');
 
 const CONFIG = {
   saltRounds: 12,
@@ -13,27 +12,15 @@ const CONFIG = {
   validRoles: ['Administrateur', 'Gestionnaire', "Chef d'équipe", 'Opérateur'],
 };
 
-// ============================================
-// UTILITAIRES
-// ============================================
-
 const peutGererUtilisateur = (acteur, cible = null) => {
   if (acteur.role === 'Administrateur') return true;
-  if (acteur.role === 'Gestionnaire') {
-    if (!cible) return true;
-    return cible.coordination === acteur.coordination;
-  }
-  if (acteur.role === "Chef d'équipe") {
-    if (!cible) return true;
-    return cible.agence === acteur.agence;
-  }
+  if (acteur.role === 'Gestionnaire') return !cible || cible.coordination === acteur.coordination;
+  if (acteur.role === "Chef d'équipe") return !cible || cible.agence === acteur.agence;
   return false;
 };
 
 const buildUserFilter = (acteur, params = [], baseWhere = 'WHERE 1=1') => {
-  if (acteur.role === 'Administrateur') {
-    return { where: baseWhere, params };
-  }
+  if (acteur.role === 'Administrateur') return { where: baseWhere, params };
   if (acteur.role === 'Gestionnaire' && acteur.coordination) {
     params = [...params, acteur.coordination];
     return { where: baseWhere + ` AND coordination = $${params.length}`, params };
@@ -45,15 +32,12 @@ const buildUserFilter = (acteur, params = [], baseWhere = 'WHERE 1=1') => {
   return { where: baseWhere + ' AND 1=0', params };
 };
 
-// ============================================
-// GET ALL USERS
-// ============================================
+// ── GET ALL USERS ──
 const getAllUsers = async (req, res) => {
   try {
     const acteur = req.user;
-    if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
-    }
+    if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role))
+      return forbidden(res);
 
     const {
       page = 1,
@@ -65,22 +49,15 @@ const getAllUsers = async (req, res) => {
       sort = 'nomcomplet',
       order = 'asc',
     } = req.query;
-
     const actualPage = Math.max(1, parseInt(page));
     const actualLimit = Math.min(parseInt(limit), 100);
     const offset = (actualPage - 1) * actualLimit;
 
     const { where, params: baseParams } = buildUserFilter(acteur, [], 'WHERE 1=1');
     let params = [...baseParams];
-    let query = `
-      SELECT id, nomutilisateur, nomcomplet, email, agence, role, coordination,
-             TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation,
-             TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion,
-             actif
-      FROM utilisateurs ${where}
-    `;
+    let query = `SELECT id, nomutilisateur, nomcomplet, email, agence, role, coordination, TO_CHAR(datecreation,'YYYY-MM-DD HH24:MI:SS') as datecreation, TO_CHAR(derniereconnexion,'YYYY-MM-DD HH24:MI:SS') as derniereconnexion, actif FROM utilisateurs ${where}`;
 
-    if (search && search.trim() !== '') {
+    if (search?.trim()) {
       params.push(`%${search.trim()}%`);
       const idx = params.length;
       query += ` AND (nomutilisateur ILIKE $${idx} OR nomcomplet ILIKE $${idx} OR email ILIKE $${idx})`;
@@ -109,21 +86,37 @@ const getAllUsers = async (req, res) => {
     const sortField = allowedSort.includes(sort) ? sort : 'nomcomplet';
     const sortOrder = order.toLowerCase() === 'desc' ? 'DESC' : 'ASC';
     query += ` ORDER BY ${sortField} ${sortOrder}`;
-
     params.push(actualLimit, offset);
     query += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
-    const { where: whereC, params: countParams } = buildUserFilter(acteur, [], 'WHERE 1=1');
+    // ✅ CORRIGÉ : countQuery utilise les mêmes filtres que la query principale
+    const { where: whereC, params: countBaseParams } = buildUserFilter(acteur, [], 'WHERE 1=1');
+    let countParams = [...countBaseParams];
     let countQuery = `SELECT COUNT(*) as total FROM utilisateurs ${whereC}`;
+    if (search?.trim()) {
+      countParams.push(`%${search.trim()}%`);
+      const idx = countParams.length;
+      countQuery += ` AND (nomutilisateur ILIKE $${idx} OR nomcomplet ILIKE $${idx} OR email ILIKE $${idx})`;
+    }
+    if (role) {
+      countParams.push(role);
+      countQuery += ` AND role = $${countParams.length}`;
+    }
+    if (coordination && acteur.role === 'Administrateur') {
+      countParams.push(coordination);
+      countQuery += ` AND coordination = $${countParams.length}`;
+    }
+    if (actif !== undefined) {
+      countParams.push(actif === 'true');
+      countQuery += ` AND actif = $${countParams.length}`;
+    }
 
     const startTime = Date.now();
     const [result, countResult] = await Promise.all([
       db.query(query, params),
       db.query(countQuery, countParams),
     ]);
-
     const total = parseInt(countResult.rows[0].total);
-    const totalPages = Math.ceil(total / actualLimit);
 
     res.json({
       success: true,
@@ -132,8 +125,8 @@ const getAllUsers = async (req, res) => {
         page: actualPage,
         limit: actualLimit,
         total,
-        totalPages,
-        hasNext: actualPage < totalPages,
+        totalPages: Math.ceil(total / actualLimit),
+        hasNext: actualPage < Math.ceil(total / actualLimit),
         hasPrev: actualPage > 1,
       },
       filtres: {
@@ -148,78 +141,46 @@ const getAllUsers = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Erreur récupération utilisateurs:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'getAllUsers');
   }
 };
 
-// ============================================
-// GET USER BY ID  ← BUG CORRIGÉ ICI
-// ============================================
+// ── GET USER BY ID ──
 const getUserById = async (req, res) => {
   try {
     const acteur = req.user;
+    const userId = parseInt(req.params.id);
+    if (isNaN(userId) || userId <= 0) return badRequest(res, 'ID utilisateur invalide');
 
-    const { id } = req.params;
-
-    // ✅ FIX : Valider que id est bien un entier avant la requête
-    const userId = parseInt(id);
-    if (isNaN(userId) || userId <= 0) {
-      return res.status(400).json({ success: false, message: 'ID utilisateur invalide' });
-    }
-
-    // ✅ Un utilisateur peut toujours consulter son propre profil
     const isSelf = parseInt(acteur.id) === userId;
-    if (!isSelf && !['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
-      return res.status(403).json({ success: false, message: 'Accès refusé' });
-    }
+    if (!isSelf && !['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role))
+      return forbidden(res);
 
     const startTime = Date.now();
-
     const result = await db.query(
-      `SELECT id, nomutilisateur, nomcomplet, email, agence, role, coordination,
-              TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation,
-              TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion,
-              actif
-       FROM utilisateurs WHERE id = $1`,
+      `SELECT id, nomutilisateur, nomcomplet, email, agence, role, coordination, TO_CHAR(datecreation,'YYYY-MM-DD HH24:MI:SS') as datecreation, TO_CHAR(derniereconnexion,'YYYY-MM-DD HH24:MI:SS') as derniereconnexion, actif FROM utilisateurs WHERE id = $1`,
       [userId]
     );
-
     const user = result.rows[0];
-    if (!user) return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+    if (!user) return notFound(res, 'Utilisateur non trouvé');
+    if (!isSelf && !peutGererUtilisateur(acteur, user))
+      return forbidden(res, 'Accès non autorisé à cet utilisateur');
 
-    // ✅ Un utilisateur peut toujours voir son propre profil sans passer par peutGererUtilisateur
-    if (!isSelf && !peutGererUtilisateur(acteur, user)) {
-      return res
-        .status(403)
-        .json({ success: false, message: 'Accès non autorisé à cet utilisateur' });
-    }
-
-    // ✅ FIX : Récupérer les sites liés avec gestion d'erreur indépendante
     let sites = [];
     try {
       const sitesResult = await db.query(
-        `SELECT s.id, s.nom, s.coordination_id,
-                c.nom as coordination_nom,
-                us.est_site_principal
-         FROM utilisateur_sites us
-         JOIN sites s ON us.site_id = s.id
-         LEFT JOIN coordinations c ON c.id = s.coordination_id
-         WHERE us.utilisateur_id = $1
-         ORDER BY us.est_site_principal DESC, s.nom`,
+        `SELECT s.id, s.nom, s.coordination_id, c.nom as coordination_nom, us.est_site_principal FROM utilisateur_sites us JOIN sites s ON us.site_id = s.id LEFT JOIN coordinations c ON c.id = s.coordination_id WHERE us.utilisateur_id = $1 ORDER BY us.est_site_principal DESC, s.nom`,
         [userId]
       );
       sites = sitesResult.rows;
-    } catch (siteErr) {
-      // Si la table utilisateur_sites n'existe pas encore, on continue sans crash
-      console.warn('⚠️ Impossible de récupérer les sites liés:', siteErr.message);
+    } catch {
+      /* table optionnelle */
     }
 
     res.json({
       success: true,
       utilisateur: {
         ...user,
-        // ✅ Normalisation camelCase pour le frontend
         nomUtilisateur: user.nomutilisateur,
         nomComplet: user.nomcomplet,
         derniereConnexion: user.derniereconnexion,
@@ -230,25 +191,20 @@ const getUserById = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Erreur récupération utilisateur:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'getUserById');
   }
 };
 
-// ============================================
-// CREATE USER
-// ============================================
+// ── CREATE USER ──
 const createUser = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
-
   try {
     const acteur = req.user;
     if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
       client.release();
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
+      return forbidden(res);
     }
-
     await client.query('BEGIN');
 
     const {
@@ -265,84 +221,59 @@ const createUser = async (req, res) => {
 
     if (!NomUtilisateur || !NomComplet || !MotDePasse || !Role) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: 'Champs obligatoires manquants' });
+      return badRequest(res, 'Champs obligatoires manquants');
     }
-
-    // ✅ Site obligatoire pour tous les rôles sauf Administrateur
     if (Role !== 'Administrateur' && (!SiteIds || SiteIds.length === 0)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: "Au moins un site doit être associé à l'utilisateur",
-      });
+      return badRequest(res, "Au moins un site doit être associé à l'utilisateur");
     }
-
     if (!CONFIG.validRoles.includes(Role)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: `Rôle invalide. Rôles valides: ${CONFIG.validRoles.join(', ')}`,
-      });
+      return badRequest(res, `Rôle invalide. Rôles valides: ${CONFIG.validRoles.join(', ')}`);
     }
-
     if (MotDePasse.length < CONFIG.minPasswordLength) {
       await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: `Le mot de passe doit contenir au moins ${CONFIG.minPasswordLength} caractères`,
-      });
+      return badRequest(
+        res,
+        `Le mot de passe doit contenir au moins ${CONFIG.minPasswordLength} caractères`
+      );
     }
 
     if (acteur.role === 'Gestionnaire') {
       if (Coordination && Coordination !== acteur.coordination) {
         await client.query('ROLLBACK');
-        return res.status(403).json({
-          success: false,
-          message: 'Vous ne pouvez créer des utilisateurs que dans votre coordination',
-        });
+        return forbidden(res, 'Vous ne pouvez créer des utilisateurs que dans votre coordination');
       }
       if (['Administrateur', 'Gestionnaire'].includes(Role)) {
         await client.query('ROLLBACK');
-        return res.status(403).json({
-          success: false,
-          message: 'Vous ne pouvez pas créer un compte Administrateur ou Gestionnaire',
-        });
+        return forbidden(res, 'Vous ne pouvez pas créer un compte Administrateur ou Gestionnaire');
       }
     }
-
     if (acteur.role === "Chef d'équipe") {
       if (Agence && Agence !== acteur.agence) {
         await client.query('ROLLBACK');
-        return res.status(403).json({
-          success: false,
-          message: 'Vous ne pouvez créer des utilisateurs que dans votre site',
-        });
+        return forbidden(res, 'Vous ne pouvez créer des utilisateurs que dans votre site');
       }
       if (Role !== 'Opérateur') {
         await client.query('ROLLBACK');
-        return res.status(403).json({
-          success: false,
-          message: "Un Chef d'équipe ne peut créer que des Opérateurs",
-        });
+        return forbidden(res, "Un Chef d'équipe ne peut créer que des Opérateurs");
       }
     }
 
-    const existingUser = await client.query(
-      'SELECT id FROM utilisateurs WHERE nomutilisateur = $1',
-      [NomUtilisateur]
-    );
-    if (existingUser.rows.length > 0) {
+    const existing = await client.query('SELECT id FROM utilisateurs WHERE nomutilisateur = $1', [
+      NomUtilisateur,
+    ]);
+    if (existing.rows.length > 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: "Ce nom d'utilisateur existe déjà" });
+      return badRequest(res, "Ce nom d'utilisateur existe déjà");
     }
-
     if (Email) {
       const existingEmail = await client.query('SELECT id FROM utilisateurs WHERE email = $1', [
         Email,
       ]);
       if (existingEmail.rows.length > 0) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'Cet email est déjà utilisé' });
+        return badRequest(res, 'Cet email est déjà utilisé');
       }
     }
 
@@ -356,13 +287,8 @@ const createUser = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(MotDePasse, CONFIG.saltRounds);
-
     const result = await client.query(
-      `INSERT INTO utilisateurs
-       (nomutilisateur, nomcomplet, email, agence, role, coordination, coordination_id,
-        motdepasse, datecreation, actif, sync_timestamp, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW(), NOW())
-       RETURNING id`,
+      `INSERT INTO utilisateurs (nomutilisateur, nomcomplet, email, agence, role, coordination, coordination_id, motdepasse, datecreation, actif, sync_timestamp, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW()) RETURNING id`,
       [
         NomUtilisateur,
         NomComplet,
@@ -376,15 +302,12 @@ const createUser = async (req, res) => {
         true,
       ]
     );
-
     const newUserId = result.rows[0].id;
 
-    // Lier les sites
-    if (SiteIds && SiteIds.length > 0) {
+    if (SiteIds?.length > 0) {
       for (let i = 0; i < SiteIds.length; i++) {
         await client.query(
-          `INSERT INTO utilisateur_sites (utilisateur_id, site_id, est_site_principal)
-           VALUES ($1, $2, $3) ON CONFLICT (utilisateur_id, site_id) DO NOTHING`,
+          `INSERT INTO utilisateur_sites (utilisateur_id, site_id, est_site_principal) VALUES ($1,$2,$3) ON CONFLICT (utilisateur_id, site_id) DO NOTHING`,
           [newUserId, SiteIds[i], i === 0]
         );
       }
@@ -395,8 +318,7 @@ const createUser = async (req, res) => {
       );
       if (siteResult.rows.length > 0) {
         await client.query(
-          `INSERT INTO utilisateur_sites (utilisateur_id, site_id, est_site_principal)
-           VALUES ($1, $2, true) ON CONFLICT (utilisateur_id, site_id) DO NOTHING`,
+          `INSERT INTO utilisateur_sites (utilisateur_id, site_id, est_site_principal) VALUES ($1,$2,true) ON CONFLICT (utilisateur_id, site_id) DO NOTHING`,
           [newUserId, siteResult.rows[0].id]
         );
       }
@@ -420,7 +342,6 @@ const createUser = async (req, res) => {
     });
 
     await client.query('COMMIT');
-
     res.status(201).json({
       success: true,
       message: 'Utilisateur créé avec succès',
@@ -429,61 +350,47 @@ const createUser = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Erreur création utilisateur:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    await client.query('ROLLBACK').catch(() => {});
+    return serverError(res, error, 'createUser');
   } finally {
     client.release();
   }
 };
 
-// ============================================
-// UPDATE USER
-// ============================================
+// ── UPDATE USER ──
 const updateUser = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
-
   try {
     const acteur = req.user;
     if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
       client.release();
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
+      return forbidden(res);
     }
-
     await client.query('BEGIN');
 
-    const { id } = req.params;
-    const userId = parseInt(id);
+    const userId = parseInt(req.params.id);
     if (isNaN(userId) || userId <= 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: 'ID utilisateur invalide' });
+      return badRequest(res, 'ID utilisateur invalide');
     }
 
     const { NomComplet, Email, Agence, Role, Coordination, CoordinationId, Actif, SiteIds } =
       req.body;
-
     if (Role && !CONFIG.validRoles.includes(Role)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: `Rôle invalide. Rôles valides: ${CONFIG.validRoles.join(', ')}`,
-      });
+      return badRequest(res, `Rôle invalide. Rôles valides: ${CONFIG.validRoles.join(', ')}`);
     }
 
     const oldUserResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]);
     const oldUser = oldUserResult.rows[0];
-
     if (!oldUser) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+      return notFound(res, 'Utilisateur non trouvé');
     }
-
     if (!peutGererUtilisateur(acteur, oldUser)) {
       await client.query('ROLLBACK');
-      return res
-        .status(403)
-        .json({ success: false, message: 'Accès non autorisé à cet utilisateur' });
+      return forbidden(res, 'Accès non autorisé à cet utilisateur');
     }
 
     if (Email && Email !== oldUser.email) {
@@ -493,16 +400,12 @@ const updateUser = async (req, res) => {
       );
       if (existingEmail.rows.length > 0) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: 'Email déjà utilisé' });
+        return badRequest(res, 'Email déjà utilisé');
       }
     }
-
-    if (parseInt(id) === parseInt(req.user.id) && Actif === false) {
+    if (parseInt(req.params.id) === parseInt(req.user.id) && Actif === false) {
       await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: 'Vous ne pouvez pas désactiver votre propre compte',
-      });
+      return badRequest(res, 'Vous ne pouvez pas désactiver votre propre compte');
     }
 
     let resolvedCoordinationId = CoordinationId || oldUser.coordination_id;
@@ -516,11 +419,7 @@ const updateUser = async (req, res) => {
     }
 
     await client.query(
-      `UPDATE utilisateurs
-       SET nomcomplet = $1, email = $2, agence = $3, role = $4,
-           coordination = $5, coordination_id = $6, actif = $7,
-           updated_at = NOW(), sync_timestamp = NOW()
-       WHERE id = $8`,
+      `UPDATE utilisateurs SET nomcomplet=$1, email=$2, agence=$3, role=$4, coordination=$5, coordination_id=$6, actif=$7, updated_at=NOW(), sync_timestamp=NOW() WHERE id=$8`,
       [
         NomComplet || oldUser.nomcomplet,
         Email || oldUser.email,
@@ -533,32 +432,26 @@ const updateUser = async (req, res) => {
       ]
     );
 
-    // Mettre à jour les sites liés si fournis
     if (SiteIds !== undefined) {
-      // ✅ Bloquer si on essaie de retirer tous les sites d'un non-Administrateur
       const targetRole = Role || oldUser.role;
       if (targetRole !== 'Administrateur' && SiteIds.length === 0) {
         await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Impossible de retirer tous les sites : au moins un site est obligatoire',
-        });
+        return badRequest(
+          res,
+          'Impossible de retirer tous les sites : au moins un site est obligatoire'
+        );
       }
       await client.query('DELETE FROM utilisateur_sites WHERE utilisateur_id = $1', [userId]);
-      if (SiteIds.length > 0) {
-        for (let i = 0; i < SiteIds.length; i++) {
-          await client.query(
-            `INSERT INTO utilisateur_sites (utilisateur_id, site_id, est_site_principal)
-             VALUES ($1, $2, $3) ON CONFLICT (utilisateur_id, site_id) DO NOTHING`,
-            [userId, SiteIds[i], i === 0]
-          );
-        }
+      for (let i = 0; i < SiteIds.length; i++) {
+        await client.query(
+          `INSERT INTO utilisateur_sites (utilisateur_id, site_id, est_site_principal) VALUES ($1,$2,$3) ON CONFLICT (utilisateur_id, site_id) DO NOTHING`,
+          [userId, SiteIds[i], i === 0]
+        );
       }
     }
 
     const newUser = (await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]))
       .rows[0];
-
     await journalService.logAction({
       utilisateurId: req.user.id,
       nomUtilisateur: req.user.nomUtilisateur,
@@ -591,7 +484,6 @@ const updateUser = async (req, res) => {
     });
 
     await client.query('COMMIT');
-
     res.json({
       success: true,
       message: 'Utilisateur modifié avec succès',
@@ -599,17 +491,14 @@ const updateUser = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Erreur modification utilisateur:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    await client.query('ROLLBACK').catch(() => {});
+    return serverError(res, error, 'updateUser');
   } finally {
     client.release();
   }
 };
 
-// ============================================
-// DELETE USER (DESACTIVATE)
-// ============================================
+// ── DELETE USER ──
 const deleteUser = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
@@ -617,28 +506,23 @@ const deleteUser = async (req, res) => {
     const acteur = req.user;
     if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
       client.release();
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
+      return forbidden(res);
     }
     await client.query('BEGIN');
-    const { id } = req.params;
-    const userId = parseInt(id);
+    const userId = parseInt(req.params.id);
     const userResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]);
     const user = userResult.rows[0];
     if (!user) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+      return notFound(res, 'Utilisateur non trouvé');
     }
     if (!peutGererUtilisateur(acteur, user)) {
       await client.query('ROLLBACK');
-      return res
-        .status(403)
-        .json({ success: false, message: 'Accès non autorisé à cet utilisateur' });
+      return forbidden(res, 'Accès non autorisé à cet utilisateur');
     }
-    if (parseInt(id) === parseInt(req.user.id)) {
+    if (userId === parseInt(req.user.id)) {
       await client.query('ROLLBACK');
-      return res
-        .status(400)
-        .json({ success: false, message: 'Vous ne pouvez pas désactiver votre propre compte' });
+      return badRequest(res, 'Vous ne pouvez pas désactiver votre propre compte');
     }
     await client.query('UPDATE utilisateurs SET actif = false, updated_at = NOW() WHERE id = $1', [
       userId,
@@ -667,17 +551,14 @@ const deleteUser = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Erreur désactivation utilisateur:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    await client.query('ROLLBACK').catch(() => {});
+    return serverError(res, error, 'deleteUser');
   } finally {
     client.release();
   }
 };
 
-// ============================================
-// ACTIVATE USER
-// ============================================
+// ── ACTIVATE USER ──
 const activateUser = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
@@ -685,7 +566,7 @@ const activateUser = async (req, res) => {
     const acteur = req.user;
     if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
       client.release();
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
+      return forbidden(res);
     }
     await client.query('BEGIN');
     const userId = parseInt(req.params.id);
@@ -693,13 +574,11 @@ const activateUser = async (req, res) => {
     const user = userResult.rows[0];
     if (!user) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+      return notFound(res, 'Utilisateur non trouvé');
     }
     if (!peutGererUtilisateur(acteur, user)) {
       await client.query('ROLLBACK');
-      return res
-        .status(403)
-        .json({ success: false, message: 'Accès non autorisé à cet utilisateur' });
+      return forbidden(res, 'Accès non autorisé à cet utilisateur');
     }
     await client.query('UPDATE utilisateurs SET actif = true, updated_at = NOW() WHERE id = $1', [
       userId,
@@ -728,17 +607,14 @@ const activateUser = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Erreur réactivation utilisateur:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    await client.query('ROLLBACK').catch(() => {});
+    return serverError(res, error, 'activateUser');
   } finally {
     client.release();
   }
 };
 
-// ============================================
-// RESET PASSWORD
-// ============================================
+// ── RESET PASSWORD ──
 const resetPassword = async (req, res) => {
   const client = await db.getClient();
   const startTime = Date.now();
@@ -746,35 +622,32 @@ const resetPassword = async (req, res) => {
     const acteur = req.user;
     if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
       client.release();
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
+      return forbidden(res);
     }
     await client.query('BEGIN');
-    const { id } = req.params;
     const { newPassword } = req.body;
     if (!newPassword || newPassword.length < CONFIG.minPasswordLength) {
       await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: `Le mot de passe doit contenir au moins ${CONFIG.minPasswordLength} caractères`,
-      });
+      return badRequest(
+        res,
+        `Le mot de passe doit contenir au moins ${CONFIG.minPasswordLength} caractères`
+      );
     }
-    const userId = parseInt(id);
+    const userId = parseInt(req.params.id);
     const userResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]);
     const user = userResult.rows[0];
     if (!user) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+      return notFound(res, 'Utilisateur non trouvé');
     }
     if (!peutGererUtilisateur(acteur, user)) {
       await client.query('ROLLBACK');
-      return res
-        .status(403)
-        .json({ success: false, message: 'Accès non autorisé à cet utilisateur' });
+      return forbidden(res, 'Accès non autorisé à cet utilisateur');
     }
-    const hashedPassword = await bcrypt.hash(newPassword, CONFIG.saltRounds);
+    const hashed = await bcrypt.hash(newPassword, CONFIG.saltRounds);
     await client.query(
       'UPDATE utilisateurs SET motdepasse = $1, updated_at = NOW() WHERE id = $2',
-      [hashedPassword, userId]
+      [hashed, userId]
     );
     await journalService.logAction({
       utilisateurId: req.user.id,
@@ -798,51 +671,46 @@ const resetPassword = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Erreur réinitialisation mot de passe:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    await client.query('ROLLBACK').catch(() => {});
+    return serverError(res, error, 'resetPassword');
   } finally {
     client.release();
   }
 };
 
-// ============================================
-// GET USER STATS
-// ============================================
+// ── GET USER STATS ──
 const getUserStats = async (req, res) => {
   try {
-    if (req.user.role !== 'Administrateur') {
-      return res.status(403).json({ success: false, message: 'Réservé aux Administrateurs' });
-    }
-    const { forceRefresh } = req.query;
+    if (req.user.role !== 'Administrateur') return forbidden(res, 'Réservé aux Administrateurs');
     if (
-      !forceRefresh &&
+      !req.query.forceRefresh &&
       CONFIG.statsCache &&
       CONFIG.statsCacheTime &&
       Date.now() - CONFIG.statsCacheTime < CONFIG.cacheTimeout * 1000
-    ) {
+    )
       return res.json({
         success: true,
         ...CONFIG.statsCache,
         cached: true,
         cacheAge: Math.round((Date.now() - CONFIG.statsCacheTime) / 1000) + 's',
       });
-    }
+
     const startTime = Date.now();
     const [stats, rolesStats, coordinationStats, recentActivity] = await Promise.all([
       db.query(
-        `SELECT COUNT(*) as total_utilisateurs, COUNT(CASE WHEN actif = true THEN 1 END) as utilisateurs_actifs, COUNT(CASE WHEN actif = false THEN 1 END) as utilisateurs_inactifs, COUNT(DISTINCT role) as roles_distincts, COUNT(DISTINCT agence) as agences_distinctes, COUNT(DISTINCT coordination) as coordinations_distinctes, MIN(datecreation) as premier_utilisateur, MAX(datecreation) as dernier_utilisateur, COUNT(CASE WHEN datecreation > NOW() - INTERVAL '30 days' THEN 1 END) as nouveaux_30j FROM utilisateurs`
+        `SELECT COUNT(*) as total_utilisateurs, COUNT(CASE WHEN actif=true THEN 1 END) as utilisateurs_actifs, COUNT(CASE WHEN actif=false THEN 1 END) as utilisateurs_inactifs, COUNT(DISTINCT role) as roles_distincts, COUNT(DISTINCT agence) as agences_distinctes, COUNT(DISTINCT coordination) as coordinations_distinctes, MIN(datecreation) as premier_utilisateur, MAX(datecreation) as dernier_utilisateur, COUNT(CASE WHEN datecreation > NOW() - INTERVAL '30 days' THEN 1 END) as nouveaux_30j FROM utilisateurs`
       ),
       db.query(
-        `SELECT role, COUNT(*) as count, COUNT(CASE WHEN actif = true THEN 1 END) as actifs, ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM utilisateurs), 2) as pourcentage FROM utilisateurs GROUP BY role ORDER BY count DESC`
+        `SELECT role, COUNT(*) as count, COUNT(CASE WHEN actif=true THEN 1 END) as actifs, ROUND(COUNT(*)*100.0/(SELECT COUNT(*) FROM utilisateurs),2) as pourcentage FROM utilisateurs GROUP BY role ORDER BY count DESC`
       ),
       db.query(
-        `SELECT coordination, COUNT(*) as count, COUNT(CASE WHEN actif = true THEN 1 END) as actifs FROM utilisateurs WHERE coordination IS NOT NULL GROUP BY coordination ORDER BY count DESC`
+        `SELECT coordination, COUNT(*) as count, COUNT(CASE WHEN actif=true THEN 1 END) as actifs FROM utilisateurs WHERE coordination IS NOT NULL GROUP BY coordination ORDER BY count DESC`
       ),
       db.query(
         `SELECT u.nomutilisateur, u.nomcomplet, u.role, u.coordination, COUNT(j.journalid) as total_actions, MAX(j.dateaction) as derniere_action, COUNT(CASE WHEN j.dateaction > NOW() - INTERVAL '24 hours' THEN 1 END) as actions_24h FROM utilisateurs u LEFT JOIN journalactivite j ON u.id = j.utilisateurid WHERE j.dateaction >= CURRENT_DATE - INTERVAL '7 days' GROUP BY u.id, u.nomutilisateur, u.nomcomplet, u.role, u.coordination ORDER BY total_actions DESC LIMIT 10`
       ),
     ]);
+
     const statsData = {
       stats: {
         total_utilisateurs: parseInt(stats.rows[0].total_utilisateurs),
@@ -883,28 +751,28 @@ const getUserStats = async (req, res) => {
     CONFIG.statsCacheTime = Date.now();
     res.json({ success: true, ...statsData, cached: false, timestamp: new Date().toISOString() });
   } catch (error) {
-    console.error('❌ Erreur statistiques utilisateurs:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'getUserStats');
   }
 };
 
-// ============================================
-// SEARCH USERS
-// ============================================
+// ── SEARCH USERS ──
+// ✅ CORRIGÉ : countQuery maintenant cohérent avec la query principale (mêmes filtres)
 const searchUsers = async (req, res) => {
   try {
     const acteur = req.user;
-    if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role)) {
-      return res.status(403).json({ success: false, message: 'Accès non autorisé' });
-    }
+    if (!['Administrateur', 'Gestionnaire', "Chef d'équipe"].includes(acteur.role))
+      return forbidden(res);
+
     const { q, role, coordination, actif, page = 1, limit = 20 } = req.query;
     const actualPage = Math.max(1, parseInt(page));
     const actualLimit = Math.min(parseInt(limit), 100);
     const offset = (actualPage - 1) * actualLimit;
+
     const { where, params: baseParams } = buildUserFilter(acteur, [], 'WHERE 1=1');
     let params = [...baseParams];
     let query = `SELECT id, nomutilisateur, nomcomplet, email, agence, role, coordination, actif FROM utilisateurs ${where}`;
-    if (q && q.trim() !== '') {
+
+    if (q?.trim()) {
       params.push(`%${q.trim()}%`);
       const idx = params.length;
       query += ` AND (nomutilisateur ILIKE $${idx} OR nomcomplet ILIKE $${idx} OR email ILIKE $${idx})`;
@@ -921,15 +789,39 @@ const searchUsers = async (req, res) => {
       params.push(actif === 'true');
       query += ` AND actif = $${params.length}`;
     }
+
     params.push(actualLimit, offset);
     query += ` ORDER BY nomcomplet LIMIT $${params.length - 1} OFFSET $${params.length}`;
-    const { where: whereC, params: countParams } = buildUserFilter(acteur, [], 'WHERE 1=1');
+
+    // ✅ countQuery avec les mêmes filtres de recherche
+    const { where: whereC, params: countBaseParams } = buildUserFilter(acteur, [], 'WHERE 1=1');
+    let countParams = [...countBaseParams];
+    let countQuery = `SELECT COUNT(*) as total FROM utilisateurs ${whereC}`;
+    if (q?.trim()) {
+      countParams.push(`%${q.trim()}%`);
+      const idx = countParams.length;
+      countQuery += ` AND (nomutilisateur ILIKE $${idx} OR nomcomplet ILIKE $${idx} OR email ILIKE $${idx})`;
+    }
+    if (role) {
+      countParams.push(role);
+      countQuery += ` AND role = $${countParams.length}`;
+    }
+    if (coordination && acteur.role === 'Administrateur') {
+      countParams.push(coordination);
+      countQuery += ` AND coordination = $${countParams.length}`;
+    }
+    if (actif !== undefined) {
+      countParams.push(actif === 'true');
+      countQuery += ` AND actif = $${countParams.length}`;
+    }
+
     const startTime = Date.now();
     const [result, countResult] = await Promise.all([
       db.query(query, params),
-      db.query(`SELECT COUNT(*) as total FROM utilisateurs ${whereC}`, countParams),
+      db.query(countQuery, countParams),
     ]);
     const total = parseInt(countResult.rows[0].total);
+
     res.json({
       success: true,
       utilisateurs: result.rows,
@@ -945,35 +837,27 @@ const searchUsers = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Erreur recherche utilisateurs:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'searchUsers');
   }
 };
 
-// ============================================
-// GET USER HISTORY
-// ============================================
+// ── GET USER HISTORY ──
 const getUserHistory = async (req, res) => {
   try {
-    if (req.user.role !== 'Administrateur') {
-      return res.status(403).json({ success: false, message: 'Réservé aux Administrateurs' });
-    }
-    const { id } = req.params;
-    const userId = parseInt(id);
-    const { limit = 50, page = 1 } = req.query;
-    const actualPage = Math.max(1, parseInt(page));
-    const actualLimit = Math.min(parseInt(limit), 200);
+    if (req.user.role !== 'Administrateur') return forbidden(res, 'Réservé aux Administrateurs');
+    const userId = parseInt(req.params.id);
+    const actualLimit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const actualPage = Math.max(1, parseInt(req.query.page) || 1);
     const offset = (actualPage - 1) * actualLimit;
     const userResult = await db.query(
       'SELECT id, nomutilisateur, nomcomplet FROM utilisateurs WHERE id = $1',
       [userId]
     );
-    if (userResult.rows.length === 0)
-      return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+    if (userResult.rows.length === 0) return notFound(res, 'Utilisateur non trouvé');
     const startTime = Date.now();
     const [history, countResult] = await Promise.all([
       db.query(
-        `SELECT journalid, actiontype, action, TO_CHAR(dateaction, 'YYYY-MM-DD HH24:MI:SS') as dateaction, tablename, recordid, detailsaction, iputilisateur, annulee FROM journalactivite WHERE utilisateurid = $1 ORDER BY dateaction DESC LIMIT $2 OFFSET $3`,
+        `SELECT journalid, actiontype, action, TO_CHAR(dateaction,'YYYY-MM-DD HH24:MI:SS') as dateaction, tablename, recordid, detailsaction, iputilisateur, annulee FROM journalactivite WHERE utilisateurid = $1 ORDER BY dateaction DESC LIMIT $2 OFFSET $3`,
         [userId, actualLimit, offset]
       ),
       db.query('SELECT COUNT(*) as total FROM journalactivite WHERE utilisateurid = $1', [userId]),
@@ -995,21 +879,17 @@ const getUserHistory = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Erreur historique utilisateur:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'getUserHistory');
   }
 };
 
-// ============================================
-// EXPORT USERS
-// ============================================
+// ── EXPORT USERS ──
 const exportUsers = async (req, res) => {
   try {
-    if (req.user.role !== 'Administrateur')
-      return res.status(403).json({ success: false, message: 'Réservé aux Administrateurs' });
-    const { format = 'json' } = req.query;
+    if (req.user.role !== 'Administrateur') return forbidden(res, 'Réservé aux Administrateurs');
+    const format = req.query.format === 'csv' ? 'csv' : 'json';
     const users = await db.query(
-      `SELECT nomutilisateur, nomcomplet, email, agence, role, coordination, TO_CHAR(datecreation, 'YYYY-MM-DD HH24:MI:SS') as datecreation, TO_CHAR(derniereconnexion, 'YYYY-MM-DD HH24:MI:SS') as derniereconnexion, CASE WHEN actif = true THEN 'Actif' ELSE 'Inactif' END as statut FROM utilisateurs ORDER BY nomcomplet`
+      `SELECT nomutilisateur, nomcomplet, email, agence, role, coordination, TO_CHAR(datecreation,'YYYY-MM-DD HH24:MI:SS') as datecreation, TO_CHAR(derniereconnexion,'YYYY-MM-DD HH24:MI:SS') as derniereconnexion, CASE WHEN actif=true THEN 'Actif' ELSE 'Inactif' END as statut FROM utilisateurs ORDER BY nomcomplet`
     );
     const filename = `utilisateurs-export-${new Date().toISOString().split('T')[0]}`;
     if (format === 'csv') {
@@ -1036,24 +916,20 @@ const exportUsers = async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('❌ Erreur export utilisateurs:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'exportUsers');
   }
 };
 
-// ============================================
-// CHECK USERNAME
-// ============================================
+// ── CHECK USERNAME ──
 const checkUsernameAvailability = async (req, res) => {
   try {
     const { username, excludeId } = req.query;
-    if (!username)
-      return res.status(400).json({ success: false, message: "Nom d'utilisateur requis" });
+    if (!username) return badRequest(res, "Nom d'utilisateur requis");
     let query = 'SELECT id FROM utilisateurs WHERE nomutilisateur = $1';
     const params = [username];
     if (excludeId) {
       query += ' AND id != $2';
-      params.push(excludeId);
+      params.push(parseInt(excludeId));
     }
     const result = await db.query(query, params);
     const isAvailable = result.rows.length === 0;
@@ -1064,24 +940,19 @@ const checkUsernameAvailability = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'checkUsernameAvailability');
   }
 };
 
-// ============================================
-// GET ROLES
-// ============================================
+// ── GET ROLES ──
 const getRoles = async (req, res) => {
   res.json({ success: true, roles: CONFIG.validRoles, timestamp: new Date().toISOString() });
 };
 
-// ============================================
-// GET COORDINATIONS
-// ============================================
+// ── GET COORDINATIONS ──
 const getCoordinations = async (req, res) => {
   try {
-    if (req.user.role !== 'Administrateur')
-      return res.status(403).json({ success: false, message: 'Réservé aux Administrateurs' });
+    if (req.user.role !== 'Administrateur') return forbidden(res, 'Réservé aux Administrateurs');
     const result = await db.query(
       `SELECT DISTINCT coordination FROM utilisateurs WHERE coordination IS NOT NULL AND coordination != '' ORDER BY coordination`
     );
@@ -1091,25 +962,16 @@ const getCoordinations = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'getCoordinations');
   }
 };
 
-// ============================================
-// GET SITES LIST
-// ============================================
+// ── GET SITES LIST ──
 const getSitesList = async (req, res) => {
   try {
     const acteur = req.user;
-    let query = `
-      SELECT s.id, s.nom, s.coordination_id,
-             c.nom as coordination_nom, c.code as coordination_code
-      FROM sites s
-      JOIN coordinations c ON c.id = s.coordination_id
-      WHERE s.is_active = true
-    `;
+    let query = `SELECT s.id, s.nom, s.coordination_id, c.nom as coordination_nom, c.code as coordination_code FROM sites s JOIN coordinations c ON c.id = s.coordination_id WHERE s.is_active = true`;
     const params = [];
-
     if (acteur.role === 'Gestionnaire' && acteur.coordination_id) {
       params.push(acteur.coordination_id);
       query += ` AND s.coordination_id = $${params.length}`;
@@ -1119,18 +981,14 @@ const getSitesList = async (req, res) => {
       query += ` AND s.nom = $${params.length}`;
     }
     query += ` ORDER BY c.nom, s.nom`;
-
     const result = await db.query(query, params);
     res.json({ success: true, sites: result.rows, timestamp: new Date().toISOString() });
   } catch (error) {
-    console.error('❌ Erreur getSitesList:', error);
-    res.status(500).json({ success: false, message: 'Erreur serveur', error: error.message });
+    return serverError(res, error, 'getSitesList');
   }
 };
 
-// ============================================
-// CLEAR STATS CACHE
-// ============================================
+// ── CLEAR STATS CACHE ──
 const clearStatsCache = async (req, res) => {
   CONFIG.statsCache = null;
   CONFIG.statsCacheTime = null;
@@ -1141,13 +999,10 @@ const clearStatsCache = async (req, res) => {
   });
 };
 
-// ============================================
-// DIAGNOSTIC
-// ============================================
+// ── DIAGNOSTIC ──
 const diagnostic = async (req, res) => {
   try {
-    if (req.user.role !== 'Administrateur')
-      return res.status(403).json({ success: false, message: 'Réservé aux Administrateurs' });
+    if (req.user.role !== 'Administrateur') return forbidden(res, 'Réservé aux Administrateurs');
     const startTime = Date.now();
     const result = await db.query(
       `SELECT COUNT(*) as total_utilisateurs, COUNT(CASE WHEN actif THEN 1 END) as utilisateurs_actifs, COUNT(DISTINCT role) as roles_distincts, COUNT(DISTINCT coordination) as coordinations_distinctes, MIN(datecreation) as premier_utilisateur, MAX(datecreation) as dernier_utilisateur, pg_total_relation_size('utilisateurs') as table_size, pg_size_pretty(pg_total_relation_size('utilisateurs')) as table_size_pretty FROM utilisateurs`
@@ -1179,8 +1034,7 @@ const diagnostic = async (req, res) => {
       performance: { queryTime: Date.now() - startTime },
     });
   } catch (error) {
-    console.error('❌ Erreur diagnostic:', error);
-    res.status(500).json({ success: false, error: error.message });
+    return serverError(res, error, 'diagnostic');
   }
 };
 
