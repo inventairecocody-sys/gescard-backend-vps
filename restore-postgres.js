@@ -296,7 +296,7 @@ class PostgreSQLRestorer {
       console.log('⚡ Exécution de la restauration SQL (cela peut prendre quelques minutes)...');
       const startTime = Date.now();
 
-      const { stdout, stderr } = await execPromise(command, {
+      const { stderr } = await execPromise(command, {
         env,
         timeout: 600000, // 10 minutes pour VPS
         maxBuffer: 1024 * 1024 * 100, // 100MB buffer
