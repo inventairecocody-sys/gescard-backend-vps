@@ -48,7 +48,6 @@ router.use((req, res, next) => {
 /**
  * Vérifier si une mise à jour est disponible
  * GET /api/updates/check?version=1.0.0
- * Utilisé par le logiciel au démarrage
  */
 router.get('/check', ctrl.checkVersion);
 
@@ -59,7 +58,7 @@ router.get('/check', ctrl.checkVersion);
 router.get('/latest', ctrl.getLatest);
 
 /**
- * Télécharger le fichier .exe (pas de token requis — URL directe)
+ * Télécharger le fichier .exe
  * GET /api/updates/download
  */
 router.get('/download', ctrl.downloadExe);
@@ -72,24 +71,14 @@ router.use(verifierToken);
 /**
  * Publier une nouvelle version
  * POST /api/updates/publish
- * Body: multipart/form-data { file(.exe), version, release_notes, mandatory }
- * Accès: Administrateur uniquement
  */
 router.post('/publish', upload.single('file'), ctrl.publishVersion);
 
 /**
  * Historique des versions disponibles
  * GET /api/updates/history
- * Accès: Administrateur uniquement
  */
 router.get('/history', ctrl.getHistory);
-
-/**
- * Supprimer une ancienne version
- * DELETE /api/updates/:version
- * Accès: Administrateur uniquement
- */
-router.delete('/:version', ctrl.deleteVersion);
 
 /**
  * Diagnostic du système de mises à jour
@@ -98,13 +87,33 @@ router.delete('/:version', ctrl.deleteVersion);
 router.get('/diagnostic', ctrl.diagnostic);
 
 /**
+ * Restaurer une ancienne version comme version active
+ * POST /api/updates/restore/:version
+ * Ex: POST /api/updates/restore/4.0.1
+ */
+router.post('/restore/:version', ctrl.restoreVersion);
+
+/**
+ * Vider toutes les versions (fichiers + version.json)
+ * DELETE /api/updates/clear-all
+ */
+router.delete('/clear-all', ctrl.clearAll);
+
+/**
+ * Supprimer une version spécifique
+ * DELETE /api/updates/:version
+ * ⚠️ Doit être après /clear-all pour éviter le conflit de route
+ */
+router.delete('/:version', ctrl.deleteVersion);
+
+/**
  * Documentation
  * GET /api/updates
  */
 router.get('/', (req, res) => {
   res.json({
     name: 'API Updates GESCARD',
-    version: '1.0.0',
+    version: '1.1.0',
     endpoints: {
       publics: {
         'GET /api/updates/check?version=X.X.X': 'Vérifier si mise à jour disponible',
@@ -114,11 +123,12 @@ router.get('/', (req, res) => {
       admin: {
         'POST /api/updates/publish': 'Publier nouvelle version (.exe + version + notes)',
         'GET /api/updates/history': 'Historique des versions',
-        'DELETE /api/updates/:version': 'Supprimer une version',
+        'POST /api/updates/restore/:version': 'Restaurer une ancienne version',
+        'DELETE /api/updates/clear-all': 'Vider toutes les versions',
+        'DELETE /api/updates/:version': 'Supprimer une version spécifique',
         'GET /api/updates/diagnostic': 'Diagnostic',
       },
     },
-    exemple_check: 'GET /api/updates/check?version=1.0.0',
     timestamp: new Date().toISOString(),
   });
 });

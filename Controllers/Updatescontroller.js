@@ -68,9 +68,8 @@ const checkVersion = async (req, res) => {
       mandatory: versionData.mandatory || false,
     });
 
-    // Log de la vérification
     console.log(
-      `📡 [Updates] Check version: client=${clientVersion} latest=${versionData.version} update=${updateAvailable} ip=${req.ip}`
+      `📡 [Updates] Check: client=${clientVersion} latest=${versionData.version} update=${updateAvailable} ip=${req.ip}`
     );
   } catch (error) {
     console.error('❌ Erreur check version:', error);
@@ -134,7 +133,7 @@ const downloadExe = async (req, res) => {
     res.setHeader('X-Version', versionData.version);
 
     console.log(
-      `📥 [Updates] Téléchargement: ${versionData.filename} v${versionData.version} par ip=${req.ip}`
+      `📥 [Updates] Téléchargement: ${versionData.filename} v${versionData.version} ip=${req.ip}`
     );
 
     const stream = fs.createReadStream(filePath);
@@ -146,9 +145,8 @@ const downloadExe = async (req, res) => {
 };
 
 // ============================================
-// UPLOAD NOUVELLE VERSION — Admin ou SCP
+// UPLOAD NOUVELLE VERSION — Admin
 // POST /api/updates/publish
-// Body: multipart/form-data { file, version, release_notes, mandatory }
 // ============================================
 const publishVersion = async (req, res) => {
   try {
@@ -163,56 +161,50 @@ const publishVersion = async (req, res) => {
 
     const { version, release_notes, mandatory = false } = req.body;
 
-    if (!version || !version.match(/^\d+\.\d+\.\d+$/)) {
-      // Supprimer le fichier uploadé si version invalide
+    if (!version || !version.match(/^\d+\.\d+(\.\d+)?$/)) {
       fs.unlinkSync(req.file.path);
       return res.status(400).json({
         success: false,
-        message: 'Version invalide. Format attendu: 1.2.3',
+        message: 'Version invalide. Format attendu: 1.2.3 ou 1.2',
       });
     }
+
+    // Normaliser la version en 3 parties (ex: "4.1" → "4.1.0")
+    const versionNormalisee = version.split('.').length === 2 ? `${version}.0` : version;
 
     // Vérifier que la nouvelle version est supérieure
     const versionActuelle = lireVersion();
-    if (versionActuelle && !comparerVersions(version, versionActuelle.version)) {
+    if (versionActuelle && !comparerVersions(versionNormalisee, versionActuelle.version)) {
       fs.unlinkSync(req.file.path);
       return res.status(400).json({
         success: false,
-        message: `Version ${version} doit être supérieure à la version actuelle ${versionActuelle.version}`,
+        message: `Version ${versionNormalisee} doit être supérieure à la version actuelle ${versionActuelle.version}`,
       });
     }
 
-    // S'assurer que le dossier downloads existe
     if (!fs.existsSync(DOWNLOADS_DIR)) {
       fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
     }
 
-    // Calculer le checksum SHA256
     const crypto = require('crypto');
     const fileBuffer = fs.readFileSync(req.file.path);
     const checksum = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
-    // Nom du fichier versionné
-    const filename = `gescard_v${version}.exe`;
+    const filename = `gescard_v${versionNormalisee}.exe`;
     const destPath = path.join(DOWNLOADS_DIR, filename);
     const latestPath = path.join(DOWNLOADS_DIR, 'gescard_latest.exe');
 
-    // Déplacer le fichier uploadé
     fs.renameSync(req.file.path, destPath);
-
-    // Copier en tant que "latest"
     fs.copyFileSync(destPath, latestPath);
 
-    // URL de téléchargement
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     const downloadUrl = `${baseUrl}/api/updates/download`;
 
-    // Écrire version.json
     const versionData = {
-      version,
+      version: versionNormalisee,
       filename,
       download_url: downloadUrl,
-      release_notes: release_notes || `Version ${version}`,
+      release_notes: release_notes || `Version ${versionNormalisee}`,
       mandatory: mandatory === 'true' || mandatory === true,
       published_at: new Date().toISOString(),
       published_by: acteur.nomUtilisateur || acteur.nomComplet,
@@ -222,7 +214,6 @@ const publishVersion = async (req, res) => {
 
     ecrireVersion(versionData);
 
-    // Journaliser
     try {
       const journalService = require('../Services/journalService');
       await journalService.logAction({
@@ -230,32 +221,31 @@ const publishVersion = async (req, res) => {
         nomUtilisateur: acteur.nomUtilisateur,
         nomComplet: acteur.nomComplet,
         role: acteur.role,
-        action: `Publication version logiciel: v${version}`,
+        action: `Publication version logiciel: v${versionNormalisee}`,
         actionType: 'PUBLISH_UPDATE',
         tableName: 'Updates',
-        recordId: version,
-        newValue: JSON.stringify({ version, filename, mandatory }),
-        details: `Nouvelle version publiée: ${version} — ${release_notes}`,
+        recordId: versionNormalisee,
+        newValue: JSON.stringify({ version: versionNormalisee, filename, mandatory }),
+        details: `Nouvelle version publiée: ${versionNormalisee} — ${release_notes}`,
         ip: req.ip,
       });
     } catch (e) {
       console.warn('⚠️ Journal non écrit:', e.message);
     }
 
-    console.log(`🚀 [Updates] Nouvelle version publiée: v${version} par ${acteur.nomUtilisateur}`);
+    console.log(`🚀 [Updates] Version publiée: v${versionNormalisee} par ${acteur.nomUtilisateur}`);
 
     res.json({
       success: true,
-      message: `Version ${version} publiée avec succès`,
+      message: `Version ${versionNormalisee} publiée avec succès`,
       version: versionData.version,
       filename: versionData.filename,
       file_size: versionData.file_size,
-      checksum: checksum,
+      checksum,
       download_url: downloadUrl,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    // Nettoyer le fichier uploadé en cas d'erreur
     if (req.file && fs.existsSync(req.file.path)) {
       try {
         fs.unlinkSync(req.file.path);
@@ -317,12 +307,12 @@ const deleteVersion = async (req, res) => {
     const filename = `gescard_v${version}.exe`;
     const filePath = path.join(DOWNLOADS_DIR, filename);
 
-    // Ne pas supprimer la version courante
     const current = lireVersion();
     if (current && current.version === version) {
       return res.status(400).json({
         success: false,
-        message: 'Impossible de supprimer la version courante publiée',
+        message:
+          "Impossible de supprimer la version courante publiée. Restaurez une ancienne version d'abord.",
       });
     }
 
@@ -331,14 +321,174 @@ const deleteVersion = async (req, res) => {
     }
 
     fs.unlinkSync(filePath);
+    console.log(`🗑️ [Updates] Version supprimée: v${version} par ${acteur.nomUtilisateur}`);
 
     res.json({
       success: true,
-      message: `Version ${version} supprimée`,
+      message: `Version ${version} supprimée avec succès.`,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error('❌ Erreur suppression version:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// ============================================
+// RESTORE VERSION — restaurer une ancienne version
+// POST /api/updates/restore/:version
+// ============================================
+const restoreVersion = async (req, res) => {
+  try {
+    const acteur = req.user;
+    if (acteur.role !== 'Administrateur') {
+      return res.status(403).json({ success: false, message: 'Réservé aux Administrateurs' });
+    }
+
+    const { version } = req.params;
+    const filename = `gescard_v${version}.exe`;
+    const filePath = path.join(DOWNLOADS_DIR, filename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        message: `Version ${version} introuvable dans les archives.`,
+      });
+    }
+
+    const current = lireVersion();
+    if (current && current.version === version) {
+      return res.status(400).json({
+        success: false,
+        message: `La version ${version} est déjà la version active.`,
+      });
+    }
+
+    // Copier comme latest
+    const latestPath = path.join(DOWNLOADS_DIR, 'gescard_latest.exe');
+    fs.copyFileSync(filePath, latestPath);
+
+    // Recalculer le checksum
+    const crypto = require('crypto');
+    const fileBuffer = fs.readFileSync(filePath);
+    const checksum = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const downloadUrl = `${baseUrl}/api/updates/download`;
+
+    // Écrire le nouveau version.json
+    const versionData = {
+      version,
+      filename,
+      download_url: downloadUrl,
+      release_notes: `Restauration de la version ${version}`,
+      mandatory: false, // restauration jamais obligatoire
+      published_at: new Date().toISOString(),
+      published_by: acteur.nomUtilisateur || acteur.nomComplet,
+      file_size: fs.statSync(filePath).size,
+      checksum_sha256: checksum,
+      restored: true,
+      restored_at: new Date().toISOString(),
+      previous_version: current?.version || null,
+    };
+
+    ecrireVersion(versionData);
+
+    try {
+      const journalService = require('../Services/journalService');
+      await journalService.logAction({
+        utilisateurId: acteur.id,
+        nomUtilisateur: acteur.nomUtilisateur,
+        nomComplet: acteur.nomComplet,
+        role: acteur.role,
+        action: `Restauration version logiciel: v${version}`,
+        actionType: 'RESTORE_UPDATE',
+        tableName: 'Updates',
+        recordId: version,
+        details: `Version restaurée: ${version} (précédente: ${current?.version || '—'})`,
+        ip: req.ip,
+      });
+    } catch (e) {
+      console.warn('⚠️ Journal non écrit:', e.message);
+    }
+
+    console.log(`♻️ [Updates] Version restaurée: v${version} par ${acteur.nomUtilisateur}`);
+
+    res.json({
+      success: true,
+      message: `Version ${version} restaurée avec succès. Les logiciels terrain recevront cette version.`,
+      version,
+      previous_version: current?.version || null,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('❌ Erreur restauration version:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// ============================================
+// CLEAR ALL — vider toutes les versions
+// DELETE /api/updates/clear-all
+// ============================================
+const clearAll = async (req, res) => {
+  try {
+    const acteur = req.user;
+    if (acteur.role !== 'Administrateur') {
+      return res.status(403).json({ success: false, message: 'Réservé aux Administrateurs' });
+    }
+
+    if (!fs.existsSync(DOWNLOADS_DIR)) {
+      return res.json({ success: true, message: 'Aucun fichier à supprimer.', deleted: 0 });
+    }
+
+    const files = fs
+      .readdirSync(DOWNLOADS_DIR)
+      .filter(
+        (f) =>
+          f.match(/^gescard_v[\d.]+\.exe$/) || f === 'gescard_latest.exe' || f === 'version.json'
+      );
+
+    let deleted = 0;
+    for (const file of files) {
+      try {
+        fs.unlinkSync(path.join(DOWNLOADS_DIR, file));
+        deleted++;
+      } catch (e) {
+        console.warn(`⚠️ Impossible de supprimer ${file}:`, e.message);
+      }
+    }
+
+    console.log(
+      `🧹 [Updates] Tout effacé: ${deleted} fichiers supprimés par ${acteur.nomUtilisateur}`
+    );
+
+    try {
+      const journalService = require('../Services/journalService');
+      await journalService.logAction({
+        utilisateurId: acteur.id,
+        nomUtilisateur: acteur.nomUtilisateur,
+        nomComplet: acteur.nomComplet,
+        role: acteur.role,
+        action: 'Suppression totale des versions logiciel',
+        actionType: 'CLEAR_UPDATES',
+        tableName: 'Updates',
+        recordId: 'all',
+        details: `${deleted} fichiers supprimés`,
+        ip: req.ip,
+      });
+    } catch (e) {
+      console.warn('⚠️ Journal non écrit:', e.message);
+    }
+
+    res.json({
+      success: true,
+      message: `Toutes les versions ont été supprimées (${deleted} fichiers).`,
+      deleted,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('❌ Erreur clear all:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -382,5 +532,7 @@ module.exports = {
   publishVersion,
   getHistory,
   deleteVersion,
+  restoreVersion,
+  clearAll,
   diagnostic,
 };
