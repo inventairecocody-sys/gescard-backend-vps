@@ -1,6 +1,9 @@
 // middleware/auth.js
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { serverError, unauthorized, forbidden } = require('../utils/errorResponse');
+
+const isDev = process.env.NODE_ENV === 'development';
 
 // ============================================
 // CONFIGURATION
@@ -26,21 +29,15 @@ const AUTH_CONFIG = {
 setInterval(() => {
   const size = AUTH_CONFIG.tokenBlacklist.size;
   AUTH_CONFIG.tokenBlacklist.clear();
-  console.log(`🧹 Blacklist nettoyée (${size} tokens révoqués purgés)`);
+  if (isDev) console.log(`🧹 Blacklist nettoyée (${size} tokens révoqués purgés)`);
 }, AUTH_CONFIG.blacklistCleanupInterval);
 
 // ============================================
 // UTILITAIRES
 // ============================================
 
-/**
- * Génère un identifiant de session unique
- */
 const generateSessionId = () => crypto.randomBytes(16).toString('hex');
 
-/**
- * Normalise un rôle (gère les variations)
- */
 const normalizeRole = (role) => {
   if (!role) return null;
 
@@ -49,7 +46,7 @@ const normalizeRole = (role) => {
   const map = {
     administrateur: 'Administrateur',
     admin: 'Administrateur',
-    superviseur: 'Gestionnaire', // Superviseur mappé vers Gestionnaire
+    superviseur: 'Gestionnaire',
     supervisor: 'Gestionnaire',
     gestionnaire: 'Gestionnaire',
     "chef d'équipe": "Chef d'équipe",
@@ -65,50 +62,25 @@ const normalizeRole = (role) => {
 };
 
 // ============================================
-// VERIFY TOKEN (VERSION UNIQUE ET STABLE)
+// VERIFY TOKEN
 // ============================================
 
-/**
- * Vérifie la validité du token JWT
- *
- * ✅ CORRECTION : req.user expose désormais les propriétés
- * en DEUX formats (majuscule ET minuscule) pour assurer
- * la compatibilité avec tous les controllers et services.
- *
- * Avant : NomUtilisateur seulement → les controllers qui
- * lisaient req.user?.nomUtilisateur obtenaient undefined,
- * ce qui causait l'erreur "Paramètres manquants" dans
- * annulationService et un 500 sur tous les exports/imports.
- */
 const verifyToken = (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader?.split(' ')[1];
 
     if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: 'Token manquant',
-        code: 'MISSING_TOKEN',
-      });
+      return unauthorized(res, 'Accès refusé. Veuillez vous connecter.', 'MISSING_TOKEN');
     }
 
-    // Vérifier si le token est révoqué
     if (AUTH_CONFIG.tokenBlacklist.has(token)) {
-      return res.status(401).json({
-        success: false,
-        message: 'Token révoqué',
-        code: 'TOKEN_REVOKED',
-      });
+      return unauthorized(res, 'Session révoquée. Veuillez vous reconnecter.', 'TOKEN_REVOKED');
     }
 
-    // Décoder et vérifier le token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    // Normaliser le rôle
     const role = normalizeRole(decoded.Role || decoded.role);
 
-    // ✅ Pré-calculer les valeurs pour éviter la répétition
     const nomUtilisateur =
       decoded.NomUtilisateur ||
       decoded.nomUtilisateur ||
@@ -121,97 +93,82 @@ const verifyToken = (req, res, next) => {
 
     const agence = decoded.Agence || decoded.agence || '';
 
-    // Construire l'objet utilisateur avec les DEUX conventions de nommage
+    // Deux conventions de nommage pour compatibilité controllers/services
     req.user = {
       id: decoded.id,
 
-      // ─── Format MAJUSCULE (ancienne convention, conservée pour compatibilité) ───
+      // Format MAJUSCULE (ancienne convention)
       NomUtilisateur: nomUtilisateur,
       NomComplet: nomComplet,
       Role: role,
       Agence: agence,
       Email: decoded.Email || decoded.email || '',
 
-      // ─── Format minuscule (convention utilisée dans les controllers/services) ───
-      // ✅ Ces propriétés étaient MANQUANTES et causaient le 500 sur export/import
+      // Format minuscule (convention controllers/services)
       nomUtilisateur: nomUtilisateur,
       nomComplet: nomComplet,
       agence: agence,
       email: decoded.Email || decoded.email || '',
 
-      // ─── Commun aux deux conventions ───
-      role: role, // minuscule (utilisé partout dans les controllers)
+      // Commun
+      role: role,
       coordination: decoded.coordination || decoded.Coordination || null,
+      coordination_id: decoded.coordination_id || null,
       level: AUTH_CONFIG.roles[role]?.level || 0,
       permissions: AUTH_CONFIG.roles[role]?.permissions || [],
     };
 
-    console.log(`✅ Utilisateur authentifié :`, {
-      id: req.user.id,
-      nomUtilisateur: req.user.nomUtilisateur,
-      role: req.user.role,
-      coordination: req.user.coordination,
-    });
+    // Log uniquement en développement
+    if (isDev) {
+      console.log(
+        `✅ [AUTH] ${req.user.nomUtilisateur} (${req.user.role}) → ${req.method} ${req.originalUrl}`
+      );
+    }
 
     next();
   } catch (error) {
-    // Gestion spécifique des erreurs JWT
     if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expiré',
-        code: 'TOKEN_EXPIRED',
-      });
+      return unauthorized(
+        res,
+        'Votre session a expiré. Veuillez vous reconnecter.',
+        'TOKEN_EXPIRED'
+      );
     }
 
     if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token invalide',
-        code: 'INVALID_TOKEN',
-      });
+      return unauthorized(res, 'Session invalide. Veuillez vous reconnecter.', 'INVALID_TOKEN');
     }
 
-    // Erreur inattendue
-    console.error('❌ Erreur auth middleware:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Erreur serveur',
-      code: 'AUTH_ERROR',
-    });
+    return serverError(res, error, 'AUTH_MIDDLEWARE');
   }
 };
 
-// Alias français pour compatibilité avec le code existant
-const verifierToken = verifyToken;
+const verifierToken = verifyToken; // Alias français pour compatibilité
 
 // ============================================
 // ROLE CHECK
 // ============================================
 
-/**
- * Vérifie que l'utilisateur a un des rôles autorisés
- */
 const verifyRole = (roles = []) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Non authentifié',
-        code: 'UNAUTHENTICATED',
-      });
+      return unauthorized(
+        res,
+        'Veuillez vous connecter pour accéder à cette ressource.',
+        'UNAUTHENTICATED'
+      );
     }
 
     const normalizedRoles = roles.map(normalizeRole);
 
     if (!normalizedRoles.includes(req.user.role)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Rôle non autorisé',
-        yourRole: req.user.role,
-        requiredRoles: roles,
-        code: 'FORBIDDEN_ROLE',
-      });
+      return forbidden(
+        res,
+        "Vous n'avez pas les droits nécessaires pour accéder à cette section.",
+        'FORBIDDEN_ROLE',
+        // Détails visibles uniquement en dev
+        isDev ? { yourRole: req.user.role, requiredRoles: roles } : undefined
+      );
     }
 
     next();
@@ -222,27 +179,23 @@ const verifyRole = (roles = []) => {
 // LEVEL CHECK
 // ============================================
 
-/**
- * Vérifie que l'utilisateur a un niveau suffisant
- */
 const verifyLevel = (requiredLevel = 0) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Non authentifié',
-        code: 'UNAUTHENTICATED',
-      });
+      return unauthorized(
+        res,
+        'Veuillez vous connecter pour accéder à cette ressource.',
+        'UNAUTHENTICATED'
+      );
     }
 
     if ((req.user.level || 0) < requiredLevel) {
-      return res.status(403).json({
-        success: false,
-        message: 'Niveau insuffisant',
-        required: requiredLevel,
-        yourLevel: req.user.level || 0,
-        code: 'INSUFFICIENT_LEVEL',
-      });
+      return forbidden(
+        res,
+        "Votre niveau d'accès ne permet pas d'effectuer cette action.",
+        'INSUFFICIENT_LEVEL',
+        isDev ? { required: requiredLevel, yourLevel: req.user.level || 0 } : undefined
+      );
     }
 
     next();
@@ -253,32 +206,28 @@ const verifyLevel = (requiredLevel = 0) => {
 // PERMISSION CHECK
 // ============================================
 
-/**
- * Vérifie que l'utilisateur a une permission spécifique
- */
 const hasPermission = (permission) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Non authentifié',
-        code: 'UNAUTHENTICATED',
-      });
+      return unauthorized(
+        res,
+        'Veuillez vous connecter pour accéder à cette ressource.',
+        'UNAUTHENTICATED'
+      );
     }
 
     const permissions = req.user.permissions || [];
 
-    // '*' signifie toutes les permissions
     if (permissions.includes('*') || permissions.includes(permission)) {
       return next();
     }
 
-    return res.status(403).json({
-      success: false,
-      message: `Permission requise: ${permission}`,
-      yourPermissions: permissions,
-      code: 'MISSING_PERMISSION',
-    });
+    return forbidden(
+      res,
+      "Vous n'avez pas la permission d'effectuer cette action.",
+      'MISSING_PERMISSION',
+      isDev ? { required: permission, yourPermissions: permissions } : undefined
+    );
   };
 };
 
@@ -286,19 +235,16 @@ const hasPermission = (permission) => {
 // LOGOUT / REVOKE TOKEN
 // ============================================
 
-/**
- * Révoque un token (ajout à la blacklist)
- */
 const revokeToken = (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
     if (token) {
       AUTH_CONFIG.tokenBlacklist.add(token);
-      console.log(`🔒 Token révoqué: ${token.substring(0, 15)}...`);
+      if (isDev) console.log(`🔒 [AUTH] Token révoqué: ${token.substring(0, 15)}...`);
     }
     next();
   } catch (error) {
-    console.error('❌ Erreur révocation token:', error);
+    console.error('❌ [AUTH] Erreur révocation token:', error);
     next();
   }
 };
@@ -307,9 +253,6 @@ const revokeToken = (req, res, next) => {
 // UTILITAIRES COMPLÉMENTAIRES
 // ============================================
 
-/**
- * Récupère les informations utilisateur depuis le token
- */
 const getUserFromToken = (token) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -327,15 +270,11 @@ const getUserFromToken = (token) => {
   }
 };
 
-/**
- * Rafraîchit un token
- */
 const refreshToken = (oldToken) => {
   try {
     const decoded = jwt.verify(oldToken, process.env.JWT_SECRET, { ignoreExpiration: true });
     const { id, NomUtilisateur, role, coordination } = decoded;
 
-    // Générer un nouveau token
     const newToken = jwt.sign({ id, NomUtilisateur, role, coordination }, process.env.JWT_SECRET, {
       expiresIn: AUTH_CONFIG.jwtExpiration,
     });
@@ -347,26 +286,19 @@ const refreshToken = (oldToken) => {
 };
 
 // ============================================
-// EXPORT FINAL STABLE
+// EXPORT
 // ============================================
 
 module.exports = {
-  // Fonction principale
   verifyToken,
-  verifierToken, // Alias français pour compatibilité
-
-  // Vérifications
+  verifierToken,
   verifyRole,
   verifyLevel,
   hasPermission,
-
-  // Gestion des tokens
   revokeToken,
   refreshToken,
   getUserFromToken,
   generateSessionId,
-
-  // Utilitaires
   normalizeRole,
   AUTH_CONFIG,
 };

@@ -4,6 +4,13 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../db/db');
 const journalService = require('../Services/journalService');
+const {
+  serverError,
+  badRequest,
+  unauthorized,
+  notFound,
+  tooManyRequests,
+} = require('../utils/errorResponse');
 
 // ✅ Import du système de ban centralisé (évite le doublon avec securityMiddleware)
 const { recordAuthFailure } = require('../middleware/securityMiddleware');
@@ -12,15 +19,12 @@ const CONFIG = {
   saltRounds: 12,
   jwtExpiration: '8h',
   minPasswordLength: 8,
-  // Ces valeurs sont maintenant gérées par securityMiddleware
-  // mais on garde maxLoginAttempts pour la logique applicative (message à l'utilisateur)
   maxLoginAttempts: 5,
   lockoutDuration: 15 * 60 * 1000,
   validRoles: ['Administrateur', 'Gestionnaire', "Chef d'équipe", 'Opérateur'],
 };
 
 // Map locale uniquement pour afficher le temps restant à l'utilisateur
-// Le vrai blocage est géré par securityMiddleware (évite doublon)
 const loginAttempts = new Map();
 
 setInterval(
@@ -42,8 +46,8 @@ function getClientIP(req) {
   );
 }
 
-// Message d'erreur générique — ne distingue JAMAIS "email inconnu" vs "mauvais mdp"
-const INVALID_CREDENTIALS_MSG = "Nom d'utilisateur ou mot de passe incorrect";
+// Message générique — ne distingue JAMAIS "utilisateur inconnu" vs "mauvais mdp"
+const INVALID_CREDENTIALS_MSG = 'Identifiant ou mot de passe incorrect. Veuillez réessayer.';
 
 // ============================================
 // LOGIN USER
@@ -61,18 +65,14 @@ const loginUser = async (req, res) => {
       typeof NomUtilisateur !== 'string' ||
       typeof MotDePasse !== 'string'
     ) {
-      // Compter quand même comme tentative (évite l'énumération via 400 vs 401)
       recordAuthFailure(clientIp);
-      return res.status(400).json({
-        success: false,
-        message: "Nom d'utilisateur et mot de passe requis",
-      });
+      return badRequest(res, "Nom d'utilisateur et mot de passe requis.", 'MISSING_CREDENTIALS');
     }
 
     // Longueur max pour éviter les attaques par payload
     if (NomUtilisateur.length > 100 || MotDePasse.length > 200) {
       recordAuthFailure(clientIp);
-      return res.status(400).json({ success: false, message: INVALID_CREDENTIALS_MSG });
+      return badRequest(res, INVALID_CREDENTIALS_MSG, 'INVALID_CREDENTIALS');
     }
 
     // ── 2. Vérification du lockout local (pour le message de temps restant) ──
@@ -81,10 +81,11 @@ const loginUser = async (req, res) => {
 
     if (attemptData.lockUntil > now) {
       const waitTime = Math.ceil((attemptData.lockUntil - now) / 1000 / 60);
-      return res.status(429).json({
-        success: false,
-        message: `Trop de tentatives. Réessayez dans ${waitTime} minute${waitTime > 1 ? 's' : ''}.`,
-      });
+      return tooManyRequests(
+        res,
+        `Trop de tentatives. Réessayez dans ${waitTime} minute${waitTime > 1 ? 's' : ''}.`,
+        'ACCOUNT_LOCKED'
+      );
     }
 
     // ── 3. Recherche de l'utilisateur ──
@@ -94,39 +95,36 @@ const loginUser = async (req, res) => {
 
     const utilisateur = result.rows[0];
 
-    // ── 4. Vérification mot de passe (même si utilisateur inexistant → timing constant) ──
-    // On fait TOUJOURS bcrypt.compare pour éviter les timing attacks
+    // ── 4. Vérification mot de passe (timing constant même si utilisateur inexistant) ──
     const fakeHash = '$2a$12$fakehashfakehashfakehashfakehashfakehashfakehashfakehashfa';
     const passwordToCheck = utilisateur ? utilisateur.motdepasse : fakeHash;
     const isMatch = await bcrypt.compare(MotDePasse, passwordToCheck);
 
     if (!utilisateur || !isMatch) {
-      // Enregistrer l'échec dans les DEUX systèmes
       attemptData.attempts++;
       if (attemptData.attempts >= CONFIG.maxLoginAttempts) {
         attemptData.lockUntil = now + CONFIG.lockoutDuration;
       }
       loginAttempts.set(clientIp, attemptData);
-
-      // Notifier le système de ban centralisé
       recordAuthFailure(clientIp);
 
-      // ✅ Message identique que l'utilisateur existe ou non
-      return res.status(401).json({ success: false, message: INVALID_CREDENTIALS_MSG });
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_CREDENTIALS',
+        message: INVALID_CREDENTIALS_MSG,
+      });
     }
 
     // ── 5. Vérification du compte actif ──
     if (!utilisateur.actif) {
-      // Ne pas révéler que le compte existe mais est désactivé via un message différent
-      // On retourne quand même un message spécifique car c'est une UX nécessaire
       return res.status(401).json({
         success: false,
-        message: 'Ce compte est désactivé. Contactez un administrateur.',
+        code: 'ACCOUNT_DISABLED',
+        message: 'Votre compte est désactivé. Contactez un administrateur.',
       });
     }
 
-    // ── 6. Connexion réussie ──
-    // Réinitialiser les tentatives
+    // ── 6. Connexion réussie — réinitialiser les tentatives ──
     loginAttempts.delete(clientIp);
 
     await db.query('UPDATE utilisateurs SET derniereconnexion = NOW() WHERE id = $1', [
@@ -147,7 +145,7 @@ const loginUser = async (req, res) => {
       { expiresIn: CONFIG.jwtExpiration }
     );
 
-    // Journalisation (ne pas bloquer la réponse si ça échoue)
+    // Journalisation (ne bloque pas la réponse si ça échoue)
     journalService
       .logAction({
         utilisateurId: utilisateur.id,
@@ -183,6 +181,7 @@ const loginUser = async (req, res) => {
 
     return res.json({
       success: true,
+      code: 'LOGIN_SUCCESS',
       message: 'Connexion réussie',
       token,
       utilisateur: {
@@ -201,13 +200,7 @@ const loginUser = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ [LOGIN] Erreur:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Erreur serveur',
-      // ✅ Jamais error.message en production
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
+    return serverError(res, error, 'LOGIN');
   }
 };
 
@@ -217,7 +210,7 @@ const loginUser = async (req, res) => {
 const logoutUser = async (req, res) => {
   try {
     if (!req.user?.id) {
-      return res.status(401).json({ success: false, message: 'Utilisateur non authentifié' });
+      return unauthorized(res, 'Utilisateur non authentifié.', 'NOT_AUTHENTICATED');
     }
 
     journalService
@@ -239,12 +232,12 @@ const logoutUser = async (req, res) => {
 
     return res.json({
       success: true,
-      message: 'Déconnexion réussie',
+      code: 'LOGOUT_SUCCESS',
+      message: 'Vous avez été déconnecté avec succès.',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Erreur déconnexion:', error.message);
-    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+    return serverError(res, error, 'LOGOUT');
   }
 };
 
@@ -254,18 +247,15 @@ const logoutUser = async (req, res) => {
 const verifyToken = async (req, res) => {
   try {
     if (!req.user) {
-      return res.status(401).json({ success: false, valid: false, message: 'Token invalide' });
+      return unauthorized(res, 'Token invalide ou expiré.', 'INVALID_TOKEN');
     }
 
     const result = await db.query('SELECT id, actif FROM utilisateurs WHERE id = $1', [
       req.user.id,
     ]);
+
     if (result.rows.length === 0 || !result.rows[0].actif) {
-      return res.status(401).json({
-        success: false,
-        valid: false,
-        message: 'Utilisateur inexistant ou désactivé',
-      });
+      return unauthorized(res, 'Ce compte est inexistant ou désactivé.', 'ACCOUNT_INACTIVE');
     }
 
     return res.json({
@@ -283,8 +273,7 @@ const verifyToken = async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Erreur vérification token:', error.message);
-    return res.status(500).json({ success: false, valid: false, message: 'Erreur serveur' });
+    return serverError(res, error, 'VERIFY_TOKEN');
   }
 };
 
@@ -294,7 +283,7 @@ const verifyToken = async (req, res) => {
 const refreshToken = async (req, res) => {
   try {
     if (!req.user?.id) {
-      return res.status(401).json({ success: false, message: 'Utilisateur non authentifié' });
+      return unauthorized(res, 'Utilisateur non authentifié.', 'NOT_AUTHENTICATED');
     }
 
     const newToken = jwt.sign(
@@ -313,13 +302,13 @@ const refreshToken = async (req, res) => {
 
     return res.json({
       success: true,
+      code: 'TOKEN_REFRESHED',
       token: newToken,
-      message: 'Token rafraîchi avec succès',
+      message: 'Session prolongée avec succès.',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Erreur refresh token:', error.message);
-    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+    return serverError(res, error, 'REFRESH_TOKEN');
   }
 };
 
@@ -331,11 +320,12 @@ const forgotPassword = async (req, res) => {
     const { email } = req.body;
 
     if (!email || typeof email !== 'string' || email.length > 255) {
-      return res.status(400).json({ success: false, message: 'Email requis' });
+      return badRequest(res, 'Veuillez fournir une adresse email valide.', 'INVALID_EMAIL');
     }
 
-    // ✅ Réponse identique que l'email existe ou non (évite l'énumération d'emails)
-    const GENERIC_MSG = 'Si cet email existe, un lien de réinitialisation a été envoyé';
+    // Réponse identique que l'email existe ou non (évite l'énumération d'emails)
+    const GENERIC_MSG =
+      'Si cet email est associé à un compte, un lien de réinitialisation a été envoyé.';
 
     const result = await db.query(
       'SELECT id, nomutilisateur, nomcomplet FROM utilisateurs WHERE email = $1 AND actif = true',
@@ -343,7 +333,6 @@ const forgotPassword = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      // ✅ Même réponse — pas de "cet email n'existe pas"
       return res.json({ success: true, message: GENERIC_MSG, timestamp: new Date().toISOString() });
     }
 
@@ -352,7 +341,6 @@ const forgotPassword = async (req, res) => {
       expiresIn: '1h',
     });
 
-    // ✅ CORRIGÉ : Ne jamais logger le token en clair
     console.log(`📧 [FORGOT] Demande de réinitialisation pour: ${utilisateur.nomutilisateur}`);
     // TODO: Envoyer l'email avec le lien (ne pas logger le token)
     // await emailService.sendResetLink(email, resetToken);
@@ -374,13 +362,12 @@ const forgotPassword = async (req, res) => {
     return res.json({
       success: true,
       message: GENERIC_MSG,
-      // ✅ Token en dev uniquement, et seulement si la feature email n'est pas implémentée
+      // Token visible en dev uniquement (avant implémentation email)
       ...(process.env.NODE_ENV === 'development' && { resetToken }),
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Erreur forgot password:', error.message);
-    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+    return serverError(res, error, 'FORGOT_PASSWORD');
   }
 };
 
@@ -394,29 +381,30 @@ const resetPassword = async (req, res) => {
     const { token, newPassword } = req.body;
 
     if (!token || !newPassword || typeof token !== 'string' || typeof newPassword !== 'string') {
-      return res.status(400).json({
-        success: false,
-        message: 'Token et nouveau mot de passe requis',
-      });
+      return badRequest(res, 'Token et nouveau mot de passe requis.', 'MISSING_FIELDS');
     }
 
     if (newPassword.length < CONFIG.minPasswordLength) {
-      return res.status(400).json({
-        success: false,
-        message: `Le mot de passe doit contenir au moins ${CONFIG.minPasswordLength} caractères`,
-      });
+      return badRequest(
+        res,
+        `Le mot de passe doit contenir au moins ${CONFIG.minPasswordLength} caractères.`,
+        'PASSWORD_TOO_SHORT'
+      );
     }
 
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch {
-      return res.status(401).json({ success: false, message: 'Token invalide ou expiré' });
+      return unauthorized(
+        res,
+        'Ce lien est invalide ou a expiré. Faites une nouvelle demande.',
+        'TOKEN_EXPIRED'
+      );
     }
 
-    // ✅ Vérifier que le token a bien été émis pour un reset
     if (!decoded?.id || decoded.purpose !== 'reset') {
-      return res.status(401).json({ success: false, message: 'Token invalide' });
+      return unauthorized(res, 'Token de réinitialisation invalide.', 'INVALID_RESET_TOKEN');
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, CONFIG.saltRounds);
@@ -430,7 +418,7 @@ const resetPassword = async (req, res) => {
 
     if (userCheck.rows.length === 0) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Utilisateur introuvable' });
+      return notFound(res, 'Utilisateur introuvable.', 'USER_NOT_FOUND');
     }
 
     const utilisateur = userCheck.rows[0];
@@ -458,13 +446,13 @@ const resetPassword = async (req, res) => {
 
     return res.json({
       success: true,
-      message: 'Mot de passe réinitialisé avec succès',
+      code: 'PASSWORD_RESET_SUCCESS',
+      message: 'Mot de passe mis à jour avec succès. Vous pouvez maintenant vous connecter.',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('❌ Erreur reset password:', error.message);
-    return res.status(500).json({ success: false, message: 'Erreur serveur' });
+    return serverError(res, error, 'RESET_PASSWORD');
   } finally {
     client.release();
   }
