@@ -625,14 +625,20 @@ router.get('/sync/get-data', authenticate, requireAdmin, async (req, res) => {
 });
 
 /**
- * 9. Test de connexion Google Drive
+ * 9. Test de connexion Google Drive (VERSION CORRIGÉE)
  * GET /api/backup/test
  */
 router.get('/test', async (req, res) => {
   try {
     console.log('🧪 Test Google Drive demandé');
+    console.log('📋 Variables process.env:', {
+      GOOGLE_CLIENT_ID: !!process.env.GOOGLE_CLIENT_ID,
+      GOOGLE_CLIENT_SECRET: !!process.env.GOOGLE_CLIENT_SECRET,
+      GOOGLE_REFRESH_TOKEN: !!process.env.GOOGLE_REFRESH_TOKEN,
+      GOOGLE_REDIRECT_URI: !!process.env.GOOGLE_REDIRECT_URI,
+    });
 
-    // Vérifier la configuration
+    // Vérifier la configuration - SEULEMENT les 3 variables essentielles
     const config = {
       GOOGLE_CLIENT_ID: !!process.env.GOOGLE_CLIENT_ID,
       GOOGLE_CLIENT_SECRET: !!process.env.GOOGLE_CLIENT_SECRET,
@@ -641,7 +647,9 @@ router.get('/test', async (req, res) => {
       AUTO_RESTORE: process.env.AUTO_RESTORE,
     };
 
-    const fullyConfigured = Object.values(config).every((v) => v === true || v === 'true');
+    // Seules les 3 premières sont REQUISES
+    const requiredVars = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN'];
+    const fullyConfigured = requiredVars.every((varName) => !!process.env[varName]);
 
     if (!fullyConfigured) {
       return res.json({
@@ -649,9 +657,7 @@ router.get('/test', async (req, res) => {
         message: 'Configuration Google Drive incomplète',
         config: {
           ...config,
-          missing: Object.entries(config)
-            .filter((entry) => !entry[1] || entry[1] === 'false')
-            .map((entry) => entry[0]),
+          missing: requiredVars.filter((varName) => !process.env[varName]),
         },
         instructions: [
           '1. Obtenez des credentials Google Drive API',
