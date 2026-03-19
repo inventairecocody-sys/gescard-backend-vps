@@ -227,6 +227,38 @@ const syncController = {
   },
 
   /**
+   * Comptage avant téléchargement — pour barre % précise côté client
+   * GET /api/sync/count?since=ISO
+   *
+   * Appelé UNE SEULE FOIS avant de commencer le pull.
+   * Retourne le nombre exact de cartes à recevoir.
+   * Le client peut alors calculer : % = reçues / total × 100
+   */
+  async count(req, res) {
+    const { since } = req.query;
+    const site = req.site;
+
+    try {
+      const result = await syncService.countDownload(site, since || null);
+
+      res.json({
+        success: true,
+        total: result.total,
+        since: result.since,
+        is_full_sync: result.is_full_sync,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('❌ Erreur count:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  },
+
+  /**
    * Récupération des utilisateurs pour un site
    * GET /api/sync/users
    *

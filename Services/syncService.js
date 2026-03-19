@@ -725,6 +725,75 @@ const syncService = {
       return [];
     }
   },
+
+  // ----------------------------------------------------------
+  // ✅ COMPTAGE AVANT TÉLÉCHARGEMENT — Pour % précis côté client
+  //
+  // Appelé UNE SEULE FOIS avant de commencer le pull.
+  // Retourne le nombre exact de cartes que le client va recevoir,
+  // ce qui permet de calculer :
+  //   % = (cartes_reçues / total) × 100   ← vrai pourcentage
+  //
+  // Au lieu de l'ancien calcul aveugle :
+  //   % = 45 + (batch_num × 5)            ← estimation sans base
+  //
+  // Paramètres :
+  //   site  : objet site authentifié (token JWT vérifié)
+  //   since : timestamp ISO — même valeur que celle passée à prepareDownload
+  //           "2000-01-01T00:00:00.000Z" = premier chargement complet
+  //           sinon = sync delta depuis la dernière sync
+  //
+  // Réponse :
+  //   { total, since, is_full_sync }
+  //
+  // Index recommandé pour la performance sur 1M+ lignes :
+  //   CREATE INDEX IF NOT EXISTS idx_cartes_count_dl
+  //     ON cartes(deleted_at, sync_timestamp, updated_at);
+  // ----------------------------------------------------------
+  async countDownload(site, since) {
+    try {
+      const sinceDate = since
+        ? new Date(since).toISOString()
+        : new Date('2000-01-01').toISOString();
+
+      // Sync complète si since est avant 2000-01-02 (= "tout depuis le début")
+      const isFullSync = new Date(sinceDate) <= new Date('2000-01-02T00:00:00.000Z');
+
+      let result;
+
+      if (isFullSync) {
+        // Premier chargement — compter toutes les cartes actives
+        result = await db.query(
+          `SELECT COUNT(*) AS total
+           FROM cartes
+           WHERE deleted_at IS NULL`
+        );
+      } else {
+        // Sync delta — uniquement les cartes modifiées depuis last_sync
+        result = await db.query(
+          `SELECT COUNT(*) AS total
+           FROM cartes
+           WHERE deleted_at IS NULL
+             AND (sync_timestamp >= $1::TIMESTAMP
+               OR updated_at    >= $1::TIMESTAMP)`,
+          [sinceDate]
+        );
+      }
+
+      const total = parseInt(result.rows[0].total, 10) || 0;
+
+      console.log(
+        `📊 countDownload ${site.id}: total=${total}` +
+          ` | since=${sinceDate}` +
+          ` | is_full_sync=${isFullSync}`
+      );
+
+      return { total, since: sinceDate, is_full_sync: isFullSync };
+    } catch (error) {
+      console.error('❌ Erreur countDownload:', error);
+      throw error;
+    }
+  },
 };
 
 module.exports = syncService;

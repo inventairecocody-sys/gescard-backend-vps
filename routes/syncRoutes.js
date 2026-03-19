@@ -57,6 +57,14 @@ router.get('/download', verifySiteToken, async (req, res) => {
   await syncController.download(req, res);
 });
 
+// ✅ Comptage avant téléchargement — pour barre % précise côté client
+// GET /api/sync/count?since=ISO
+// Appelé UNE SEULE FOIS avant le premier GET /download
+// Retourne { total, since, is_full_sync }
+router.get('/count', verifySiteToken, async (req, res) => {
+  await syncController.count(req, res);
+});
+
 // Confirmation de réception
 router.post('/confirm', verifySiteToken, async (req, res) => {
   await syncController.confirm(req, res);
