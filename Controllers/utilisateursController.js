@@ -614,6 +614,72 @@ const activateUser = async (req, res) => {
   }
 };
 
+// ── PURGE USER (suppression définitive) ──
+const purgeUser = async (req, res) => {
+  const client = await db.getClient();
+  const startTime = Date.now();
+  try {
+    const acteur = req.user;
+    // Réservé aux Administrateurs uniquement
+    if (acteur.role !== 'Administrateur') {
+      client.release();
+      return forbidden(res, 'Seul un Administrateur peut supprimer définitivement un compte');
+    }
+    await client.query('BEGIN');
+    const userId = parseInt(req.params.id);
+    if (isNaN(userId) || userId <= 0) {
+      await client.query('ROLLBACK');
+      return badRequest(res, 'ID utilisateur invalide');
+    }
+    if (userId === parseInt(req.user.id)) {
+      await client.query('ROLLBACK');
+      return badRequest(res, 'Vous ne pouvez pas supprimer votre propre compte');
+    }
+    const userResult = await client.query('SELECT * FROM utilisateurs WHERE id = $1', [userId]);
+    const user = userResult.rows[0];
+    if (!user) {
+      await client.query('ROLLBACK');
+      return notFound(res, 'Utilisateur non trouvé');
+    }
+    // Supprimer les liaisons sites
+    await client.query('DELETE FROM utilisateur_sites WHERE utilisateur_id = $1', [userId]);
+    // Supprimer l'utilisateur définitivement
+    await client.query('DELETE FROM utilisateurs WHERE id = $1', [userId]);
+    await journalService.logAction({
+      utilisateurId: req.user.id,
+      nomUtilisateur: req.user.nomUtilisateur,
+      nomComplet: req.user.nomComplet,
+      role: req.user.role,
+      agence: req.user.agence,
+      coordination: req.user.coordination,
+      action: `Suppression définitive utilisateur: ${user.nomutilisateur}`,
+      actionType: 'PURGE_USER',
+      tableName: 'Utilisateurs',
+      recordId: String(userId),
+      oldValue: JSON.stringify({
+        nomUtilisateur: user.nomutilisateur,
+        nomComplet: user.nomcomplet,
+        role: user.role,
+      }),
+      newValue: null,
+      details: `Compte supprimé définitivement: ${user.nomcomplet} (${user.role})`,
+      ip: req.ip,
+    });
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: 'Utilisateur supprimé définitivement',
+      performance: { duration: Date.now() - startTime },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    return serverError(res, error, 'purgeUser');
+  } finally {
+    client.release();
+  }
+};
+
 // ── RESET PASSWORD ──
 const resetPassword = async (req, res) => {
   const client = await db.getClient();
@@ -1044,6 +1110,7 @@ module.exports = {
   createUser,
   updateUser,
   deleteUser,
+  purgeUser,
   activateUser,
   resetPassword,
   getUserStats,

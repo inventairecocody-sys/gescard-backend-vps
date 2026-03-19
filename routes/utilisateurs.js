@@ -231,6 +231,12 @@ router.post('/:id/reset-password', RATE.sensitive, ctrl.resetPassword);
 router.post('/:id/activate', RATE.sensitive, ctrl.activateUser);
 
 /**
+ * Supprimer définitivement un utilisateur — Administrateur uniquement
+ * DELETE /api/utilisateurs/:id/purge
+ */
+router.delete('/:id/purge', RATE.sensitive, ctrl.purgeUser);
+
+/**
  * Désactiver un utilisateur
  * DELETE /api/utilisateurs/:id
  */
