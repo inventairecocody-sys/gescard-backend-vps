@@ -227,19 +227,18 @@ const syncController = {
   },
 
   /**
-   * Comptage avant téléchargement — pour barre % précise côté client
+   * ✅ NOUVEAU : Comptage des cartes à télécharger avant le pull
    * GET /api/sync/count?since=ISO
    *
-   * Appelé UNE SEULE FOIS avant de commencer le pull.
-   * Retourne le nombre exact de cartes à recevoir.
-   * Le client peut alors calculer : % = reçues / total × 100
+   * Permet au client de savoir combien de cartes l'attendent
+   * et d'afficher une barre de progression précise.
    */
   async count(req, res) {
     const { since } = req.query;
     const site = req.site;
 
     try {
-      const result = await syncService.countDownload(site, since || null);
+      const result = await syncService.countDownload(site, since);
 
       res.json({
         success: true,
@@ -250,6 +249,39 @@ const syncController = {
       });
     } catch (error) {
       console.error('❌ Erreur count:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  },
+
+  /**
+   * ✅ NOUVEAU : Vérification de cohérence après sync
+   * GET /api/sync/verify
+   *
+   * Retourne le comptage total des cartes actives sur le serveur
+   * pour la coordination du site connecté.
+   * Le client compare avec son comptage local — si écart > 2%
+   * il déclenche automatiquement une resync complète.
+   */
+  async verify(req, res) {
+    const site = req.site;
+
+    try {
+      const result = await syncService.verifySync(site);
+
+      res.json({
+        success: true,
+        total_serveur: result.total_serveur,
+        coordination_id: result.coordination_id,
+        last_modified: result.last_modified,
+        verified_at: result.verified_at,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('❌ Erreur verify:', error);
       res.status(500).json({
         success: false,
         error: error.message,

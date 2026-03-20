@@ -456,17 +456,20 @@ const syncService = {
       let query, params;
 
       if (last_id > 0) {
-        // Batch suivant — curseur uniquement par id
+        // ✅ CORRECTION bug 1M données : batch suivant conserve le filtre since
+        // AVANT : filtre since disparaissait → téléchargement de TOUTES les cartes
+        // APRÈS : double filtre id + since → seulement les cartes modifiées
         query = `
           SELECT * FROM cartes
           WHERE deleted_at IS NULL
             AND id > $1
+            AND (sync_timestamp >= $2::TIMESTAMP OR updated_at >= $2::TIMESTAMP)
           ORDER BY id ASC
-          LIMIT $2
+          LIMIT $3
         `;
-        params = [last_id, fetchLimit];
+        params = [last_id, sinceDate, fetchLimit];
       } else {
-        // Premier batch — filtre par timestamp
+        // Premier batch — filtre par timestamp uniquement
         query = `
           SELECT * FROM cartes
           WHERE deleted_at IS NULL
@@ -508,6 +511,86 @@ const syncService = {
       };
     } catch (error) {
       console.error('❌ Erreur prepareDownload:', error);
+      throw error;
+    }
+  },
+
+  // ----------------------------------------------------------
+  // ✅ NOUVEAU : Compter les cartes à télécharger avant le pull
+  // Utilisé par le client pour afficher la progression et détecter
+  // si une resync complète est nécessaire
+  // ----------------------------------------------------------
+  async countDownload(site, since) {
+    try {
+      const sinceDate = since
+        ? new Date(since).toISOString()
+        : new Date('2000-01-01').toISOString();
+
+      const isFullSync = sinceDate <= new Date('2000-01-02').toISOString();
+
+      const result = await db.query(
+        `SELECT COUNT(*) AS total
+         FROM cartes
+         WHERE deleted_at IS NULL
+           AND (sync_timestamp >= $1::TIMESTAMP OR updated_at >= $1::TIMESTAMP)`,
+        [sinceDate]
+      );
+
+      const total = parseInt(result.rows[0].total) || 0;
+
+      console.log(`📊 countDownload ${site.id}: ${total} cartes depuis ${sinceDate}`);
+
+      return {
+        total,
+        since: sinceDate,
+        is_full_sync: isFullSync,
+      };
+    } catch (error) {
+      console.error('❌ Erreur countDownload:', error);
+      throw error;
+    }
+  },
+
+  // ----------------------------------------------------------
+  // ✅ NOUVEAU : Vérification de cohérence finale
+  // Le client appelle cet endpoint après chaque sync pour vérifier
+  // que son comptage local correspond au comptage serveur.
+  // Si écart → le client déclenche une resync complète automatiquement.
+  // ----------------------------------------------------------
+  async verifySync(site) {
+    try {
+      // Compter les cartes actives sur le serveur pour cette coordination
+      const result = await db.query(
+        `SELECT COUNT(*) AS total
+         FROM cartes
+         WHERE deleted_at IS NULL
+           AND coordination_id = $1`,
+        [site.coordination_id]
+      );
+
+      const totalServeur = parseInt(result.rows[0].total) || 0;
+
+      // Récupérer le timestamp de la dernière carte modifiée
+      const lastModified = await db.query(
+        `SELECT MAX(GREATEST(sync_timestamp, updated_at)) AS last_ts
+         FROM cartes
+         WHERE deleted_at IS NULL
+           AND coordination_id = $1`,
+        [site.coordination_id]
+      );
+
+      const lastTs = lastModified.rows[0]?.last_ts || null;
+
+      console.log(`🔍 verifySync ${site.id}: ${totalServeur} cartes actives | last_ts=${lastTs}`);
+
+      return {
+        total_serveur: totalServeur,
+        coordination_id: site.coordination_id,
+        last_modified: lastTs,
+        verified_at: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error('❌ Erreur verifySync:', error);
       throw error;
     }
   },
@@ -723,75 +806,6 @@ const syncService = {
     } catch (error) {
       console.error('❌ Erreur getAllCoordinations:', error);
       return [];
-    }
-  },
-
-  // ----------------------------------------------------------
-  // ✅ COMPTAGE AVANT TÉLÉCHARGEMENT — Pour % précis côté client
-  //
-  // Appelé UNE SEULE FOIS avant de commencer le pull.
-  // Retourne le nombre exact de cartes que le client va recevoir,
-  // ce qui permet de calculer :
-  //   % = (cartes_reçues / total) × 100   ← vrai pourcentage
-  //
-  // Au lieu de l'ancien calcul aveugle :
-  //   % = 45 + (batch_num × 5)            ← estimation sans base
-  //
-  // Paramètres :
-  //   site  : objet site authentifié (token JWT vérifié)
-  //   since : timestamp ISO — même valeur que celle passée à prepareDownload
-  //           "2000-01-01T00:00:00.000Z" = premier chargement complet
-  //           sinon = sync delta depuis la dernière sync
-  //
-  // Réponse :
-  //   { total, since, is_full_sync }
-  //
-  // Index recommandé pour la performance sur 1M+ lignes :
-  //   CREATE INDEX IF NOT EXISTS idx_cartes_count_dl
-  //     ON cartes(deleted_at, sync_timestamp, updated_at);
-  // ----------------------------------------------------------
-  async countDownload(site, since) {
-    try {
-      const sinceDate = since
-        ? new Date(since).toISOString()
-        : new Date('2000-01-01').toISOString();
-
-      // Sync complète si since est avant 2000-01-02 (= "tout depuis le début")
-      const isFullSync = new Date(sinceDate) <= new Date('2000-01-02T00:00:00.000Z');
-
-      let result;
-
-      if (isFullSync) {
-        // Premier chargement — compter toutes les cartes actives
-        result = await db.query(
-          `SELECT COUNT(*) AS total
-           FROM cartes
-           WHERE deleted_at IS NULL`
-        );
-      } else {
-        // Sync delta — uniquement les cartes modifiées depuis last_sync
-        result = await db.query(
-          `SELECT COUNT(*) AS total
-           FROM cartes
-           WHERE deleted_at IS NULL
-             AND (sync_timestamp >= $1::TIMESTAMP
-               OR updated_at    >= $1::TIMESTAMP)`,
-          [sinceDate]
-        );
-      }
-
-      const total = parseInt(result.rows[0].total, 10) || 0;
-
-      console.log(
-        `📊 countDownload ${site.id}: total=${total}` +
-          ` | since=${sinceDate}` +
-          ` | is_full_sync=${isFullSync}`
-      );
-
-      return { total, since: sinceDate, is_full_sync: isFullSync };
-    } catch (error) {
-      console.error('❌ Erreur countDownload:', error);
-      throw error;
     }
   },
 };

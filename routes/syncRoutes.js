@@ -57,14 +57,6 @@ router.get('/download', verifySiteToken, async (req, res) => {
   await syncController.download(req, res);
 });
 
-// ✅ Comptage avant téléchargement — pour barre % précise côté client
-// GET /api/sync/count?since=ISO
-// Appelé UNE SEULE FOIS avant le premier GET /download
-// Retourne { total, since, is_full_sync }
-router.get('/count', verifySiteToken, async (req, res) => {
-  await syncController.count(req, res);
-});
-
 // Confirmation de réception
 router.post('/confirm', verifySiteToken, async (req, res) => {
   await syncController.confirm(req, res);
@@ -78,6 +70,20 @@ router.get('/status', verifySiteToken, async (req, res) => {
 // Synchronisation des utilisateurs
 router.get('/users', verifySiteToken, async (req, res) => {
   await syncController.getUsers(req, res);
+});
+
+// ✅ NOUVEAU : Comptage avant téléchargement
+// GET /api/sync/count?since=2025-03-01T00:00:00.000Z
+// Retourne { total, since, is_full_sync }
+router.get('/count', verifySiteToken, async (req, res) => {
+  await syncController.count(req, res);
+});
+
+// ✅ NOUVEAU : Vérification de cohérence après sync
+// GET /api/sync/verify
+// Retourne { total_serveur, coordination_id, last_modified }
+router.get('/verify', verifySiteToken, async (req, res) => {
+  await syncController.verify(req, res);
 });
 
 module.exports = router;
