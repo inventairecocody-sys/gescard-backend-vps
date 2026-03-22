@@ -559,29 +559,42 @@ const syncService = {
   // ----------------------------------------------------------
   async verifySync(site) {
     try {
-      // Compter les cartes actives sur le serveur pour cette coordination
-      const result = await db.query(
-        `SELECT COUNT(*) AS total
-         FROM cartes
-         WHERE deleted_at IS NULL
-           AND coordination_id = $1`,
-        [site.coordination_id]
-      );
+      // Le siège voit toutes les cartes, les autres sont filtrés par coordination
+      const isSiege = site.id === SIEGE_SITE_ID;
+
+      let result, lastModified;
+
+      if (isSiege) {
+        // Siège → toutes les cartes
+        result = await db.query(`SELECT COUNT(*) AS total FROM cartes WHERE deleted_at IS NULL`);
+        lastModified = await db.query(
+          `SELECT MAX(GREATEST(sync_timestamp, updated_at)) AS last_ts
+           FROM cartes WHERE deleted_at IS NULL`
+        );
+      } else {
+        // Site normal → filtrer par coordination
+        result = await db.query(
+          `SELECT COUNT(*) AS total
+           FROM cartes
+           WHERE deleted_at IS NULL
+             AND coordination_id = $1`,
+          [site.coordination_id]
+        );
+        lastModified = await db.query(
+          `SELECT MAX(GREATEST(sync_timestamp, updated_at)) AS last_ts
+           FROM cartes
+           WHERE deleted_at IS NULL
+             AND coordination_id = $1`,
+          [site.coordination_id]
+        );
+      }
 
       const totalServeur = parseInt(result.rows[0].total) || 0;
-
-      // Récupérer le timestamp de la dernière carte modifiée
-      const lastModified = await db.query(
-        `SELECT MAX(GREATEST(sync_timestamp, updated_at)) AS last_ts
-         FROM cartes
-         WHERE deleted_at IS NULL
-           AND coordination_id = $1`,
-        [site.coordination_id]
-      );
-
       const lastTs = lastModified.rows[0]?.last_ts || null;
 
-      console.log(`🔍 verifySync ${site.id}: ${totalServeur} cartes actives | last_ts=${lastTs}`);
+      console.log(
+        `🔍 verifySync ${site.id} (${isSiege ? 'siège' : 'site'}): ${totalServeur} cartes | last_ts=${lastTs}`
+      );
 
       return {
         total_serveur: totalServeur,
