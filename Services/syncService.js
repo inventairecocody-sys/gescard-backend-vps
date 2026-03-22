@@ -247,19 +247,17 @@ const syncService = {
       ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", COALESCE(NULLIF(contact,''),'__VIDE__'))
       WHERE deleted_at IS NULL
       DO UPDATE SET
-        local_id             = COALESCE(cartes.local_id, EXCLUDED.local_id),
+        local_id             = COALESCE(cartes.local_id,              EXCLUDED.local_id),
         site_proprietaire_id = COALESCE(cartes.site_proprietaire_id, EXCLUDED.site_proprietaire_id),
-        coordination         = COALESCE(NULLIF(cartes.coordination, ''),         EXCLUDED.coordination),
-        "LIEU D'ENROLEMENT"  = COALESCE(NULLIF(cartes."LIEU D'ENROLEMENT", ''), EXCLUDED."LIEU D'ENROLEMENT"),
-        "SITE DE RETRAIT"    = COALESCE(NULLIF(cartes."SITE DE RETRAIT", ''),    EXCLUDED."SITE DE RETRAIT"),
-        contact              = COALESCE(NULLIF(cartes.contact, ''),              EXCLUDED.contact),
-        delivrance           = COALESCE(NULLIF(cartes.delivrance, ''),           EXCLUDED.delivrance),
+        coordination         = COALESCE(NULLIF(cartes.coordination, ''),          EXCLUDED.coordination),
+        "LIEU D'ENROLEMENT"  = COALESCE(NULLIF(cartes."LIEU D'ENROLEMENT", ''),  EXCLUDED."LIEU D'ENROLEMENT"),
+        "SITE DE RETRAIT"    = COALESCE(NULLIF(cartes."SITE DE RETRAIT", ''),     EXCLUDED."SITE DE RETRAIT"),
+        contact              = COALESCE(NULLIF(cartes.contact, ''),               EXCLUDED.contact),
+        delivrance           = COALESCE(NULLIF(cartes.delivrance, ''),            EXCLUDED.delivrance),
         "CONTACT DE RETRAIT" = COALESCE(NULLIF(cartes."CONTACT DE RETRAIT", ''), EXCLUDED."CONTACT DE RETRAIT"),
-        "DATE DE DELIVRANCE" = COALESCE(cartes."DATE DE DELIVRANCE",             EXCLUDED."DATE DE DELIVRANCE"),
+        "DATE DE DELIVRANCE" = COALESCE(cartes."DATE DE DELIVRANCE",              EXCLUDED."DATE DE DELIVRANCE"),
         sync_status          = 'synced',
         sync_timestamp       = NOW()
-      WHERE
-        cartes.coordination_id = EXCLUDED.coordination_id
       RETURNING id, (xmax <> 0) AS was_existing`,
       [
         mod.coordination_id, // $1
