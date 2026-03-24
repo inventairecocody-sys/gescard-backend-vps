@@ -224,6 +224,12 @@ const syncService = {
 
     // ── Niveau 2 : ON CONFLICT sur 5 champs identitaires ────────────────────
     const result = await client.query(
+      // ✅ CORRECTION DOUBLONS : ON CONFLICT sur "HashDoublon" (index idx_cartes_no_doublon)
+      // Le trigger normalize_carte() calcule automatiquement HashDoublon = MD5(nom|prenoms|date|lieu|contact)
+      // APRÈS normalisation (UPPER, accents, espaces, tirets, format date DD/MM/YYYY).
+      // Cela détecte les doublons même avec des variantes : KONÉ = KONE, Jean-Pierre = Jean Pierre.
+      // AVANT : ON CONFLICT sur les 5 champs BRUTS → KONÉ ≠ KONE (doublons non détectés)
+      // APRÈS : ON CONFLICT sur HashDoublon normalisé → KONÉ = KONE ✅
       `INSERT INTO cartes (
         coordination_id,
         site_proprietaire_id,
@@ -244,7 +250,7 @@ const syncService = {
         sync_status,
         local_id
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, NOW(), 'synced', $15)
-      ON CONFLICT (nom, prenoms, "DATE DE NAISSANCE", "LIEU NAISSANCE", COALESCE(NULLIF(contact,''),'__VIDE__'))
+      ON CONFLICT ("HashDoublon")
       WHERE deleted_at IS NULL
       DO UPDATE SET
         local_id             = COALESCE(cartes.local_id,              EXCLUDED.local_id),
@@ -453,26 +459,30 @@ const syncService = {
 
       let query, params;
 
+      // ✅ CORRECTION TIMEZONE : TO_CHAR() force le format YYYY-MM-DD en texte pur
+      // sans que Node.js/pg convertisse les colonnes DATE en objet JS Date (avec décalage UTC).
+      const DATE_SELECT = `
+        c.*,
+        TO_CHAR(c."DATE DE NAISSANCE", 'YYYY-MM-DD') AS date_naissance,
+        TO_CHAR(c."DATE DE DELIVRANCE", 'YYYY-MM-DD') AS date_delivrance
+      `;
+
       if (last_id > 0) {
-        // ✅ CORRECTION bug 1M données : batch suivant conserve le filtre since
-        // AVANT : filtre since disparaissait → téléchargement de TOUTES les cartes
-        // APRÈS : double filtre id + since → seulement les cartes modifiées
         query = `
-          SELECT * FROM cartes
-          WHERE deleted_at IS NULL
-            AND id > $1
-            AND (sync_timestamp >= $2::TIMESTAMP OR updated_at >= $2::TIMESTAMP)
-          ORDER BY id ASC
+          SELECT ${DATE_SELECT} FROM cartes c
+          WHERE c.deleted_at IS NULL
+            AND c.id > $1
+            AND (c.sync_timestamp >= $2::TIMESTAMP OR c.updated_at >= $2::TIMESTAMP)
+          ORDER BY c.id ASC
           LIMIT $3
         `;
         params = [last_id, sinceDate, fetchLimit];
       } else {
-        // Premier batch — filtre par timestamp uniquement
         query = `
-          SELECT * FROM cartes
-          WHERE deleted_at IS NULL
-            AND (sync_timestamp >= $1::TIMESTAMP OR updated_at >= $1::TIMESTAMP)
-          ORDER BY id ASC
+          SELECT ${DATE_SELECT} FROM cartes c
+          WHERE c.deleted_at IS NULL
+            AND (c.sync_timestamp >= $1::TIMESTAMP OR c.updated_at >= $1::TIMESTAMP)
+          ORDER BY c.id ASC
           LIMIT $2
         `;
         params = [sinceDate, fetchLimit];
