@@ -330,20 +330,63 @@ const syncService = {
 
   // ----------------------------------------------------------
   // Last-Write-Wins via sync_timestamp
+  // ✅ CORRECTION RESTAURATION : gère le cas où la carte est
+  // soft-deleted côté serveur mais restaurée côté client.
+  // Sans cette correction, l'UPDATE ignorait deleted_at et la
+  // carte restait supprimée sur le serveur → boucle infinie.
   // ----------------------------------------------------------
   async _handleUpdate(client, mod, site, historyId) {
     const serverRow = await client.query(
-      `SELECT id, version, sync_timestamp, delivrance,
+      `SELECT id, version, sync_timestamp, deleted_at, delivrance,
               "CONTACT DE RETRAIT", "DATE DE DELIVRANCE", contact
        FROM cartes WHERE id = $1`,
       [mod.pg_id]
     );
 
     if (serverRow.rows.length === 0) {
-      throw new Error(`Carte ${mod.pg_id} introuvable`);
+      // ✅ Carte introuvable par pg_id → tenter un INSERT à la place
+      console.log(`⚠️  _handleUpdate: pg_id=${mod.pg_id} introuvable → bascule en INSERT`);
+      return await this._handleInsert(client, mod, site);
     }
 
     const server = serverRow.rows[0];
+
+    // ✅ CAS RESTAURATION : la carte est supprimée sur le serveur
+    // mais le client envoie un UPDATE avec deleted_at=null (restauration)
+    // → remettre deleted_at=NULL sans vérification LWW
+    const isRestoration =
+      server.deleted_at !== null && (mod.deleted_at === null || mod.deleted_at === undefined);
+
+    if (isRestoration) {
+      await client.query(
+        `UPDATE cartes
+         SET deleted_at           = NULL,
+             sync_status          = 'synced',
+             sync_timestamp       = NOW(),
+             nom                  = COALESCE($2, nom),
+             prenoms              = COALESCE($3, prenoms),
+             "LIEU NAISSANCE"     = COALESCE($4, "LIEU NAISSANCE"),
+             contact              = COALESCE($5, contact),
+             delivrance           = COALESCE($6, delivrance),
+             "CONTACT DE RETRAIT" = COALESCE($7, "CONTACT DE RETRAIT"),
+             rangement            = COALESCE($8, rangement)
+         WHERE id = $1`,
+        [
+          mod.pg_id,
+          mod.nom || null,
+          mod.prenoms || null,
+          mod.lieu_naissance || null,
+          mod.contact || null,
+          mod.delivrance || null,
+          mod.contact_retrait || null,
+          mod.rangement || null,
+        ]
+      );
+      console.log(`♻️  Restauration carte pg_id=${mod.pg_id} — deleted_at remis à NULL`);
+      return { pg_id: mod.pg_id };
+    }
+
+    // ── UPDATE normal — Last-Write-Wins ──────────────────────────────────────
     const serverTime = new Date(server.sync_timestamp);
     const clientTime = mod.sync_timestamp ? new Date(mod.sync_timestamp) : new Date(0);
 
