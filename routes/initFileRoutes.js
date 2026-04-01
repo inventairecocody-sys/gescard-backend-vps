@@ -145,6 +145,29 @@ router.post('/generate', verifyToken, async (req, res) => {
       `📊 Génération fichier .gescard: site=${site_id} | comptes=${comptes.length} | cartes=${cartes.length} | filter_by_site=${filter_by_site}`
     );
 
+    // 4b. ✅ CORRECTION TIMEZONE : normaliser les dates avant sérialisation
+    //     PostgreSQL renvoie les colonnes DATE sous forme ISO avec heure/timezone
+    //     (ex: "1993-05-28T00:00:00.000Z") — le client Python (pandas/sqlite) les
+    //     interprète ensuite avec un décalage UTC qui soustrait 1 jour.
+    //     On extrait ici uniquement la partie YYYY-MM-DD pour éviter ce glissement.
+    const cleanDateStr = (val) => {
+      if (!val) return null;
+      const s = String(val).trim();
+      // Prendre les 10 premiers caractères : "YYYY-MM-DD"
+      return s.length >= 10 ? s.substring(0, 10) : s;
+    };
+
+    if (include_cards && cartes.length > 0) {
+      cartes = cartes.map((c) => ({
+        ...c,
+        'DATE DE NAISSANCE': cleanDateStr(c['DATE DE NAISSANCE']),
+        'DATE DE DELIVRANCE': cleanDateStr(c['DATE DE DELIVRANCE']),
+        // Couvrir aussi les variantes minuscules si jamais la colonne remonte ainsi
+        date_naissance: cleanDateStr(c['date_naissance']),
+        date_delivrance: cleanDateStr(c['date_delivrance']),
+      }));
+    }
+
     // 5. Construire le payload (même structure que le client Python)
     const now = new Date();
     const expireDate = new Date(now.getTime() + Number(validite_jours) * 24 * 60 * 60 * 1000);
