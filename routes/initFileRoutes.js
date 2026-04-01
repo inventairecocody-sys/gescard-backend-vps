@@ -34,7 +34,11 @@ function fmtDateTime(d) {
 
 // ============================================================
 // POST /api/init-file/generate
-// Body : { site_id, validite_jours, include_cards }
+// Body : { site_id, validite_jours, include_cards, filter_by_site }
+//
+// include_cards  : true/false  → inclure les cartes ou non
+// filter_by_site : true/false  → si true, inclure seulement les cartes du site
+//                                si false (défaut), inclure toutes les cartes
 // ============================================================
 router.post('/generate', verifyToken, async (req, res) => {
   try {
@@ -47,7 +51,12 @@ router.post('/generate', verifyToken, async (req, res) => {
       });
     }
 
-    const { site_id, validite_jours = 7, include_cards = false } = req.body;
+    const {
+      site_id,
+      validite_jours = 7,
+      include_cards = false,
+      filter_by_site = false, // ← nouvelle option
+    } = req.body;
 
     if (!site_id) {
       return res.status(400).json({
@@ -77,7 +86,7 @@ router.post('/generate', verifyToken, async (req, res) => {
     const site = siteResult.rows[0];
     const api_key = site.api_key || '';
 
-    // 3. Récupérer les comptes utilisateurs liés à ce site
+    // 3. Récupérer les comptes utilisateurs liés à ce site uniquement
     const comptesResult = await query(
       `SELECT u.nomutilisateur  AS username,
               u.motdepasse      AS password_hash,
@@ -101,17 +110,37 @@ router.post('/generate', verifyToken, async (req, res) => {
       coordination: c.coordination,
     }));
 
-    // 4. Récupérer les cartes si demandé
+    // 4. Récupérer les cartes selon le choix de l'utilisateur
     let cartes = [];
     if (include_cards) {
-      const cartesResult = await query(
-        `SELECT * FROM cartes
-         WHERE "SITE DE RETRAIT" = $1
-           AND deleted_at IS NULL`,
-        [site_id]
-      );
+      let cartesResult;
+
+      if (filter_by_site) {
+        // ✅ Option 1 : seulement les cartes du site sélectionné
+        console.log(`📦 Export cartes filtrées par site: ${site.nom}`);
+        cartesResult = await query(
+          `SELECT * FROM cartes
+           WHERE "SITE DE RETRAIT" = $1
+             AND deleted_at IS NULL
+           ORDER BY id ASC`,
+          [site.nom] // ← filtre par nom du site (pas par site_id)
+        );
+      } else {
+        // ✅ Option 2 : toutes les cartes (défaut)
+        console.log(`📦 Export toutes les cartes`);
+        cartesResult = await query(
+          `SELECT * FROM cartes
+           WHERE deleted_at IS NULL
+           ORDER BY id ASC`
+        );
+      }
+
       cartes = cartesResult.rows;
     }
+
+    console.log(
+      `📊 Génération fichier .gescard: site=${site_id} | comptes=${comptes.length} | cartes=${cartes.length} | filter_by_site=${filter_by_site}`
+    );
 
     // 5. Construire le payload (même structure que le client Python)
     const now = new Date();
@@ -129,6 +158,7 @@ router.post('/generate', verifyToken, async (req, res) => {
       expire_le: fmtDate(expireDate),
       expire_ts: expireDate.getTime() / 1000, // timestamp UNIX (secondes)
       cree_par: req.user.nomUtilisateur || req.user.NomUtilisateur || 'admin',
+      filter_by_site, // ← info conservée dans le fichier pour traçabilité
     };
 
     // 6. Chiffrement XOR + Base64 (identique au client Python)
@@ -151,6 +181,7 @@ router.post('/generate', verifyToken, async (req, res) => {
     res.setHeader('X-Nb-Comptes', comptes.length);
     res.setHeader('X-Nb-Cartes', cartes.length);
     res.setHeader('X-Expire-Le', fmtDate(expireDate));
+    res.setHeader('X-Filter-By-Site', filter_by_site ? 'true' : 'false');
 
     return res.send(contenuFinal);
   } catch (error) {
