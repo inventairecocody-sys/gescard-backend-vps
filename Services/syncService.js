@@ -2,8 +2,41 @@
 const db = require('../db/db');
 const jwt = require('jsonwebtoken');
 
+// ✅ CORRECTION TIMEZONE DÉFINITIVE — Fix global node-postgres
+// Par défaut, node-postgres (pg) convertit les colonnes de type DATE PostgreSQL
+// en objets JavaScript Date, lesquels sont sérialisés JSON avec décalage UTC :
+//   PostgreSQL : 1993-05-28
+//   JSON envoyé : "1993-05-27T23:00:00.000Z"  ← -1 jour pour Abidjan (GMT+0/GMT+1)
+//
+// Ce parseur global force le retour en string brute "YYYY-MM-DD" pour le type OID 1082 (DATE).
+// Il s'applique à TOUTES les requêtes du service, y compris les futures colonnes DATE ajoutées.
+const pg = require('pg');
+pg.types.setTypeParser(1082, (val) => val); // OID 1082 = DATE → retourner string brute
+
 // ID du site siège — reçoit toutes les cartes sans filtre coordination
 const SIEGE_SITE_ID = 'SIE-001';
+
+/**
+ * ✅ Sécurise une valeur de date avant envoi JSON au client.
+ * Garantit le format "YYYY-MM-DD" même si pg retourne un objet Date (double protection).
+ * @param {string|Date|null} val
+ * @returns {string|null}
+ */
+function _safeDateStr(val) {
+  if (!val) return null;
+  if (typeof val === 'string') {
+    // Déjà une string → prendre les 10 premiers chars "YYYY-MM-DD"
+    return val.length >= 10 ? val.substring(0, 10) : val;
+  }
+  if (val instanceof Date) {
+    // Objet Date → extraire l'année/mois/jour LOCAUX (pas UTC) pour éviter le décalage
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(val).substring(0, 10);
+}
 
 const syncService = {
   // ----------------------------------------------------------
@@ -502,10 +535,36 @@ const syncService = {
 
       let query, params;
 
-      // ✅ CORRECTION TIMEZONE : TO_CHAR() force le format YYYY-MM-DD en texte pur
-      // sans que Node.js/pg convertisse les colonnes DATE en objet JS Date (avec décalage UTC).
+      // ✅ CORRECTION TIMEZONE DÉFINITIVE : On n'utilise PLUS c.* car Node.js/pg
+      // convertit automatiquement les colonnes de type DATE PostgreSQL en objets JS Date,
+      // lesquels sont sérialisés en JSON avec décalage UTC :
+      //   "1993-05-28" (PG) → "1993-05-27T23:00:00.000Z" (JSON) → -1 jour côté client ❌
+      //
+      // Solution : lister explicitement toutes les colonnes NON-DATE via c.*
+      // et remplacer les deux colonnes DATE par TO_CHAR() qui retourne du texte pur "YYYY-MM-DD".
+      // TO_CHAR() bypasse complètement la conversion JS Date → aucun risque de décalage timezone.
       const DATE_SELECT = `
-        c.*,
+        c.id,
+        c.coordination_id,
+        c.site_proprietaire_id,
+        c.coordination,
+        c."LIEU D'ENROLEMENT",
+        c."SITE DE RETRAIT",
+        c.nom,
+        c.prenoms,
+        c."LIEU NAISSANCE",
+        c.rangement,
+        c.contact,
+        c.delivrance,
+        c."CONTACT DE RETRAIT",
+        c."HashDoublon",
+        c.version,
+        c.sync_status,
+        c.sync_timestamp,
+        c.local_id,
+        c.deleted_at,
+        c.created_at,
+        c.updated_at,
         TO_CHAR(c."DATE DE NAISSANCE", 'YYYY-MM-DD') AS date_naissance,
         TO_CHAR(c."DATE DE DELIVRANCE", 'YYYY-MM-DD') AS date_delivrance
       `;
@@ -537,8 +596,17 @@ const syncService = {
       const allRows = result.rows;
 
       const hasMore = allRows.length > limit;
-      const records = hasMore ? allRows.slice(0, limit) : allRows;
-      const count = records.length;
+      const rawRecords = hasMore ? allRows.slice(0, limit) : allRows;
+      const count = rawRecords.length;
+
+      // ✅ CORRECTION TIMEZONE DÉFINITIVE (double protection) :
+      // Même avec pg.types.setTypeParser(1082) et TO_CHAR(), on sanitize explicitement
+      // les champs date avant sérialisation JSON — aucun risque de décalage UTC.
+      const records = rawRecords.map((row) => ({
+        ...row,
+        date_naissance: _safeDateStr(row.date_naissance),
+        date_delivrance: _safeDateStr(row.date_delivrance),
+      }));
 
       const lastRecord = count > 0 ? records[count - 1] : null;
       const next_last_id = lastRecord ? lastRecord.id : last_id;

@@ -11,6 +11,32 @@ const crypto = require('crypto');
 const { query } = require('../db/db'); // ← ton module DB existant
 const { verifyToken } = require('../middleware/auth'); // ← ton middleware JWT existant
 
+// ✅ CORRECTION TIMEZONE DÉFINITIVE — Fix global node-postgres
+// Par défaut, pg convertit les colonnes DATE PostgreSQL en objets JS Date
+// sérialisés avec décalage UTC : "1993-05-28" → "1993-05-27T23:00:00.000Z" → -1 jour ❌
+// Ce parseur force le retour en string brute "YYYY-MM-DD" pour toutes les requêtes.
+const pg = require('pg');
+pg.types.setTypeParser(1082, (val) => val); // OID 1082 = type DATE PostgreSQL
+
+/**
+ * ✅ Garantit le format "YYYY-MM-DD" pour une valeur de date avant sérialisation JSON.
+ * Double protection même si pg retourne un objet Date malgré le fix ci-dessus.
+ * @param {string|Date|null} val
+ * @returns {string|null}
+ */
+function _safeDateStr(val) {
+  if (!val) return null;
+  if (typeof val === 'string') return val.length >= 10 ? val.substring(0, 10) : val;
+  if (val instanceof Date) {
+    // Utiliser getFullYear/getMonth/getDate (heure locale, pas UTC) pour éviter le décalage
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(val).substring(0, 10);
+}
+
 // ── Clé XOR identique au client Python ──────────────────────
 const CLE = Buffer.from('GESCARD_INIT_2026_SECURE_KEY_V1__', 'utf8'); // 32 octets
 
@@ -121,18 +147,37 @@ router.post('/generate', verifyToken, async (req, res) => {
       if (filter_by_site) {
         // ✅ Option 1 : seulement les cartes du site sélectionné
         console.log(`📦 Export cartes filtrées par site: ${site.nom}`);
+        // ✅ CORRECTION TIMEZONE : TO_CHAR() retourne les dates en texte "YYYY-MM-DD"
+        // sans que pg les convertisse en objets JS Date (source du décalage UTC -1 jour)
         cartesResult = await query(
-          `SELECT * FROM cartes
+          `SELECT
+             id, coordination_id, site_proprietaire_id, coordination,
+             "LIEU D'ENROLEMENT", "SITE DE RETRAIT", nom, prenoms,
+             "LIEU NAISSANCE", rangement, contact, delivrance,
+             "CONTACT DE RETRAIT", "HashDoublon", version,
+             sync_status, sync_timestamp, local_id, deleted_at, created_at, updated_at,
+             TO_CHAR("DATE DE NAISSANCE",  'YYYY-MM-DD') AS "DATE DE NAISSANCE",
+             TO_CHAR("DATE DE DELIVRANCE", 'YYYY-MM-DD') AS "DATE DE DELIVRANCE"
+           FROM cartes
            WHERE "SITE DE RETRAIT" = $1
              AND deleted_at IS NULL
            ORDER BY id ASC`,
-          [site.nom] // ← filtre par nom du site (pas par site_id)
+          [site.nom]
         );
       } else {
         // ✅ Option 2 : toutes les cartes (défaut)
         console.log(`📦 Export toutes les cartes`);
+        // ✅ CORRECTION TIMEZONE : TO_CHAR() retourne les dates en texte "YYYY-MM-DD"
         cartesResult = await query(
-          `SELECT * FROM cartes
+          `SELECT
+             id, coordination_id, site_proprietaire_id, coordination,
+             "LIEU D'ENROLEMENT", "SITE DE RETRAIT", nom, prenoms,
+             "LIEU NAISSANCE", rangement, contact, delivrance,
+             "CONTACT DE RETRAIT", "HashDoublon", version,
+             sync_status, sync_timestamp, local_id, deleted_at, created_at, updated_at,
+             TO_CHAR("DATE DE NAISSANCE",  'YYYY-MM-DD') AS "DATE DE NAISSANCE",
+             TO_CHAR("DATE DE DELIVRANCE", 'YYYY-MM-DD') AS "DATE DE DELIVRANCE"
+           FROM cartes
            WHERE deleted_at IS NULL
            ORDER BY id ASC`
         );
@@ -145,26 +190,17 @@ router.post('/generate', verifyToken, async (req, res) => {
       `📊 Génération fichier .gescard: site=${site_id} | comptes=${comptes.length} | cartes=${cartes.length} | filter_by_site=${filter_by_site}`
     );
 
-    // 4b. ✅ CORRECTION TIMEZONE : normaliser les dates avant sérialisation
-    //     PostgreSQL renvoie les colonnes DATE sous forme ISO avec heure/timezone
-    //     (ex: "1993-05-28T00:00:00.000Z") — le client Python (pandas/sqlite) les
-    //     interprète ensuite avec un décalage UTC qui soustrait 1 jour.
-    //     On extrait ici uniquement la partie YYYY-MM-DD pour éviter ce glissement.
-    const cleanDateStr = (val) => {
-      if (!val) return null;
-      const s = String(val).trim();
-      // Prendre les 10 premiers caractères : "YYYY-MM-DD"
-      return s.length >= 10 ? s.substring(0, 10) : s;
-    };
-
+    // 4b. ✅ CORRECTION TIMEZONE DÉFINITIVE (triple protection) :
+    //     - pg.types.setTypeParser(1082) : DATE → string brute au niveau driver
+    //     - TO_CHAR() dans les requêtes SQL : texte pur côté PostgreSQL
+    //     - _safeDateStr() ici : filet de sécurité final avant sérialisation JSON
     if (include_cards && cartes.length > 0) {
       cartes = cartes.map((c) => ({
         ...c,
-        'DATE DE NAISSANCE': cleanDateStr(c['DATE DE NAISSANCE']),
-        'DATE DE DELIVRANCE': cleanDateStr(c['DATE DE DELIVRANCE']),
-        // Couvrir aussi les variantes minuscules si jamais la colonne remonte ainsi
-        date_naissance: cleanDateStr(c['date_naissance']),
-        date_delivrance: cleanDateStr(c['date_delivrance']),
+        'DATE DE NAISSANCE': _safeDateStr(c['DATE DE NAISSANCE']),
+        'DATE DE DELIVRANCE': _safeDateStr(c['DATE DE DELIVRANCE']),
+        date_naissance: _safeDateStr(c['date_naissance']),
+        date_delivrance: _safeDateStr(c['date_delivrance']),
       }));
     }
 
