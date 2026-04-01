@@ -89,7 +89,6 @@ const getAllUsers = async (req, res) => {
     params.push(actualLimit, offset);
     query += ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
-    // ✅ CORRIGÉ : countQuery utilise les mêmes filtres que la query principale
     const { where: whereC, params: countBaseParams } = buildUserFilter(acteur, [], 'WHERE 1=1');
     let countParams = [...countBaseParams];
     let countQuery = `SELECT COUNT(*) as total FROM utilisateurs ${whereC}`;
@@ -375,8 +374,19 @@ const updateUser = async (req, res) => {
       return badRequest(res, 'ID utilisateur invalide');
     }
 
-    const { NomComplet, Email, Agence, Role, Coordination, CoordinationId, Actif, SiteIds } =
-      req.body;
+    // ✅ CORRIGÉ : MotDePasse ajouté dans le destructuring
+    const {
+      NomComplet,
+      Email,
+      Agence,
+      Role,
+      Coordination,
+      CoordinationId,
+      Actif,
+      SiteIds,
+      MotDePasse,
+    } = req.body;
+
     if (Role && !CONFIG.validRoles.includes(Role)) {
       await client.query('ROLLBACK');
       return badRequest(res, `Rôle invalide. Rôles valides: ${CONFIG.validRoles.join(', ')}`);
@@ -418,8 +428,15 @@ const updateUser = async (req, res) => {
       if (coordResult.rows.length > 0) resolvedCoordinationId = coordResult.rows[0].id;
     }
 
+    // ✅ CORRIGÉ : Hachage du mot de passe si fourni, sinon conservation de l'ancien
+    let hashedPassword = oldUser.motdepasse;
+    if (MotDePasse && MotDePasse.trim().length >= CONFIG.minPasswordLength) {
+      hashedPassword = await bcrypt.hash(MotDePasse.trim(), CONFIG.saltRounds);
+    }
+
+    // ✅ CORRIGÉ : motdepasse=$8 ajouté dans le UPDATE
     await client.query(
-      `UPDATE utilisateurs SET nomcomplet=$1, email=$2, agence=$3, role=$4, coordination=$5, coordination_id=$6, actif=$7, updated_at=NOW(), sync_timestamp=NOW() WHERE id=$8`,
+      `UPDATE utilisateurs SET nomcomplet=$1, email=$2, agence=$3, role=$4, coordination=$5, coordination_id=$6, actif=$7, motdepasse=$8, updated_at=NOW(), sync_timestamp=NOW() WHERE id=$9`,
       [
         NomComplet || oldUser.nomcomplet,
         Email || oldUser.email,
@@ -428,6 +445,7 @@ const updateUser = async (req, res) => {
         newCoordination,
         resolvedCoordinationId,
         Actif !== undefined ? Actif : oldUser.actif,
+        hashedPassword,
         userId,
       ]
     );
@@ -620,7 +638,6 @@ const purgeUser = async (req, res) => {
   const startTime = Date.now();
   try {
     const acteur = req.user;
-    // Réservé aux Administrateurs uniquement
     if (acteur.role !== 'Administrateur') {
       client.release();
       return forbidden(res, 'Seul un Administrateur peut supprimer définitivement un compte');
@@ -641,9 +658,7 @@ const purgeUser = async (req, res) => {
       await client.query('ROLLBACK');
       return notFound(res, 'Utilisateur non trouvé');
     }
-    // Supprimer les liaisons sites
     await client.query('DELETE FROM utilisateur_sites WHERE utilisateur_id = $1', [userId]);
-    // Supprimer l'utilisateur définitivement
     await client.query('DELETE FROM utilisateurs WHERE id = $1', [userId]);
     await journalService.logAction({
       utilisateurId: req.user.id,
@@ -822,7 +837,6 @@ const getUserStats = async (req, res) => {
 };
 
 // ── SEARCH USERS ──
-// ✅ CORRIGÉ : countQuery maintenant cohérent avec la query principale (mêmes filtres)
 const searchUsers = async (req, res) => {
   try {
     const acteur = req.user;
@@ -859,7 +873,6 @@ const searchUsers = async (req, res) => {
     params.push(actualLimit, offset);
     query += ` ORDER BY nomcomplet LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
-    // ✅ countQuery avec les mêmes filtres de recherche
     const { where: whereC, params: countBaseParams } = buildUserFilter(acteur, [], 'WHERE 1=1');
     let countParams = [...countBaseParams];
     let countQuery = `SELECT COUNT(*) as total FROM utilisateurs ${whereC}`;

@@ -87,15 +87,18 @@ router.post('/generate', verifyToken, async (req, res) => {
     const api_key = site.api_key || '';
 
     // 3. Récupérer les comptes utilisateurs liés à ce site uniquement
+    // ✅ CORRECTION : jointure via utilisateur_sites (agence contient un nom partiel, pas le site_id)
     const comptesResult = await query(
       `SELECT u.nomutilisateur  AS username,
               u.motdepasse      AS password_hash,
               u.nomcomplet      AS nom_complet,
               u.role,
-              u.agence          AS site,
+              s.id              AS site,
               u.coordination
        FROM utilisateurs u
-       WHERE u.agence = $1
+       JOIN utilisateur_sites us ON us.utilisateur_id = u.id
+       JOIN sites s ON s.id = us.site_id
+       WHERE us.site_id = $1
          AND u.nomutilisateur != 'admin'
          AND u.actif = true`,
       [site_id]
