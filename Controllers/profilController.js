@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const db = require('../db/db');
-const journalController = require('./journalController');
+const journalController = require('../Services/journalService');
 const {
   serverError,
   notFound,
