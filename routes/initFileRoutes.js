@@ -161,6 +161,7 @@ router.post('/generate', verifyToken, async (req, res) => {
            FROM cartes
            WHERE "SITE DE RETRAIT" = $1
              AND deleted_at IS NULL
+             AND sync_status IN ('pending', 'synced')
            ORDER BY id ASC`,
           [site.nom]
         );
@@ -179,6 +180,7 @@ router.post('/generate', verifyToken, async (req, res) => {
              TO_CHAR("DATE DE DELIVRANCE", 'YYYY-MM-DD') AS "DATE DE DELIVRANCE"
            FROM cartes
            WHERE deleted_at IS NULL
+             AND sync_status IN ('pending', 'synced')
            ORDER BY id ASC`
         );
       }
